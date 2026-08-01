@@ -60,19 +60,27 @@ export async function pendingCount() {
 }
 
 // Recover photo bytes from any event shape this app has ever queued.
-// Returns a Blob, or null if the event has no photo / the data was lost.
-function recoverPhoto(ev) {
-  if (ev.photoBuffer && ev.photoBuffer.byteLength > 0)
-    return new Blob([ev.photoBuffer], { type: "image/jpeg" });
-  if (typeof ev.photoBase64 === "string" && ev.photoBase64.length > 0) {
-    try {
+// Returns a Blob with VERIFIED readable bytes, or null if the data was lost.
+// Note: iOS Safari deserializes corrupted blobs that still REPORT a size but
+// return zero bytes when read — so we must actually read them to be sure.
+async function recoverPhoto(ev) {
+  try {
+    if (ev.photoBuffer && ev.photoBuffer.byteLength > 0)
+      return new Blob([ev.photoBuffer], { type: "image/jpeg" });
+    if (typeof ev.photoBase64 === "string" && ev.photoBase64.length > 0) {
       const bytes = atob(ev.photoBase64);
       const arr = new Uint8Array(bytes.length);
       for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-      return new Blob([arr], { type: "image/jpeg" });
-    } catch { return null; }
+      return arr.length > 0 ? new Blob([arr], { type: "image/jpeg" }) : null;
+    }
+    if (ev.photoBlob instanceof Blob) {
+      // Force a real read — corrupted iOS blobs fail or come back empty here.
+      const buf = await ev.photoBlob.arrayBuffer();
+      return buf.byteLength > 0 ? new Blob([buf], { type: "image/jpeg" }) : null;
+    }
+  } catch (e) {
+    console.warn("Photo data unreadable:", e.message);
   }
-  if (ev.photoBlob instanceof Blob && ev.photoBlob.size > 0) return ev.photoBlob;
   return null;
 }
 
@@ -108,7 +116,7 @@ export async function syncNow() {
       try {
         let photoPath = null;
         let photoLost = false;
-        const blob = recoverPhoto(ev);
+        const blob = await recoverPhoto(ev);
 
         if (blob) {
           photoPath = `${ev.tenant_id}/${ev.job_id}/${ev.item_id || "exception"}/${ev.localId}.jpg`;
