@@ -1,5 +1,6 @@
-// Offline custody-event queue
-// Photos as Base64 are queued locally, synced when online.
+// Offline custody-event queue with native Blob storage
+// Photos are stored as Blobs in IndexedDB, synced when online.
+// This is the proper approach - IndexedDB was designed for this.
 
 import { supabase } from "./supabase";
 
@@ -14,44 +15,17 @@ function db() {
   });
 }
 
-// Convert Blob to Base64
-async function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-// Convert Base64 back to Blob
-function base64ToBlob(base64) {
-  const byteCharacters = atob(base64);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
-  return new Blob([byteArray], { type: "image/jpeg" });
-}
-
 export async function enqueue(event) {
   const d = await db();
   
-  // Convert Blob to Base64 before storing
-  let eventToStore = { ...event };
-  if (event.photoBlob) {
-    console.log("Converting photo to Base64...");
-    eventToStore.photoBase64 = await blobToBase64(event.photoBlob);
-    delete eventToStore.photoBlob;
-  }
+  const eventToStore = { ...event };
   eventToStore.localId = crypto.randomUUID();
 
   return new Promise((res, rej) => {
     const tx = d.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(eventToStore);
     tx.oncomplete = () => {
-      console.log("Event queued locally:", eventToStore.localId);
+      console.log("Event queued:", eventToStore.localId, "Has photo:", !!eventToStore.photoBlob);
       res();
     };
     tx.onerror = () => rej(tx.error);
@@ -76,7 +50,7 @@ export async function syncNow() {
   }
   
   if (!navigator.onLine) {
-    console.log("Offline - cannot sync");
+    console.log("Offline - sync will retry when online");
     return;
   }
   
@@ -85,52 +59,51 @@ export async function syncNow() {
 
   try {
     const d = await db();
-    const all = await new Promise((res) => {
+    const all = await new Promise((res, rej) => {
       const rq = d.transaction(STORE).objectStore(STORE).getAll();
       rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => rej(rq.error);
     });
 
-    console.log(`Found ${all.length} events to sync`);
+    console.log(`Found ${all.length} queued events`);
     
     if (all.length === 0) {
-      console.log("Nothing to sync");
+      console.log("Queue empty - nothing to sync");
       return;
     }
 
     let syncedCount = 0;
-    let errorCount = 0;
 
     for (const ev of all) {
       try {
-        console.log("Processing event:", ev.localId);
+        console.log("Syncing event:", ev.localId);
         let photoPath = null;
 
-        // Upload photo if Base64 stored
-        if (ev.photoBase64) {
+        // Upload photo Blob if it exists
+        if (ev.photoBlob) {
           try {
-            console.log("Converting Base64 back to Blob...");
-            const blob = base64ToBlob(ev.photoBase64);
             photoPath = `${ev.tenant_id}/${ev.job_id}/${ev.item_id || "exception"}/${Date.now()}.jpg`;
-
             console.log("Uploading photo to:", photoPath);
+            
             const { error: uploadErr } = await supabase.storage
               .from("photos")
-              .upload(photoPath, blob, { contentType: "image/jpeg", upsert: true });
+              .upload(photoPath, ev.photoBlob, { 
+                contentType: "image/jpeg", 
+                upsert: true 
+              });
 
             if (uploadErr) {
-              console.error("Photo upload error:", uploadErr);
-              errorCount++;
-              continue;
+              console.error("Photo upload failed:", uploadErr.message);
+              continue; // Skip this event, retry next sync
             }
             console.log("Photo uploaded successfully");
           } catch (uploadError) {
-            console.error("Photo conversion error:", uploadError);
-            errorCount++;
-            continue;
+            console.error("Photo upload error:", uploadError);
+            continue; // Skip this event, retry next sync
           }
         }
 
-        // Insert event
+        // Insert event into database
         console.log("Inserting event into database...");
         const { error: insertErr } = await supabase.from("custody_events").insert({
           tenant_id: ev.tenant_id,
@@ -150,40 +123,43 @@ export async function syncNow() {
         });
 
         if (insertErr) {
-          console.error("Event insert error:", insertErr);
-          errorCount++;
-          continue;
+          console.error("Event insert failed:", insertErr.message);
+          continue; // Skip deletion, retry next sync
         }
         
         console.log("Event inserted successfully");
 
-        // Delete from queue only after both succeed
-        await new Promise((res) => {
+        // Only delete from queue after BOTH photo and event succeeded
+        await new Promise((res, rej) => {
           const tx = d.transaction(STORE, "readwrite");
           tx.objectStore(STORE).delete(ev.localId);
-          tx.oncomplete = res;
+          tx.oncomplete = () => {
+            console.log("Event deleted from queue");
+            res();
+          };
+          tx.onerror = () => rej(tx.error);
         });
         
         syncedCount++;
-        console.log("Event deleted from queue");
       } catch (e) {
-        console.error("Sync error for event:", e);
-        errorCount++;
+        console.error("Error syncing event:", e.message);
       }
     }
     
-    console.log(`Sync complete: ${syncedCount} success, ${errorCount} failed`);
+    console.log(`Sync complete: ${syncedCount}/${all.length} events synced`);
     window.dispatchEvent(new Event("queue-updated"));
   } catch (e) {
-    console.error("Sync fatal error:", e);
+    console.error("Fatal sync error:", e);
   } finally {
     syncing = false;
   }
 }
 
+// Auto-sync when coming back online
 window.addEventListener("online", () => {
-  console.log("Back online - syncing...");
+  console.log("Back online - starting sync...");
   syncNow();
 });
 
+// Periodic sync every 30 seconds
 setInterval(syncNow, 30_000);
