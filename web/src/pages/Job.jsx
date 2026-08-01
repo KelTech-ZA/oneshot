@@ -44,6 +44,13 @@ export default function Job() {
   };
   useEffect(() => { load(); sessionStorage.setItem("oneshot_app", "1"); }, [id]);
 
+  // Reload job data when queue syncs (photos uploaded)
+  useEffect(() => {
+    const handleQueueUpdate = () => load();
+    window.addEventListener("queue-updated", handleQueueUpdate);
+    return () => window.removeEventListener("queue-updated", handleQueueUpdate);
+  }, []);
+
   if (!job) return <div className="empty">Loading job…</div>;
   const allDone = items.length > 0 && items.every((i) => ["delivered", "in_storage", "exception"].includes(i.status));
   const started = ["in_progress", "completed", "closed"].includes(job.status);
