@@ -1,5 +1,9 @@
-// Offline custody-event queue with proper error handling
-// Photos stored as Blobs in IndexedDB, synced when online
+// Offline custody-event queue.
+// Photos are stored as ArrayBuffers in IndexedDB (Blobs are unreliable in
+// iOS Safari's IndexedDB — they come back empty, which is why uploads were
+// failing with "no content provided"). ArrayBuffers survive on every browser.
+// A queued event is only deleted after both the photo upload and the row
+// insert succeed.
 
 import { supabase } from "./supabase";
 
@@ -14,26 +18,36 @@ function db() {
   });
 }
 
+let lastError = null;
+export function getLastSyncError() { return lastError; }
+export function clearLastSyncError() { lastError = null; }
+
 export async function enqueue(event) {
-  const d = await db();
-  
   const eventToStore = { ...event };
   eventToStore.localId = crypto.randomUUID();
-  
-  console.log("Enqueueing:", {
-    localId: eventToStore.localId,
-    type: eventToStore.type,
-    item_id: eventToStore.item_id,
-    job_id: eventToStore.job_id,
-    hasPhoto: !!eventToStore.photoBlob,
-  });
 
-  return new Promise((res, rej) => {
+  // Convert photo Blob -> ArrayBuffer BEFORE opening the transaction.
+  // (IndexedDB transactions die if you await inside them, and iOS Safari
+  // corrupts raw Blobs stored in IndexedDB.)
+  if (eventToStore.photoBlob) {
+    try {
+      eventToStore.photoBuffer = await eventToStore.photoBlob.arrayBuffer();
+      eventToStore.photoSize = eventToStore.photoBuffer.byteLength;
+    } catch (e) {
+      console.error("Could not read photo data:", e);
+    }
+    delete eventToStore.photoBlob;
+  }
+
+  const d = await db();
+  await new Promise((res, rej) => {
     const tx = d.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(eventToStore);
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
-  }).then(() => syncNow());
+  });
+  console.log("Queued", eventToStore.localId, "photo bytes:", eventToStore.photoSize ?? 0);
+  return syncNow();
 }
 
 export async function pendingCount() {
@@ -45,33 +59,40 @@ export async function pendingCount() {
   });
 }
 
+// Recover photo bytes from any event shape this app has ever queued.
+// Returns a Blob, or null if the event has no photo / the data was lost.
+function recoverPhoto(ev) {
+  if (ev.photoBuffer && ev.photoBuffer.byteLength > 0)
+    return new Blob([ev.photoBuffer], { type: "image/jpeg" });
+  if (typeof ev.photoBase64 === "string" && ev.photoBase64.length > 0) {
+    try {
+      const bytes = atob(ev.photoBase64);
+      const arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      return new Blob([arr], { type: "image/jpeg" });
+    } catch { return null; }
+  }
+  if (ev.photoBlob instanceof Blob && ev.photoBlob.size > 0) return ev.photoBlob;
+  return null;
+}
+
+// True if the event was queued WITH a photo (even if the bytes got lost).
+function hadPhoto(ev) {
+  return !!(ev.photoBuffer || ev.photoBase64 || ev.photoBlob);
+}
+
 let syncing = false;
-let lastError = null;
-
-export function getLastSyncError() {
-  return lastError;
-}
-
-export function clearLastSyncError() {
-  lastError = null;
-}
 
 export async function syncNow() {
-  if (syncing) {
-    console.log("Sync already in progress");
-    return;
-  }
-  
+  if (syncing) return;
   if (!navigator.onLine) {
-    console.log("Offline - sync will retry when online");
     lastError = "No internet connection";
     window.dispatchEvent(new Event("queue-updated"));
     return;
   }
-  
+
   syncing = true;
   lastError = null;
-  console.log("Starting sync...");
 
   try {
     const d = await db();
@@ -81,57 +102,31 @@ export async function syncNow() {
       rq.onerror = () => rej(rq.error);
     });
 
-    console.log(`Found ${all.length} queued events`);
-    
-    if (all.length === 0) {
-      console.log("Queue empty");
-      window.dispatchEvent(new Event("queue-updated"));
-      return;
-    }
-
-    let syncedCount = 0;
-    let failedCount = 0;
+    console.log(`Sync: ${all.length} queued event(s)`);
 
     for (const ev of all) {
       try {
-        console.log("Processing:", ev.localId, "type:", ev.type);
         let photoPath = null;
+        let photoLost = false;
+        const blob = recoverPhoto(ev);
 
-        // Upload photo if it exists
-        if (ev.photoBlob) {
-          try {
-            // Validate photoBlob
-            if (!(ev.photoBlob instanceof Blob)) {
-              throw new Error("Photo is not a valid Blob");
-            }
-            
-            photoPath = `${ev.tenant_id}/${ev.job_id}/${ev.item_id || "exception"}/${Date.now()}.jpg`;
-            console.log("Uploading photo:", photoPath);
-            
-            const { error: uploadErr } = await supabase.storage
-              .from("photos")
-              .upload(photoPath, ev.photoBlob, {
-                contentType: "image/jpeg",
-                upsert: true,
-              });
-
-            if (uploadErr) {
-              throw new Error(`Upload failed: ${uploadErr.message}`);
-            }
-            console.log("Photo uploaded OK");
-          } catch (uploadError) {
-            console.error("Photo upload error:", uploadError);
-            failedCount++;
-            lastError = `Photo upload failed: ${uploadError.message}`;
-            continue;
-          }
+        if (blob) {
+          photoPath = `${ev.tenant_id}/${ev.job_id}/${ev.item_id || "exception"}/${ev.localId}.jpg`;
+          const { error: uploadErr } = await supabase.storage
+            .from("photos")
+            .upload(photoPath, blob, { contentType: "image/jpeg", upsert: true });
+          if (uploadErr) throw new Error("Photo upload: " + uploadErr.message);
+          console.log("Uploaded", photoPath, blob.size, "bytes");
+        } else if (hadPhoto(ev)) {
+          // Photo data was corrupted by an older app version. Sync the event
+          // honestly (without photo) instead of jamming the queue forever.
+          photoLost = true;
+          console.warn("Photo data lost for", ev.localId, "- syncing event without it");
         }
 
-        // Insert event
-        console.log("Inserting event...");
         const { error: insertErr } = await supabase.from("custody_events").insert({
           tenant_id: ev.tenant_id,
-          item_id: ev.item_id,
+          item_id: ev.item_id ?? null,
           job_id: ev.job_id,
           type: ev.type,
           photo_path: photoPath,
@@ -139,51 +134,42 @@ export async function syncNow() {
           lng: ev.lng ?? null,
           gps_accuracy: ev.gps_accuracy ?? null,
           taken_at: ev.taken_at,
-          synced_at: new Date().toISOString(),
           user_id: ev.user_id,
-          match_method: ev.match_method,
-          notes: ev.notes ?? null,
-          payload: ev.payload || {},
+          match_method: ev.match_method ?? null,
+          notes: photoLost
+            ? [ev.notes, "(photo lost before sync)"].filter(Boolean).join(" ")
+            : (ev.notes ?? null),
         });
+        if (insertErr) throw new Error("Save event: " + insertErr.message);
 
-        if (insertErr) {
-          throw new Error(`Insert failed: ${insertErr.message}`);
+        // First photo of an item becomes its thumbnail (anchor image).
+        if (ev.isAnchor && ev.item_id && photoPath) {
+          await supabase.from("line_items")
+            .update({ anchor_image_path: photoPath })
+            .eq("id", ev.item_id)
+            .is("anchor_image_path", null);
         }
-        console.log("Event inserted OK");
 
-        // Delete from queue
         await new Promise((res, rej) => {
           const tx = d.transaction(STORE, "readwrite");
           tx.objectStore(STORE).delete(ev.localId);
           tx.oncomplete = res;
-          tx.onerror = rej;
+          tx.onerror = () => rej(tx.error);
         });
-        
-        syncedCount++;
-        console.log("Event synced and deleted from queue");
+        console.log("Synced + cleared", ev.localId);
       } catch (e) {
-        console.error("Event error:", e.message);
-        failedCount++;
+        console.error("Sync failed for", ev.localId, "-", e.message);
         lastError = e.message;
       }
     }
-    
-    console.log(`Sync result: ${syncedCount} success, ${failedCount} failed out of ${all.length}`);
-    if (failedCount === 0 && syncedCount > 0) {
-      lastError = null; // Clear error if all succeeded
-    }
   } catch (e) {
-    console.error("Fatal sync error:", e);
-    lastError = `Sync failed: ${e.message}`;
+    console.error("Sync fatal:", e);
+    lastError = e.message;
   } finally {
     syncing = false;
     window.dispatchEvent(new Event("queue-updated"));
   }
 }
 
-window.addEventListener("online", () => {
-  console.log("Online - syncing...");
-  syncNow();
-});
-
+window.addEventListener("online", syncNow);
 setInterval(syncNow, 30_000);

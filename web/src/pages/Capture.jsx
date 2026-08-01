@@ -107,6 +107,9 @@ export default function Capture() {
           <button className="btn btn-accent" style={{ marginTop: 16 }} onClick={() => fileRef.current?.click()}>
             📷 Open camera
           </button>
+          <button className="btn btn-ghost" onClick={() => nav(`/job/${jobId}`)}>
+            ← Back to job
+          </button>
         </div>
       )}
 

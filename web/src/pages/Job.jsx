@@ -70,6 +70,10 @@ export default function Job() {
 
   return (
     <div className="page">
+      <button className="muted" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0, marginBottom: 10 }}
+        onClick={() => nav("/")}>
+        ← Today
+      </button>
       <div className="row">
         <span className="ref" style={{ fontSize: 18 }}>{job.ref}</span>
         <div className="row" style={{ gap: 8 }}>
