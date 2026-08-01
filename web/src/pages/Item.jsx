@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { FUNCTIONS_URL } from "../lib/supabase";
 import QRCode from "qrcode";
 
 // Public: anyone with the link (the QR) sees this. UUID = capability token.
 export default function Item() {
   const { id } = useParams();
+  const nav = useNavigate();
+  // Only show "back" when the visitor navigated here from inside the app.
+  // QR/direct visitors land on the first history entry (idx 0) — no back.
+  const cameFromApp = (window.history.state?.idx ?? 0) > 0;
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(false);
   const [qr, setQr] = useState(null);
@@ -23,6 +27,12 @@ export default function Item() {
 
   return (
     <div className="page">
+      {cameFromApp && (
+        <button className="muted no-print" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0, marginBottom: 10 }}
+          onClick={() => nav(-1)}>
+          ← Back to job
+        </button>
+      )}
       <div className="wordmark" style={{ marginBottom: 14 }}>ONE<b>SHOT</b> · RECORD</div>
       <div className="print-only muted" style={{ marginBottom: 12 }}>
         Custody record snapshot · generated {new Date().toLocaleString()} · live record: {window.location.href}
