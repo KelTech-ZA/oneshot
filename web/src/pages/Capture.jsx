@@ -4,7 +4,6 @@ import { supabase } from "../lib/supabase";
 import { enqueue } from "../lib/queue";
 import { Ctx } from "../main";
 
-// Suggested next tag from current status — pre-highlighted, but crew chooses.
 const SUGGEST = {
   expected: "collected", collected: "packed", packed: "loaded",
   in_storage: "loaded", in_transit: "delivered",
@@ -20,39 +19,79 @@ export default function Capture() {
   const nav = useNavigate();
   const { session, profile } = useContext(Ctx);
   const fileRef = useRef();
-  const gpsRef = useRef({});
+  const gpsRef = useRef({ lat: null, lng: null, acc: null });
   const [items, setItems] = useState([]);
-  const [photo, setPhoto] = useState(null);       // {blob, url, takenAt}
-  const [selected, setSelected] = useState(null); // line item
+  const [photo, setPhoto] = useState(null);
+  const [selected, setSelected] = useState(null);
   const [exceptionMode, setExceptionMode] = useState(false);
+
+  // Capture GPS on mount
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          gpsRef.current = {
+            lat: p.coords.latitude,
+            lng: p.coords.longitude,
+            acc: p.coords.accuracy,
+          };
+        },
+        () => {
+          gpsRef.current = { lat: null, lng: null, acc: null };
+        }
+      );
+    }
+  }, []);
 
   useEffect(() => {
     supabase.from("line_items").select("*").eq("job_id", jobId).order("created_at")
       .then(({ data }) => setItems(data ?? []));
-    // Fire the shutter immediately — the camera IS the screen.
     setTimeout(() => fileRef.current?.click(), 250);
   }, [jobId]);
 
   const onShot = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    // GPS at the moment of capture, not at sync
-    navigator.geolocation?.getCurrentPosition(
-      (p) => { gpsRef.current = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }; },
-      () => {}, { enableHighAccuracy: true, timeout: 8000 });
+    
+    // Update GPS if available
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (p) => {
+          gpsRef.current = {
+            lat: p.coords.latitude,
+            lng: p.coords.longitude,
+            acc: p.coords.accuracy,
+          };
+        },
+        () => {}
+      );
+    }
+    
     setPhoto({ blob: f, url: URL.createObjectURL(f), takenAt: new Date().toISOString() });
   };
 
   const commit = async (item, type, notes = null) => {
-    await enqueue({
-      tenant_id: profile.tenant_id, item_id: item?.id ?? null, job_id: jobId,
-      type, photoBlob: photo?.blob ?? null,
-      lat: gpsRef.current.lat, lng: gpsRef.current.lng, gps_accuracy: gpsRef.current.acc,
-      taken_at: photo?.takenAt ?? new Date().toISOString(),
-      user_id: session.user.id, match_method: "manual_tap", notes,
-      isAnchor: item && !item.anchor_image_path,
-    });
-    nav(`/job/${jobId}`);
+    try {
+      await enqueue({
+        tenant_id: profile.tenant_id,
+        item_id: item?.id ?? null,
+        job_id: jobId,
+        type,
+        photoBlob: photo?.blob ?? null,
+        lat: gpsRef.current.lat,
+        lng: gpsRef.current.lng,
+        gps_accuracy: gpsRef.current.acc,
+        taken_at: photo?.takenAt ?? new Date().toISOString(),
+        user_id: session.user.id,
+        match_method: "manual_tap",
+        notes,
+        isAnchor: item && !item.anchor_image_path,
+      });
+      nav(`/job/${jobId}`);
+    } catch (err) {
+      console.error("Enqueue error:", err);
+      window.alert("Failed to queue event: " + err.message);
+    }
   };
 
   const open = items.filter((i) => !["delivered", "exception"].includes(i.status));

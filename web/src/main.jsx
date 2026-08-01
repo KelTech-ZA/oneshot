@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "./lib/supabase";
-import { pendingCount, syncNow } from "./lib/queue";
+import { pendingCount, syncNow, getLastSyncError, clearLastSyncError } from "./lib/queue";
 import Login from "./pages/Login";
 import Today from "./pages/Today";
 import Job from "./pages/Job";
@@ -44,6 +44,8 @@ function Shell() {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(null);
   const [pending, setPending] = useState(0);
+  const [syncError, setSyncError] = useState(null);
+  const [syncing, setSyncing] = useState(false);
   const nav = useNavigate();
 
   useEffect(() => {
@@ -66,7 +68,6 @@ function Shell() {
       active = mems[0];
       await supabase.from("profiles").update({ active_tenant_id: active.tenant_id }).eq("id", session.user.id);
     }
-    setPicking(mems.length > 1 && !sessionStorage.getItem("oneshot_ws"));
     setProfile({ ...prof, role: active.role, tenant_id: active.tenant_id, workspace: active.tenants?.name });
   };
 
@@ -84,7 +85,7 @@ function Shell() {
     setPicking(false);
   };
 
-  const [wsForm, setWsForm] = useState(null); // null = hidden, "" or text = shown
+  const [wsForm, setWsForm] = useState(null);
 
   const createWorkspace = async (name) => {
     if (!name?.trim()) return;
@@ -104,12 +105,40 @@ function Shell() {
     setPicking(false);
   };
 
+  // Update pending count when queue changes
   useEffect(() => {
-    const upd = () => pendingCount().then(setPending);
+    const upd = async () => {
+      const count = await pendingCount();
+      setPending(count);
+      const error = getLastSyncError();
+      setSyncError(error);
+    };
+    
     upd();
     window.addEventListener("queue-updated", upd);
     return () => window.removeEventListener("queue-updated", upd);
   }, []);
+
+  // Handle sync button click
+  const handleSync = async () => {
+    setSyncing(true);
+    clearLastSyncError();
+    setSyncError(null);
+    
+    try {
+      await syncNow();
+      
+      // Update state after sync
+      const count = await pendingCount();
+      setPending(count);
+      const error = getLastSyncError();
+      setSyncError(error);
+    } catch (err) {
+      setSyncError(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const [welcomed, setWelcomed] = useState(() => sessionStorage.getItem("oneshot_welcomed") === "1");
 
@@ -195,10 +224,32 @@ function Shell() {
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
       </Routes>
+
+      {/* Sync badge with error display */}
       {pending > 0 && (
-        <button className="syncbadge" style={{ border: "none", cursor: "pointer" }} onClick={syncNow}>
-          {pending} event{pending > 1 ? "s" : ""} pending sync — tap to retry
-        </button>
+        <div style={{ position: "fixed", bottom: 20, left: 20, right: 20, zIndex: 1000 }}>
+          <button 
+            className="syncbadge" 
+            style={{ border: "none", cursor: syncing ? "wait" : "pointer", width: "100%" }}
+            onClick={handleSync}
+            disabled={syncing}
+          >
+            {syncing ? "Syncing..." : `${pending} event${pending > 1 ? "s" : ""} pending sync — tap to retry`}
+          </button>
+          {syncError && (
+            <div style={{ 
+              background: "var(--warn)", 
+              color: "white", 
+              padding: "8px 12px",
+              marginTop: "6px",
+              borderRadius: "6px",
+              fontSize: "12px",
+              wordWrap: "break-word"
+            }}>
+              ⚠ {syncError}
+            </div>
+          )}
+        </div>
       )}
     </Ctx.Provider>
   );
