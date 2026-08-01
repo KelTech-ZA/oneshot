@@ -175,7 +175,10 @@ export async function syncNow() {
     lastError = e.message;
   } finally {
     syncing = false;
-    window.dispatchEvent(new Event("queue-updated"));
+    // Only dispatch if we actually synced something (prevents empty reloads)
+    if (all.length > 0) {
+      window.dispatchEvent(new Event("queue-updated"));
+    }
   }
 }
 

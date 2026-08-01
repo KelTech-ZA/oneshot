@@ -42,8 +42,10 @@ export default function Item() {
       const out = await res.json();
       if (out.error) { window.alert("Could not remove photo: " + out.error); return; }
       await loadRecord();
-      // Notify Job page to reload thumbnails
-      window.dispatchEvent(new Event("queue-updated"));
+      // Only notify if deletion succeeded
+      if (out.ok) {
+        window.dispatchEvent(new Event("queue-updated"));
+      }
     } finally {
       setBusy(false);
     }

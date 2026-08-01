@@ -46,9 +46,17 @@ export default function Job() {
 
   // Reload job data when queue syncs (photos uploaded)
   useEffect(() => {
-    const handleQueueUpdate = () => load();
+    let timeout;
+    const handleQueueUpdate = () => {
+      clearTimeout(timeout);
+      // Debounce: only load once per 1 second even if queue-updated fires multiple times
+      timeout = setTimeout(() => load(), 500);
+    };
     window.addEventListener("queue-updated", handleQueueUpdate);
-    return () => window.removeEventListener("queue-updated", handleQueueUpdate);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener("queue-updated", handleQueueUpdate);
+    };
   }, []);
 
   if (!job) return <div className="empty">Loading job…</div>;
