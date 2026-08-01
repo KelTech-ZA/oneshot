@@ -16,7 +16,7 @@ export default function Item() {
   const [qr, setQr] = useState(null);
 
   const loadRecord = () =>
-    fetch(`${FUNCTIONS_URL}/item-record?id=${id}`)
+    fetch(`${FUNCTIONS_URL}/item-record?id=${id}&t=${Date.now()}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(setRec).catch(() => setErr(true));
 
