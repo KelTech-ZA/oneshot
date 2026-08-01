@@ -1,8 +1,7 @@
-// Offline custody-event queue with toast notifications
+// Offline custody-event queue
 // Photos as Base64 are queued locally, synced when online.
 
 import { supabase } from "./supabase";
-import toast from "react-hot-toast";
 
 const DB = "oneshot", STORE = "pending_events";
 
@@ -78,7 +77,6 @@ export async function syncNow() {
   
   if (!navigator.onLine) {
     console.log("Offline - cannot sync");
-    toast.error("No internet connection");
     return;
   }
   
@@ -95,11 +93,12 @@ export async function syncNow() {
     console.log(`Found ${all.length} events to sync`);
     
     if (all.length === 0) {
-      toast.success("All synced!");
+      console.log("Nothing to sync");
       return;
     }
 
     let syncedCount = 0;
+    let errorCount = 0;
 
     for (const ev of all) {
       try {
@@ -120,13 +119,13 @@ export async function syncNow() {
 
             if (uploadErr) {
               console.error("Photo upload error:", uploadErr);
-              toast.error(`Photo upload failed: ${uploadErr.message}`);
+              errorCount++;
               continue;
             }
             console.log("Photo uploaded successfully");
           } catch (uploadError) {
             console.error("Photo conversion error:", uploadError);
-            toast.error(`Photo error: ${uploadError.message}`);
+            errorCount++;
             continue;
           }
         }
@@ -152,7 +151,7 @@ export async function syncNow() {
 
         if (insertErr) {
           console.error("Event insert error:", insertErr);
-          toast.error(`Insert failed: ${insertErr.message}`);
+          errorCount++;
           continue;
         }
         
@@ -169,20 +168,16 @@ export async function syncNow() {
         console.log("Event deleted from queue");
       } catch (e) {
         console.error("Sync error for event:", e);
-        toast.error("Sync error: " + e.message);
+        errorCount++;
       }
     }
     
-    if (syncedCount > 0) {
-      toast.success(`Synced ${syncedCount} event${syncedCount > 1 ? 's' : ''}`);
-      console.log(`Successfully synced ${syncedCount} events`);
-    }
+    console.log(`Sync complete: ${syncedCount} success, ${errorCount} failed`);
+    window.dispatchEvent(new Event("queue-updated"));
   } catch (e) {
     console.error("Sync fatal error:", e);
-    toast.error("Sync failed: " + e.message);
   } finally {
     syncing = false;
-    window.dispatchEvent(new Event("queue-updated"));
   }
 }
 
