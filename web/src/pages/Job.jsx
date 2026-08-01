@@ -42,7 +42,7 @@ export default function Job() {
       setThumbs(map);
     }
   };
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); sessionStorage.setItem("oneshot_app", "1"); }, [id]);
 
   if (!job) return <div className="empty">Loading job…</div>;
   const allDone = items.length > 0 && items.every((i) => ["delivered", "in_storage", "exception"].includes(i.status));

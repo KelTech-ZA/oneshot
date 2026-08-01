@@ -1,25 +1,48 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { FUNCTIONS_URL } from "../lib/supabase";
+import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import QRCode from "qrcode";
 
 // Public: anyone with the link (the QR) sees this. UUID = capability token.
 export default function Item() {
   const { id } = useParams();
   const nav = useNavigate();
-  // Only show "back" when the visitor navigated here from inside the app.
-  // QR/direct visitors land on the first history entry (idx 0) — no back.
-  const cameFromApp = (window.history.state?.idx ?? 0) > 0;
+  // Crew navigating from inside the app leave this flag; QR/direct visitors don't.
+  const cameFromApp = sessionStorage.getItem("oneshot_app") === "1";
+  const [session, setSession] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(false);
   const [qr, setQr] = useState(null);
 
-  useEffect(() => {
+  const loadRecord = () =>
     fetch(`${FUNCTIONS_URL}/item-record?id=${id}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then(setRec).catch(() => setErr(true));
+
+  useEffect(() => {
+    loadRecord();
     QRCode.toDataURL(window.location.href, { margin: 1, width: 220 }).then(setQr);
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
   }, [id]);
+
+  const removePhoto = async (photo_path) => {
+    if (!window.confirm("Remove this photo from the record? This cannot be undone.")) return;
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/remove-photo`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ photo_path }),
+      });
+      const out = await res.json();
+      if (out.error) { window.alert("Could not remove photo: " + out.error); return; }
+      await loadRecord();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (err) return <div className="empty">Item not found.</div>;
   if (!rec) return <div className="empty">Loading record…</div>;
@@ -73,6 +96,13 @@ export default function Item() {
           </div>
           {e.notes && <div className="muted" style={{ marginTop: 4 }}>{e.notes}</div>}
           {e.photo_url && <img src={e.photo_url} alt="" style={{ width: "100%", borderRadius: 8, marginTop: 8 }} />}
+          {e.photo_url && session && cameFromApp && (
+            <button className="btn btn-warn no-print" disabled={busy}
+              style={{ marginTop: 8 }}
+              onClick={() => removePhoto(e.photo_path)}>
+              🗑 Remove photo — wrong item
+            </button>
+          )}
         </div>
       ))}
       {(!rec.events || rec.events.length === 0) && <div className="muted">No custody events yet.</div>}
