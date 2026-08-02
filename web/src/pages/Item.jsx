@@ -1,19 +1,22 @@
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
+import { Ctx } from "../main";
 import QRCode from "qrcode";
 
-// Public: anyone with the link (the QR) sees this. UUID = capability token.
+const TAGS = ["collected", "packed", "loaded", "delivered"];
+
 export default function Item() {
   const { id } = useParams();
   const nav = useNavigate();
-  // Crew navigating from inside the app leave this flag; QR/direct visitors don't.
   const cameFromApp = sessionStorage.getItem("oneshot_app") === "1";
-  const [session, setSession] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const { session, profile } = useContext(Ctx);
+
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(false);
   const [qr, setQr] = useState(null);
+  const [editingEventId, setEditingEventId] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   const loadRecord = () =>
     fetch(`${FUNCTIONS_URL}/item-record?id=${id}&t=${Date.now()}`)
@@ -23,9 +26,8 @@ export default function Item() {
   useEffect(() => {
     loadRecord();
     QRCode.toDataURL(window.location.href, { margin: 1, width: 220 }).then(setQr);
-    // If navigating from inside the app, get the current authenticated session
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+      // Session is set for remove-photo auth
     });
   }, [id]);
 
@@ -42,7 +44,6 @@ export default function Item() {
       const out = await res.json();
       if (out.error) { window.alert("Could not remove photo: " + out.error); return; }
       await loadRecord();
-      // Only notify if deletion succeeded
       if (out.ok) {
         window.dispatchEvent(new Event("queue-updated"));
       }
@@ -51,9 +52,31 @@ export default function Item() {
     }
   };
 
+  const editEvent = async (eventId, newType) => {
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/edit-event`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ event_id: eventId, new_type: newType }),
+      });
+      const out = await res.json();
+      if (out.error) { window.alert("Could not edit event: " + out.error); return; }
+      await loadRecord();
+      setEditingEventId(null);
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (err) return <div className="empty">Item not found.</div>;
   if (!rec) return <div className="empty">Loading record…</div>;
-  const last = rec.events?.[0];
+
+  const isOps = session && profile?.role === "ops";
+  const jobClosed = rec.jobs?.status === "closed" || rec.jobs?.status === "completed";
+  const showEditButton = cameFromApp && isOps && jobClosed;
 
   return (
     <div className="page">
@@ -64,91 +87,74 @@ export default function Item() {
         </button>
       )}
       <div className="wordmark" style={{ marginBottom: 14 }}>ONE<b>SHOT</b> · RECORD</div>
-      <div className="print-only muted" style={{ marginBottom: 12 }}>
-        Custody record snapshot · generated {new Date().toLocaleString()} · live record: {window.location.href}
-      </div>
-      {rec.anchor_image_url && (
-        <img src={rec.anchor_image_url} alt={rec.description}
-          style={{ width: "100%", borderRadius: 10, marginBottom: 12, maxHeight: "40vh", objectFit: "cover" }} />
-      )}
-      <h1 style={{ marginBottom: 4 }}>{rec.description}</h1>
-      <div className="muted" style={{ marginBottom: 12 }}>
-        {rec.jobs?.ref} · {rec.jobs?.type} · Tier {rec.identity_tier}
-      </div>
-      <span className={`stamp ${rec.status === "delivered" ? "done" : rec.status === "exception" ? "bad" : "live"}`}
-        style={{ transform: "rotate(-2deg)", display: "inline-block", fontSize: 13, padding: "6px 12px" }}>
-        {rec.status.replace("_", " ")}
-      </span>
+      <h1 style={{ marginTop: 0 }}>{rec.description}</h1>
+      <div className="muted" style={{ marginBottom: 16 }}>{rec.jobs?.ref} · {rec.identity_tier ? `Tier ${rec.identity_tier}` : "Untiered"}</div>
 
-      {last && (
-        <>
-          <h2>Last seen</h2>
-          <div className="card">
-            <div style={{ fontWeight: 600 }}>{last.type.replace("_", " ")} · {new Date(last.taken_at).toLocaleString()}</div>
-            {last.lat && (
-              <a className="muted" href={`https://maps.google.com/?q=${last.lat},${last.lng}`}>
-                📍 {last.lat.toFixed(5)}, {last.lng.toFixed(5)}
-              </a>
+      {rec.anchor_image_url && (
+        <img src={rec.anchor_image_url} alt="" style={{ width: "100%", borderRadius: 10, marginBottom: 16, maxHeight: "50vh", objectFit: "cover" }} />
+      )}
+
+      <h2>Custody History</h2>
+      {(!rec.events || rec.events.length === 0) ? (
+        <p className="empty">No custody events yet.</p>
+      ) : (
+        rec.events.map((e) => (
+          <div key={e.id} className="card" style={{ marginBottom: 12 }}>
+            <div className="row">
+              <span style={{ fontWeight: 600, textTransform: "capitalize" }}>{e.type}</span>
+              <span className="muted" style={{ fontSize: 12 }}>{new Date(e.taken_at).toLocaleString()}</span>
+            </div>
+            {e.notes && <div className="muted" style={{ marginTop: 4 }}>{e.notes}</div>}
+            {e.edited_at && (
+              <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                Edited by {e.profiles?.full_name || "unknown"} · {new Date(e.edited_at).toLocaleString()}
+              </div>
+            )}
+            {e.photo_url && <img src={e.photo_url} alt="" style={{ width: "100%", borderRadius: 8, marginTop: 8 }} />}
+            {e.photo_url && cameFromApp && (
+              <button className="btn btn-warn no-print" disabled={busy}
+                style={{ marginTop: 8 }}
+                onClick={() => removePhoto(e.photo_path)}>
+                🗑 Remove photo — wrong item
+              </button>
+            )}
+            {showEditButton && (
+              <button className="btn btn-ghost no-print" disabled={busy}
+                style={{ marginTop: 8 }}
+                onClick={() => setEditingEventId(editingEventId === e.id ? null : e.id)}>
+                ✎ Edit event
+              </button>
+            )}
+            {editingEventId === e.id && showEditButton && (
+              <div style={{ marginTop: 8, padding: 8, background: "var(--card)", borderRadius: 6 }}>
+                <div style={{ marginBottom: 8, fontWeight: 600 }}>Change to:</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {TAGS.map((tag) => (
+                    <button
+                      key={tag}
+                      className="btn btn-ghost"
+                      style={{ marginTop: 0, textTransform: "capitalize" }}
+                      onClick={() => editEvent(e.id, tag)}
+                      disabled={busy}>
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
-        </>
+        ))
       )}
 
-      <h2>Custody history</h2>
-      {(rec.events ?? []).map((e, i) => (
-        <div className="card" key={i}>
-          <div className="row">
-            <span style={{ fontWeight: 600, textTransform: "capitalize" }}>{e.type.replace("_", " ")}</span>
-            <span className="muted">{new Date(e.taken_at).toLocaleString()}</span>
-          </div>
-          {e.notes && <div className="muted" style={{ marginTop: 4 }}>{e.notes}</div>}
-          {e.photo_url && <img src={e.photo_url} alt="" style={{ width: "100%", borderRadius: 8, marginTop: 8 }} />}
-          {e.photo_url && cameFromApp && (
-            <button className="btn btn-warn no-print" disabled={busy}
-              style={{ marginTop: 8 }}
-              onClick={() => removePhoto(e.photo_path)}>
-              🗑 Remove photo — wrong item
-            </button>
-          )}
-        </div>
-      ))}
-      {(!rec.events || rec.events.length === 0) && <div className="muted">No custody events yet.</div>}
-
-      {qr && (
+      {qr && !cameFromApp && (
         <>
-          <h2>Share this record</h2>
-          <div className="card" style={{ textAlign: "center" }}>
-            <img src={qr} alt="QR code for this record" />
-            <div className="muted" style={{ marginTop: 6 }}>Read-only evidence link — anyone can view, nobody can act on it.</div>
+          <h2>Share This Record</h2>
+          <div style={{ textAlign: "center", padding: 12, background: "var(--card)", borderRadius: 10, marginBottom: 16 }}>
+            <img src={qr} alt="QR code" style={{ width: 200 }} />
+            <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              Read-only evidence link — anyone can view, nobody can act on it.
+            </p>
           </div>
-          <button className="btn btn-primary" onClick={async () => {
-            const url = window.location.href;
-            const title = `${rec.description} — OneShot record`;
-            if (navigator.share) {
-              try { await navigator.share({ title, url }); } catch { /* user cancelled */ }
-            } else {
-              await navigator.clipboard.writeText(url);
-              alert("Link copied");
-            }
-          }}>
-            ↗ Share custody record
-          </button>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <a className="btn btn-ghost" style={{ flex: 1, marginTop: 0, textDecoration: "none" }}
-              href={`https://wa.me/?text=${encodeURIComponent(`${rec.description} — live record: ${window.location.href}`)}`}
-              target="_blank" rel="noreferrer">WhatsApp</a>
-            <a className="btn btn-ghost" style={{ flex: 1, marginTop: 0, textDecoration: "none" }}
-              href={`mailto:?subject=${encodeURIComponent(`OneShot record: ${rec.description}`)}&body=${encodeURIComponent(`Live custody record: ${window.location.href}`)}`}>Email</a>
-            <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0 }} onClick={async () => {
-              await navigator.clipboard.writeText(window.location.href);
-            }}>Copy</button>
-          </div>
-          <button className="btn btn-ghost" onClick={() => window.print()}>
-            ⬇ Download record (PDF snapshot)
-          </button>
-          <p className="muted no-print" style={{ marginTop: 8, textAlign: "center" }}>
-            The link stays live and keeps growing; the download freezes this moment — photos included — for insurers, claims, and filing.
-          </p>
         </>
       )}
     </div>

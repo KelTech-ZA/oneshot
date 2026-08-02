@@ -16,12 +16,12 @@ Deno.serve(async (req) => {
 
   const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: item } = await sb.from("line_items")
-    .select("id,description,identity_tier,status,attributes,anchor_image_path,created_at,jobs(ref,type,scheduled_date)")
+    .select("id,description,identity_tier,status,attributes,anchor_image_path,created_at,jobs(ref,type,scheduled_date,status)")
     .eq("id", id).single();
   if (!item) return new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: cors });
 
   const { data: events } = await sb.from("custody_events")
-    .select("type,taken_at,lat,lng,photo_path,notes,match_method")
+    .select("id,type,taken_at,lat,lng,photo_path,notes,match_method,edited_at,edited_by_id,profiles!edited_by_id(full_name)")
     .eq("item_id", id).order("taken_at", { ascending: false });
 
   const sign = async (p: string | null) =>
