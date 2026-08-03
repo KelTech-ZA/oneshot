@@ -1,7 +1,6 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
-import { Ctx } from "../main";
 import QRCode from "qrcode";
 
 const TAGS = ["collected", "packed", "loaded", "delivered"];
@@ -10,11 +9,12 @@ export default function Item() {
   const { id } = useParams();
   const nav = useNavigate();
   const cameFromApp = sessionStorage.getItem("oneshot_app") === "1";
-  const { session, profile } = useContext(Ctx);
 
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(false);
   const [qr, setQr] = useState(null);
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [editingEventId, setEditingEventId] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -27,7 +27,11 @@ export default function Item() {
     loadRecord();
     QRCode.toDataURL(window.location.href, { margin: 1, width: 220 }).then(setQr);
     supabase.auth.getSession().then(({ data }) => {
-      // Session is set for remove-photo auth
+      setSession(data.session);
+      if (data.session?.user?.id) {
+        supabase.from("profiles").select("role").eq("id", data.session.user.id).single()
+          .then(({ data: prof }) => setProfile(prof));
+      }
     });
   }, [id]);
 
@@ -74,7 +78,7 @@ export default function Item() {
   if (err) return <div className="empty">Item not found.</div>;
   if (!rec) return <div className="empty">Loading record…</div>;
 
-  const isOps = session && profile?.role === "ops";
+  const isOps = profile?.role === "ops";
   const jobClosed = rec.jobs?.status === "closed" || rec.jobs?.status === "completed";
   const showEditButton = cameFromApp && isOps && jobClosed;
 
