@@ -16,6 +16,8 @@ export default function Item() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [editingEventId, setEditingEventId] = useState(null);
+  const [addingPhotoEventId, setAddingPhotoEventId] = useState(null);
+  const [photoCapture, setPhotoCapture] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const loadRecord = () =>
@@ -75,12 +77,35 @@ export default function Item() {
     }
   };
 
+  const attachPhoto = async (eventId) => {
+    if (!photoCapture) return;
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/attach-photo`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ event_id: eventId, photo_base64: photoCapture }),
+      });
+      const out = await res.json();
+      if (out.error) { window.alert("Could not attach photo: " + out.error); return; }
+      await loadRecord();
+      setAddingPhotoEventId(null);
+      setPhotoCapture(null);
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (err) return <div className="empty">Item not found.</div>;
   if (!rec) return <div className="empty">Loading record…</div>;
 
   const isOps = profile?.role === "ops";
   const jobClosed = rec.jobs?.status === "closed" || rec.jobs?.status === "completed";
+  const jobOpen = !jobClosed;
   const showEditButton = cameFromApp && isOps && jobClosed;
+  const canAddPhoto = cameFromApp && (jobOpen || isOps);
 
   return (
     <div className="page">
@@ -121,6 +146,39 @@ export default function Item() {
                 onClick={() => removePhoto(e.photo_path)}>
                 🗑 Remove photo — wrong item
               </button>
+            )}
+            {!e.photo_url && canAddPhoto && (
+              <button className="btn btn-accent no-print" disabled={busy}
+                style={{ marginTop: 8 }}
+                onClick={() => setAddingPhotoEventId(addingPhotoEventId === e.id ? null : e.id)}>
+                📷 Add photo to this event
+              </button>
+            )}
+            {addingPhotoEventId === e.id && (
+              <div style={{ marginTop: 8, padding: 8, background: "var(--card)", borderRadius: 6 }}>
+                <input type="file" accept="image/*" capture="environment"
+                  onChange={(ev) => {
+                    const file = ev.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (e) => {
+                        const result = e.target?.result;
+                        if (typeof result === "string") {
+                          const b64 = result.split(",")[1];
+                          setPhotoCapture(b64);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }} />
+                {photoCapture && (
+                  <button className="btn btn-primary no-print" disabled={busy}
+                    style={{ marginTop: 8 }}
+                    onClick={() => attachPhoto(e.id)}>
+                    ✓ Save photo
+                  </button>
+                )}
+              </div>
             )}
             {showEditButton && (
               <button className="btn btn-ghost no-print" disabled={busy}

@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
 import { Ctx } from "../main";
 
@@ -10,6 +10,8 @@ const ITEM_STAMP = {
   in_transit: ["live", "IN TRANSIT"], delivered: ["done", "DELIVERED"],
   exception: ["bad", "EXCEPTION"],
 };
+
+const TAGS = ["collected", "packed", "loaded", "delivered"];
 
 export function ItemStamp({ status }) {
   const [cls, label] = ITEM_STAMP[status] ?? ["pending", status];
@@ -25,6 +27,10 @@ export default function Job() {
   const [thumbs, setThumbs] = useState({});
   const [events, setEvents] = useState([]);
   const [names, setNames] = useState({});
+  const [loggingEventItemId, setLoggingEventItemId] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
 
   const load = async () => {
     const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
@@ -42,14 +48,37 @@ export default function Job() {
       setThumbs(map);
     }
   };
+
+  const mark = async (s, msg) => {
+    const { error } = await supabase.from("jobs").update({ status: s }).eq("id", id);
+    if (!error) { load(); }
+  };
+
+  const logEvent = async (itemId, type) => {
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/log-event`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ job_id: id, item_id: itemId, type }),
+      });
+      const out = await res.json();
+      if (out.error) { window.alert("Could not log event: " + out.error); return; }
+      await load();
+      setLoggingEventItemId(null);
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => { load(); sessionStorage.setItem("oneshot_app", "1"); }, [id]);
 
-  // Reload job data when queue syncs (photos uploaded)
   useEffect(() => {
     let timeout;
     const handleQueueUpdate = () => {
       clearTimeout(timeout);
-      // Debounce: only load once per 1 second even if queue-updated fires multiple times
       timeout = setTimeout(() => load(), 500);
     };
     window.addEventListener("queue-updated", handleQueueUpdate);
@@ -59,64 +88,61 @@ export default function Job() {
     };
   }, []);
 
-  if (!job) return <div className="empty">Loading job…</div>;
-  const allDone = items.length > 0 && items.every((i) => ["delivered", "in_storage", "exception"].includes(i.status));
-  const started = ["in_progress", "completed", "closed"].includes(job.status);
-  const accepted = job.status === "accepted" || started;
-
-  const fmt = (t) => new Date(t).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  const acceptEv = events.find((e) => e.type === "note" && e.notes?.includes("acknowledged"));
-  const startEv = events.find((e) => e.type === "note" && e.notes?.includes("started"));
-  const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
-
-  const mark = async (status, note) => {
-    await supabase.from("jobs").update({ status, updated_at: new Date().toISOString() }).eq("id", id);
-    await supabase.from("custody_events").insert({
-      tenant_id: job.tenant_id, job_id: id, type: "note",
-      taken_at: new Date().toISOString(), notes: note, user_id: session.user.id,
-    });
-    load();
-  };
-
-  const closeJob = async () => {
-    await supabase.from("jobs").update({ status: "completed", updated_at: new Date().toISOString() }).eq("id", id);
-    nav("/");
-  };
+  if (!job) return <div className="page empty">Loading job…</div>;
+  const accepted = job.status !== "pending_confirmation" && job.status !== "cancelled";
+  const started = job.status === "in_progress";
 
   return (
     <div className="page">
-      <button className="muted" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit", padding: 0, marginBottom: 10 }}
-        onClick={() => nav("/")}>
-        ← Today
-      </button>
+      <Link className="muted" style={{ marginBottom: 10 }} to="/">← Today</Link>
       <div className="row">
         <span className="ref" style={{ fontSize: 18 }}>{job.ref}</span>
-        <div className="row" style={{ gap: 8 }}>
-          {profile.role === "ops" && !["completed", "closed", "cancelled"].includes(job.status) && (
-            <button className="stamp pending" style={{ background: "none", cursor: "pointer", padding: "4px 9px" }}
-              onClick={() => nav(`/job/${id}/edit`)}>✎ EDIT</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {job.status !== "cancelled" && (
+            <button className="btn btn-ghost" style={{ marginTop: 0, padding: "4px 8px" }}
+              onClick={() => nav(`/edit/${id}`)}>
+              ✎ Edit
+            </button>
           )}
           <JobStamp status={job.status} />
         </div>
       </div>
 
-      <h2>Status</h2>
       <div className="card">
-        <div className="row"><span className="muted">Booked for</span>
-          <span style={{ fontWeight: 600 }}>{job.scheduled_date ?? "unscheduled"}{job.time_window ? ` · ${job.time_window}` : ""}</span></div>
-        <div className="row" style={{ marginTop: 6 }}><span className="muted">Accepted</span>
-          <span style={{ fontWeight: 600 }}>{acceptEv ? `${names[acceptEv.user_id] ?? "crew"} · ${fmt(acceptEv.taken_at)}` : "not yet"}</span></div>
-        <div className="row" style={{ marginTop: 6 }}><span className="muted">Started</span>
-          <span style={{ fontWeight: 600 }}>{startEv ? `${names[startEv.user_id] ?? "crew"} · ${fmt(startEv.taken_at)}` : "not yet"}</span></div>
-        <div className="row" style={{ marginTop: 6 }}><span className="muted">Photos logged</span>
-          <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path).length}</span></div>
+        <div className="row">
+          <span className="muted">Booked for</span>
+          <span style={{ fontWeight: 600 }}>{job.scheduled_date ? new Date(job.scheduled_date).toLocaleDateString("en-ZA") : "unscheduled"}</span>
+        </div>
+        {job.accepted_by && (
+          <div className="row" style={{ marginTop: 4 }}>
+            <span className="muted">Accepted</span>
+            <span style={{ fontWeight: 600 }}>{names[job.accepted_by] ?? "crew"} · {new Date(job.accepted_at).toLocaleDateString()}</span>
+          </div>
+        )}
+        {job.started_at && (
+          <div className="row" style={{ marginTop: 4 }}>
+            <span className="muted">Started</span>
+            <span style={{ fontWeight: 600 }}>{new Date(job.started_at).toLocaleDateString()}</span>
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 4 }}>
+          <span className="muted">Photos logged</span>
+          <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path).length}</span>
+        </div>
       </div>
 
-      <h2>Route</h2>
       <div className="card">
-        <div><b>From:</b> {job.origin?.label || job.origin?.address || "—"}</div>
-        <div style={{ marginTop: 4 }}><b>To:</b> {job.destination?.label || job.destination?.address || "—"}</div>
-        {job.destination?.contact_name && (
+        {job.origin && (
+          <div className="muted" style={{ marginBottom: 6 }}>
+            <strong>From:</strong> {job.origin.address}{job.origin.contact_name && ` · ${job.origin.contact_name}`}
+          </div>
+        )}
+        {job.destination && (
+          <div className="muted" style={{ marginBottom: 6 }}>
+            <strong>To:</strong> {job.destination.address}{job.destination.contact_name && ` · ${job.destination.contact_name}`}
+          </div>
+        )}
+        {job.origin?.contact_name && (
           <div className="muted" style={{ marginTop: 6 }}>
             Delivery contact: {job.destination.contact_name}{" "}
             {job.destination.contact_phone && <a href={`tel:${job.destination.contact_phone}`}>{job.destination.contact_phone}</a>}
@@ -135,25 +161,55 @@ export default function Job() {
 
       <h2>Items ({items.length})</h2>
       {items.map((it) => (
-        <Link className="card" key={it.id} to={`/i/${it.id}`}>
-          <div className="row">
-            <div className="row" style={{ justifyContent: "flex-start" }}>
-              {thumbs[it.id]
-                ? <img className="thumb" src={thumbs[it.id]} alt="" />
-                : <div className="thumb" aria-hidden="true" />}
-              <div>
-                <div style={{ fontWeight: 600 }}>{it.description}</div>
-                <div className="muted">
-                  {it.attributes?.needs_details && <span style={{ color: "var(--warn)" }}>⚠ needs details · </span>}
-                  Tier {it.identity_tier} · {photoCount(it.id) > 0
-                    ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
-                    : "no photos yet"}
+        <div key={it.id}>
+          <Link className="card" to={`/i/${it.id}`}>
+            <div className="row">
+              <div className="row" style={{ justifyContent: "flex-start" }}>
+                {thumbs[it.id]
+                  ? <img className="thumb" src={thumbs[it.id]} alt="" />
+                  : <div className="thumb" aria-hidden="true" />}
+                <div>
+                  <div style={{ fontWeight: 600 }}>{it.description}</div>
+                  <div className="muted">
+                    {it.attributes?.needs_details && <span style={{ color: "var(--warn)" }}>⚠ needs details · </span>}
+                    Tier {it.identity_tier} · {photoCount(it.id) > 0
+                      ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
+                      : "no photos yet"}
+                  </div>
                 </div>
               </div>
+              <ItemStamp status={it.status} />
             </div>
-            <ItemStamp status={it.status} />
-          </div>
-        </Link>
+          </Link>
+          {started && loggingEventItemId === it.id && (
+            <div style={{ padding: 8, background: "var(--card)", borderRadius: 6, marginBottom: 8 }}>
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>Log event:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    className="btn btn-ghost"
+                    style={{ marginTop: 0, textTransform: "capitalize" }}
+                    onClick={() => logEvent(it.id, tag)}
+                    disabled={busy}>
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {started && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => nav(`/job/${id}/shoot`)}>
+                📷 Shoot
+              </button>
+              <button className="btn btn-ghost" style={{ flex: 1 }}
+                onClick={() => setLoggingEventItemId(loggingEventItemId === it.id ? null : it.id)}>
+                📝 Log event
+              </button>
+            </div>
+          )}
+        </div>
       ))}
 
       {!started && job.status !== "cancelled" && (
@@ -170,32 +226,9 @@ export default function Job() {
             </button>
           </div>
           <p className="muted" style={{ textAlign: "center", marginTop: 8 }}>
-            Accept = job acknowledged. Start = work has begun; shooting unlocks.
+            Accept = job acknowledged. Start = work has begun; logging unlocks.
           </p>
         </>
-      )}
-      {started && (
-        <button className="btn btn-accent" style={{ marginTop: 12 }} onClick={() => nav(`/job/${id}/shoot`)}>
-          📷 Shoot item
-        </button>
-      )}
-      <div className="quiet-actions">
-        {profile.role === "ops" && !["completed", "closed", "cancelled"].includes(job.status) && (
-          <button onClick={async () => {
-            const url = `${window.location.origin}/claim/${job.id}/${job.claim_token}`;
-            const text = `Delivery job ${job.ref} — accept it here: ${url}`;
-            if (navigator.share) { try { await navigator.share({ title: `OneShot job ${job.ref}`, text, url }); } catch {} }
-            else { await navigator.clipboard.writeText(url); window.alert("Claim link copied — send it to your driver"); }
-          }}>🔗 Send this job — driver or your business</button>
-        )}
-        <button onClick={async () => {
-          const url = `${window.location.origin}/j/${job.id}`;
-          if (navigator.share) { try { await navigator.share({ title: `${job.ref} — OneShot job record`, url }); } catch {} }
-          else { await navigator.clipboard.writeText(url); window.alert("Job record link copied"); }
-        }}>↗ Share job record</button>
-      </div>
-      {allDone && (
-        <button className="btn btn-primary" onClick={closeJob}>Close job</button>
       )}
     </div>
   );
