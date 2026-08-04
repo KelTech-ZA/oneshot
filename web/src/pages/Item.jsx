@@ -13,11 +13,11 @@ export default function Item() {
   const [rec, setRec] = useState(null);
   const [err, setErr] = useState(false);
   const [qr, setQr] = useState(null);
-  const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [editingEventId, setEditingEventId] = useState(null);
   const [addingPhotoEventId, setAddingPhotoEventId] = useState(null);
   const [photoCapture, setPhotoCapture] = useState(null);
+  const [signedUrls, setSignedUrls] = useState({});
   const [busy, setBusy] = useState(false);
 
   const loadRecord = () =>
@@ -29,13 +29,47 @@ export default function Item() {
     loadRecord();
     QRCode.toDataURL(window.location.href, { margin: 1, width: 220 }).then(setQr);
     supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
       if (data.session?.user?.id) {
         supabase.from("profiles").select("role").eq("id", data.session.user.id).single()
           .then(({ data: prof }) => setProfile(prof));
       }
     });
   }, [id]);
+
+  // Generate signed URLs on-demand as images are displayed
+  const getSignedUrl = async (photoPath) => {
+    if (!photoPath) return null;
+    if (signedUrls[photoPath]) return signedUrls[photoPath];
+    
+    try {
+      const { data } = await supabase.storage.from("photos").createSignedUrl(photoPath, 3600);
+      if (data?.signedUrl) {
+        setSignedUrls((prev) => ({ ...prev, [photoPath]: data.signedUrl }));
+        return data.signedUrl;
+      }
+    } catch (e) {
+      console.error("Failed to sign URL:", photoPath, e);
+    }
+    return null;
+  };
+
+  // Pre-generate URLs for anchor image
+  useEffect(() => {
+    if (rec?.anchor_image_path) {
+      getSignedUrl(rec.anchor_image_path);
+    }
+  }, [rec?.anchor_image_path]);
+
+  // Pre-generate URLs for all event photos (lazy, not blocking)
+  useEffect(() => {
+    if (rec?.events) {
+      rec.events.forEach((e) => {
+        if (e.photo_path) {
+          getSignedUrl(e.photo_path);
+        }
+      });
+    }
+  }, [rec?.events]);
 
   const removePhoto = async (photo_path) => {
     if (!window.confirm("Remove this photo from the record? This cannot be undone.")) return;
@@ -119,8 +153,8 @@ export default function Item() {
       <h1 style={{ marginTop: 0 }}>{rec.description}</h1>
       <div className="muted" style={{ marginBottom: 16 }}>{rec.jobs?.ref} · {rec.identity_tier ? `Tier ${rec.identity_tier}` : "Untiered"}</div>
 
-      {rec.anchor_image_url && (
-        <img src={rec.anchor_image_url} alt="" style={{ width: "100%", borderRadius: 10, marginBottom: 16, maxHeight: "50vh", objectFit: "cover" }} />
+      {rec.anchor_image_path && signedUrls[rec.anchor_image_path] && (
+        <img src={signedUrls[rec.anchor_image_path]} alt="" style={{ width: "100%", borderRadius: 10, marginBottom: 16, maxHeight: "50vh", objectFit: "cover" }} />
       )}
 
       <h2>Custody History</h2>
@@ -139,15 +173,16 @@ export default function Item() {
                 Edited by {e.profiles?.full_name || "unknown"} · {new Date(e.edited_at).toLocaleString()}
               </div>
             )}
-            {e.photo_url && <img src={e.photo_url} alt="" style={{ width: "100%", borderRadius: 8, marginTop: 8 }} />}
-            {e.photo_url && cameFromApp && (
+            {e.photo_path && signedUrls[e.photo_path] && <img src={signedUrls[e.photo_path]} alt="" style={{ width: "100%", borderRadius: 8, marginTop: 8 }} />}
+            {e.photo_path && !signedUrls[e.photo_path] && <div style={{ width: "100%", height: 200, background: "var(--card)", borderRadius: 8, marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center" }}><span className="muted">Loading…</span></div>}
+            {e.photo_path && cameFromApp && (
               <button className="btn btn-warn no-print" disabled={busy}
                 style={{ marginTop: 8 }}
                 onClick={() => removePhoto(e.photo_path)}>
                 🗑 Remove photo — wrong item
               </button>
             )}
-            {!e.photo_url && canAddPhoto && (
+            {!e.photo_path && canAddPhoto && (
               <button className="btn btn-accent no-print" disabled={busy}
                 style={{ marginTop: 8 }}
                 onClick={() => setAddingPhotoEventId(addingPhotoEventId === e.id ? null : e.id)}>

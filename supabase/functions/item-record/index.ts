@@ -1,5 +1,6 @@
 // Public item record — powers the QR URL (/i/{id} page fetches this).
 // The unguessable item UUID acts as the capability token.
+// Returns photo paths only (no signed URLs) — client generates them on-demand.
 // Deploy with: supabase functions deploy item-record --no-verify-jwt
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -24,12 +25,8 @@ Deno.serve(async (req) => {
     .select("id,type,taken_at,lat,lng,photo_path,notes,match_method,edited_at,edited_by_id,profiles!edited_by_id(full_name)")
     .eq("item_id", id).order("taken_at", { ascending: false });
 
-  const sign = async (p: string | null) =>
-    p ? (await sb.storage.from("photos").createSignedUrl(p, 3600)).data?.signedUrl ?? null : null;
-
   return new Response(JSON.stringify({
     ...item,
-    anchor_image_url: await sign(item.anchor_image_path),
-    events: await Promise.all((events ?? []).map(async (e) => ({ ...e, photo_url: await sign(e.photo_path) }))),
+    events: events ?? [],
   }), { headers: cors });
 });
