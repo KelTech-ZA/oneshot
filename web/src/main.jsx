@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-do
 import { supabase, FUNCTIONS_URL } from "./lib/supabase";
 import { pendingCount, syncNow, getLastSyncError, clearLastSyncError } from "./lib/queue";
 import Login from "./pages/Login";
+import ChangePassword from "./pages/ChangePassword";
 import Today from "./pages/Today";
 import Job from "./pages/Job";
 import Capture from "./pages/Capture";
@@ -46,11 +47,23 @@ function Shell() {
   const [pending, setPending] = useState(0);
   const [syncError, setSyncError] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [forcePasswordChange, setForcePasswordChange] = useState(false);
   const nav = useNavigate();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      // Detect recovery session (password reset required)
+      if (data.session?.user?.user_metadata?.recovery_session) {
+        setForcePasswordChange(true);
+      }
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+      setSession(s);
+      if (s?.user?.user_metadata?.recovery_session) {
+        setForcePasswordChange(true);
+      }
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -144,6 +157,7 @@ function Shell() {
 
   if (session === undefined) return null;
   if (!session) return <Login />;
+  if (forcePasswordChange) return <ChangePassword onCancel={() => { setForcePasswordChange(false); supabase.auth.signOut(); }} />;
   if (memberships && memberships.length === 0)
     return <div className="empty">This account isn't a member of any workspace yet.<br/>
       <span className="muted">Ask your ops manager to add you — or sign out and create your own workspace.</span></div>;
