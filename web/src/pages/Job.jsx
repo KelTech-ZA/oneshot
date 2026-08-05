@@ -27,10 +27,13 @@ export default function Job() {
   const [thumbs, setThumbs] = useState({});
   const [events, setEvents] = useState([]);
   const [names, setNames] = useState({});
+  const [checkedItems, setCheckedItems] = useState(new Set());
   const [loggingEventItemId, setLoggingEventItemId] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
+  const isOps = profile?.role === "ops";
+  const jobOpen = job && !["closed", "completed", "cancelled"].includes(job.status);
 
   const load = async () => {
     const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
@@ -49,28 +52,53 @@ export default function Job() {
     }
   };
 
-  const mark = async (s, msg) => {
-    const { error } = await supabase.from("jobs").update({ status: s }).eq("id", id);
-    if (!error) { load(); }
-  };
-
-  const logEvent = async (itemId, type) => {
+  const logJobEvent = async (type) => {
     setBusy(true);
     try {
       const { data: { session: s } } = await supabase.auth.getSession();
-      const res = await fetch(`${FUNCTIONS_URL}/log-event`, {
+      const res = await fetch(`${FUNCTIONS_URL}/log-job-event`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
-        body: JSON.stringify({ job_id: id, item_id: itemId, type }),
+        body: JSON.stringify({ job_id: id, type }),
       });
       const out = await res.json();
-      if (out.error) { window.alert("Could not log event: " + out.error); return; }
+      if (out.error) { window.alert("Could not log job event: " + out.error); return; }
       await load();
-      setLoggingEventItemId(null);
       window.dispatchEvent(new Event("queue-updated"));
     } finally {
       setBusy(false);
     }
+  };
+
+  const logBulkItemEvent = async (type) => {
+    if (checkedItems.size === 0) { window.alert("No items selected"); return; }
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      // Log event for each checked item
+      for (const itemId of checkedItems) {
+        await fetch(`${FUNCTIONS_URL}/log-event`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+          body: JSON.stringify({ job_id: id, item_id: itemId, type }),
+        });
+      }
+      setCheckedItems(new Set());
+      await load();
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleItem = (itemId) => {
+    const newChecked = new Set(checkedItems);
+    if (newChecked.has(itemId)) {
+      newChecked.delete(itemId);
+    } else {
+      newChecked.add(itemId);
+    }
+    setCheckedItems(newChecked);
   };
 
   useEffect(() => { load(); sessionStorage.setItem("oneshot_app", "1"); }, [id]);
@@ -89,8 +117,6 @@ export default function Job() {
   }, []);
 
   if (!job) return <div className="page empty">Loading job…</div>;
-  const accepted = job.status !== "pending_confirmation" && job.status !== "cancelled";
-  const started = job.status === "in_progress";
 
   return (
     <div className="page">
@@ -127,7 +153,7 @@ export default function Job() {
         )}
         <div className="row" style={{ marginTop: 4 }}>
           <span className="muted">Photos logged</span>
-          <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path).length}</span>
+          <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path && e.item_id).length}</span>
         </div>
       </div>
 
@@ -159,29 +185,61 @@ export default function Job() {
         </div>
       </div>
 
+      <h2>Job Status</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("collected")}>Collected</button>
+        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("in_transit")}>In Transit</button>
+        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("delivered")}>Delivered</button>
+        {isOps && <button className="btn btn-warn" disabled={busy} onClick={() => logJobEvent("closed")}>Close Job</button>}
+      </div>
+
       <h2>Items ({items.length})</h2>
+      {checkedItems.size > 0 && (
+        <div className="card" style={{ marginBottom: 12, background: "var(--ok-light)" }}>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>{checkedItems.size} item{checkedItems.size > 1 ? "s" : ""} selected</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            {TAGS.map((tag) => (
+              <button
+                key={tag}
+                className="btn btn-ghost"
+                style={{ marginTop: 0, textTransform: "capitalize" }}
+                onClick={() => logBulkItemEvent(tag)}
+                disabled={busy}>
+                {tag}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {items.map((it) => (
         <div key={it.id}>
-          <Link className="card" to={`/i/${it.id}`}>
-            <div className="row">
-              <div className="row" style={{ justifyContent: "flex-start" }}>
-                {thumbs[it.id]
-                  ? <img className="thumb" src={thumbs[it.id]} alt="" />
-                  : <div className="thumb" aria-hidden="true" />}
-                <div>
-                  <div style={{ fontWeight: 600 }}>{it.description}</div>
-                  <div className="muted">
-                    {it.attributes?.needs_details && <span style={{ color: "var(--warn)" }}>⚠ needs details · </span>}
-                    Tier {it.identity_tier} · {photoCount(it.id) > 0
-                      ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
-                      : "no photos yet"}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+            {jobOpen && (
+              <input type="checkbox" checked={checkedItems.has(it.id)} onChange={() => toggleItem(it.id)}
+                style={{ width: 20, height: 20, cursor: "pointer" }} />
+            )}
+            <Link className="card" to={`/i/${it.id}`} style={{ flex: 1, marginBottom: 0 }}>
+              <div className="row">
+                <div className="row" style={{ justifyContent: "flex-start" }}>
+                  {thumbs[it.id]
+                    ? <img className="thumb" src={thumbs[it.id]} alt="" />
+                    : <div className="thumb" aria-hidden="true" />}
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{it.description}</div>
+                    <div className="muted">
+                      {it.attributes?.needs_details && <span style={{ color: "var(--warn)" }}>⚠ needs details · </span>}
+                      Tier {it.identity_tier} · {photoCount(it.id) > 0
+                        ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
+                        : "no photos yet"}
+                    </div>
                   </div>
                 </div>
+                <ItemStamp status={it.status} />
               </div>
-              <ItemStamp status={it.status} />
-            </div>
-          </Link>
-          {started && loggingEventItemId === it.id && (
+            </Link>
+          </div>
+          {job.status === "in_progress" && loggingEventItemId === it.id && (
             <div style={{ padding: 8, background: "var(--card)", borderRadius: 6, marginBottom: 8 }}>
               <div style={{ marginBottom: 8, fontWeight: 600 }}>Log event:</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
@@ -190,7 +248,9 @@ export default function Job() {
                     key={tag}
                     className="btn btn-ghost"
                     style={{ marginTop: 0, textTransform: "capitalize" }}
-                    onClick={() => logEvent(it.id, tag)}
+                    onClick={() => {
+                      // TODO: log single item event
+                    }}
                     disabled={busy}>
                     {tag}
                   </button>
@@ -198,7 +258,7 @@ export default function Job() {
               </div>
             </div>
           )}
-          {started && (
+          {job.status === "in_progress" && (
             <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
               <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => nav(`/job/${id}/shoot`)}>
                 📷 Shoot
@@ -212,21 +272,21 @@ export default function Job() {
         </div>
       ))}
 
-      {!started && job.status !== "cancelled" && (
+      {!job.status === "in_progress" && job.status !== "cancelled" && (
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button className={accepted ? "btn btn-ghost" : "btn btn-primary"}
-              style={{ flex: 1, marginTop: 0 }} disabled={accepted}
-              onClick={() => mark("accepted", "Job acknowledged by crew")}>
-              {accepted ? "✓ Accepted" : "Accept"}
+            <button className={job.status !== "pending_confirmation" ? "btn btn-ghost" : "btn btn-primary"}
+              style={{ flex: 1, marginTop: 0 }} disabled={job.status !== "pending_confirmation"}
+              onClick={() => load()}>
+              {job.status !== "pending_confirmation" ? "✓ Accepted" : "Accept"}
             </button>
-            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }} disabled={!accepted}
-              onClick={() => mark("in_progress", "Job started by crew")}>
+            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }} disabled={job.status === "pending_confirmation"}
+              onClick={() => load()}>
               ▶ Start job
             </button>
           </div>
           <p className="muted" style={{ textAlign: "center", marginTop: 8 }}>
-            Accept = job acknowledged. Start = work has begun; logging unlocks.
+            Accept = job acknowledged. Start = work has begun.
           </p>
         </>
       )}
