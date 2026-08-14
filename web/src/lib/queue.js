@@ -102,9 +102,11 @@ export async function syncNow() {
   syncing = true;
   lastError = null;
 
+  let all; // Declare outside try/catch so finally block can access
+
   try {
     const d = await db();
-    const all = await new Promise((res, rej) => {
+    all = await new Promise((res, rej) => {
       const rq = d.transaction(STORE).objectStore(STORE).getAll();
       rq.onsuccess = () => res(rq.result);
       rq.onerror = () => rej(rq.error);
