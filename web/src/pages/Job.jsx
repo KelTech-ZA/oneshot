@@ -126,7 +126,7 @@ export default function Job() {
         <div style={{ display: "flex", gap: 8 }}>
           {job.status !== "cancelled" && (
             <button className="btn btn-ghost" style={{ marginTop: 0, padding: "4px 8px" }}
-              onClick={() => nav(`/edit/${id}`)}>
+              onClick={() => nav(`/job/${id}/edit`)}>
               ✎ Edit
             </button>
           )}
@@ -272,7 +272,7 @@ export default function Job() {
         </div>
       ))}
 
-      {!job.status === "in_progress" && job.status !== "cancelled" && (
+      {job.status !== "in_progress" && job.status !== "cancelled" && (
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button className={job.status !== "pending_confirmation" ? "btn btn-ghost" : "btn btn-primary"}
