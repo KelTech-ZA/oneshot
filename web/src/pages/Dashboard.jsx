@@ -210,7 +210,7 @@ export default function Dashboard() {
       {showLog && log.length === 0 && <div className="muted">No inbound messages yet.</div>}
 
       <h2>All jobs</h2>
-      <JobList jobs={rest} />
+      <JobList jobs={rest} canDelete />
     </div>
   );
 }

@@ -13,7 +13,7 @@ const GROUPS = {
   "Done": ["completed", "closed", "cancelled"],
 };
 
-export default function JobList({ jobs }) {
+export default function JobList({ jobs, canDelete = false }) {
   const [filter, setFilter] = useState("All");
   const { profile } = useContext(Ctx);
   const [removed, setRemoved] = useState(new Set());
@@ -88,7 +88,7 @@ export default function JobList({ jobs }) {
             {j.line_items?.[0]?.count ?? 0} item(s) · {j.scheduled_date ?? "unscheduled"}
             {j.time_window ? ` · ${j.time_window}` : ""}
           </div>
-          {isOps && (
+          {isOps && canDelete && (
             <button className="muted no-print" disabled={busyId === j.id}
               style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", padding: 0, marginTop: 6, font: "inherit" }}
               onClick={(e) => deleteJob(e, j)}>
