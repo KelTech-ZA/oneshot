@@ -52,6 +52,24 @@ export default function Job() {
     }
   };
 
+  const setJobStatus = async (newStatus, extra = {}) => {
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("jobs")
+        .update({ status: newStatus, updated_at: new Date().toISOString(), ...extra })
+        .eq("id", id);
+      if (error) { window.alert("Could not update job: " + error.message); return; }
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const acceptJob = () =>
+    setJobStatus("accepted", { accepted_by: profile?.id ?? null, accepted_at: new Date().toISOString() });
+
+  const startJob = () => setJobStatus("in_progress");
+
   const logJobEvent = async (type) => {
     setBusy(true);
     try {
@@ -280,12 +298,12 @@ export default function Job() {
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button className={job.status !== "pending_confirmation" ? "btn btn-ghost" : "btn btn-primary"}
-              style={{ flex: 1, marginTop: 0 }} disabled={job.status !== "pending_confirmation"}
-              onClick={() => load()}>
+              style={{ flex: 1, marginTop: 0 }} disabled={busy || job.status !== "pending_confirmation"}
+              onClick={acceptJob}>
               {job.status !== "pending_confirmation" ? "✓ Accepted" : "Accept"}
             </button>
-            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }} disabled={job.status === "pending_confirmation"}
-              onClick={() => load()}>
+            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }} disabled={busy || job.status === "pending_confirmation"}
+              onClick={startJob}>
               ▶ Start job
             </button>
           </div>
