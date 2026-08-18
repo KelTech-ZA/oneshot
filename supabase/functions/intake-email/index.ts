@@ -7,7 +7,7 @@ Deno.serve(async (req) => {
   const json = await req.json();
   const emailId = json.data?.email_id;
   const sender = json.data?.from || "";
-  const subject = json.data?.subject || "";
+  let subject = json.data?.subject || "";
   
   let body = "";
   if (emailId) {
@@ -18,9 +18,7 @@ Deno.serve(async (req) => {
         }
       });
       const emailData = await resendRes.json();
-      console.log("Resend API response:", JSON.stringify(emailData));
       body = emailData.html || emailData.text || emailData.body || "";
-      console.log("Body extracted:", body.substring(0, 100));
     } catch (e) {
       console.error("Failed to fetch email body:", e);
       return new Response("ok");
@@ -30,7 +28,9 @@ Deno.serve(async (req) => {
   const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   
   let workspaceName: string | null = null;
-  const prefixMatch = subject.match(/^([^:]+):\s*(.+)$/);
+  // Remove common email prefixes first (RE:, FW:, Fwd:)
+  const cleanSubject = subject.replace(/^(RE:|FW:|Fwd:)\s*/i, "").trim();
+  const prefixMatch = cleanSubject.match(/^([^:]+):\s*(.+)$/);
   if (prefixMatch) {
     workspaceName = prefixMatch[1].trim();
   }
