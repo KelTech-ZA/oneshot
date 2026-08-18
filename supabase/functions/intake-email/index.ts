@@ -18,7 +18,9 @@ Deno.serve(async (req) => {
         }
       });
       const emailData = await resendRes.json();
-      body = emailData.body || emailData.text || "";
+      console.log("Resend API response:", JSON.stringify(emailData));
+      body = emailData.html || emailData.text || emailData.body || "";
+      console.log("Body extracted:", body.substring(0, 100));
     } catch (e) {
       console.error("Failed to fetch email body:", e);
       return new Response("ok");
