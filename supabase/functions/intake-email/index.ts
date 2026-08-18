@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { createClient } from "npm:@supabase/supabase-js@2"
 import { Anthropic } from "https://esm.sh/@anthropic-ai/sdk@0.20.0"
 
 const anthropic = new Anthropic({
@@ -8,20 +9,9 @@ const anthropic = new Anthropic({
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!
 const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 
-interface ResendEmail {
-  from: string
-  to: string
-  subject?: string
-  text: string
-  html?: string
-}
-
-// Parse workspace prefix from subject
+// Extract workspace prefix from subject
 function extractWorkspacePrefix(subject: string | null | undefined): [string | null, string] {
-  if (!subject) {
-    return [null, ""]
-  }
-  
+  if (!subject) return [null, ""]
   const match = subject.match(/^([^:]+):\s*(.+)$/)
   if (match) {
     return [match[1].trim(), match[2]]
@@ -29,86 +19,80 @@ function extractWorkspacePrefix(subject: string | null | undefined): [string | n
   return [null, subject]
 }
 
-// Query Supabase for tenant UUID by workspace name
+// Get tenant by workspace name
 async function getTenantByName(workspaceName: string | null): Promise<string | null> {
-  if (!workspaceName) {
-    return null
-  }
+  if (!workspaceName) return null
 
   try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/tenants?name=ilike.%25${encodeURIComponent(workspaceName)}%25&select=id`,
-      {
-        headers: {
-          "apikey": supabaseKey,
-          "content-type": "application/json",
-        },
-      }
-    )
+    const sb = createClient(supabaseUrl, supabaseKey)
+    const { data, error } = await sb
+      .from("tenants")
+      .select("id")
+      .ilike("name", `%${workspaceName}%`)
+      .limit(1)
+      .single()
 
-    if (!res.ok) {
-      console.warn(`Tenant lookup failed for "${workspaceName}": ${res.status}`)
-      return null
-    }
-
-    const tenants = await res.json()
-    if (tenants && tenants.length > 0) {
-      console.log(`Found tenant: "${workspaceName}" (${tenants[0].id})`)
-      return tenants[0].id
-    }
-
-    console.warn(`No tenant found for workspace: "${workspaceName}"`)
-    return null
+    if (error || !data) return null
+    console.log(`Found tenant: "${workspaceName}" (${data.id})`)
+    return data.id
   } catch (e) {
     console.error(`Error querying tenant:`, e)
     return null
   }
 }
 
-// Get Section 9 (default) tenant UUID
+// Get default tenant (Section 9)
 async function getDefaultTenant(): Promise<string> {
   try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/tenants?name=eq.Section%209&select=id&limit=1`,
-      {
-        headers: {
-          "apikey": supabaseKey,
-          "content-type": "application/json",
-        },
-      }
-    )
+    const sb = createClient(supabaseUrl, supabaseKey)
+    const { data, error } = await sb
+      .from("tenants")
+      .select("id")
+      .eq("name", "Section 9")
+      .limit(1)
+      .single()
 
-    if (res.ok) {
-      const tenants = await res.json()
-      if (tenants && tenants.length > 0) {
-        console.log(`Using default tenant: Section 9 (${tenants[0].id})`)
-        return tenants[0].id
-      }
+    if (error || !data) {
+      console.warn("Could not query default tenant")
+      return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
     }
-
-    // Fallback
-    console.warn("Could not query default tenant, using fallback")
-    return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
+    console.log(`Using default tenant: Section 9 (${data.id})`)
+    return data.id
   } catch (e) {
     console.error("Error querying default tenant:", e)
     return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
   }
 }
 
-serve(async (req) => {
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 })
-  }
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return new Response("ok")
 
   try {
-    const body = await req.json() as ResendEmail
+    // Handle both JSON and form-encoded
+    let sender = ""
+    let subject = ""
+    let body = ""
 
-    // Extract workspace prefix from subject
-    const [workspacePrefix, cleanSubject] = extractWorkspacePrefix(body.subject)
+    const contentType = req.headers.get("content-type") || ""
 
-    console.log(`Email from ${body.from}, workspace prefix: "${workspacePrefix || "none (using default)"}"`)
+    if (contentType.includes("application/json")) {
+      const json = await req.json()
+      sender = json.from || json.sender || ""
+      subject = json.subject || ""
+      body = json.text || json.body || ""
+    } else {
+      const form = await req.formData()
+      sender = String(form.get("sender") ?? form.get("from") ?? "")
+      subject = String(form.get("subject") ?? "")
+      body = String(form.get("stripped-text") ?? form.get("body-plain") ?? form.get("text") ?? "")
+    }
 
-    // Look up tenant UUID
+    console.log(`Email from ${sender}, subject: "${subject}"`)
+
+    // Extract workspace prefix
+    const [workspacePrefix] = extractWorkspacePrefix(subject)
+
+    // Get tenant ID
     let tenantId = null
     if (workspacePrefix) {
       tenantId = await getTenantByName(workspacePrefix)
@@ -119,114 +103,90 @@ serve(async (req) => {
       tenantId = await getDefaultTenant()
     }
 
-    // Parse the email using Anthropic
+    // Parse with Anthropic
     const message = await anthropic.messages.create({
       model: "claude-opus-4-8",
       max_tokens: 1024,
-      system: `You are a logistics job parser. Extract structured job details from email text.
-Return ONLY valid JSON (no preamble):
+      system: `Extract job details from email. Return ONLY valid JSON:
 {
-  "job_type": "pickup|delivery|storage|other",
   "origin_address": "string or null",
+  "origin_contact_name": "string or null",
+  "origin_contact_phone": "string or null",
   "destination_address": "string or null",
+  "destination_contact_name": "string or null",
+  "destination_contact_phone": "string or null",
   "contact_name": "string or null",
   "contact_phone": "string or null",
   "scheduled_date": "YYYY-MM-DD or null",
-  "scheduled_time": "HH:MM or null",
+  "time_window": "string or null",
   "items": [{"description": "string", "quantity": 1}],
   "notes": "string or null"
 }`,
-      messages: [
-        {
-          role: "user",
-          content: `Parse this job request:\n\n${body.text}`,
-        },
-      ],
+      messages: [{ role: "user", content: `Parse this:\n\n${body}` }],
     })
 
     let jobData
-    try {
-      const content = message.content[0]
-      if (content.type !== "text") throw new Error("No text response")
+    const content = message.content[0]
+    if (content.type === "text") {
       jobData = JSON.parse(content.text)
-    } catch (e) {
-      console.error("Parse error:", e)
-      return new Response(
-        JSON.stringify({ error: "Could not parse email", details: String(e) }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      )
+    } else {
+      throw new Error("No text response")
     }
 
-    // Create the job in Supabase using REST API
-    const createJobRes = await fetch(`${supabaseUrl}/rest/v1/jobs`, {
-      method: "POST",
-      headers: {
-        "apikey": supabaseKey,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
+    // Create job
+    const sb = createClient(supabaseUrl, supabaseKey)
+
+    const origin = {
+      address: jobData.origin_address,
+      contact_name: jobData.origin_contact_name,
+      contact_phone: jobData.origin_contact_phone,
+    }
+
+    const destination = {
+      address: jobData.destination_address,
+      contact_name: jobData.destination_contact_name,
+      contact_phone: jobData.destination_contact_phone,
+    }
+
+    const { data: jobData_, error: jobError } = await sb
+      .from("jobs")
+      .insert({
         tenant_id: tenantId,
-        type: jobData.job_type || "delivery",
-        origin_address: jobData.origin_address,
-        destination_address: jobData.destination_address,
+        type: "delivery",
+        origin,
+        destination,
         contact_name: jobData.contact_name,
         contact_phone: jobData.contact_phone,
         scheduled_date: jobData.scheduled_date,
-        scheduled_time: jobData.scheduled_time,
+        time_window: jobData.time_window,
         status: "pending_confirmation",
-        origin_email: body.from,
-      }),
-    })
+      })
+      .select()
+      .single()
 
-    if (!createJobRes.ok) {
-      const err = await createJobRes.text()
-      console.error("Job creation failed:", err)
-      return new Response(
-        JSON.stringify({ error: "Failed to create job", details: err }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      )
+    if (jobError) {
+      console.error("Job creation failed:", jobError)
+      return new Response("ok")
     }
 
-    const jobs = await createJobRes.json()
-    const job = jobs[0]
-
-    // Add items to the job
+    // Add items
     if (jobData.items && Array.isArray(jobData.items)) {
       for (const item of jobData.items) {
-        await fetch(`${supabaseUrl}/rest/v1/line_items`, {
-          method: "POST",
-          headers: {
-            "apikey": supabaseKey,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            job_id: job.id,
-            tenant_id: tenantId,
-            description: item.description,
-            quantity: item.quantity || 1,
-            identity_tier: "visually_unique",
-          }),
+        await sb.from("line_items").insert({
+          job_id: jobData_.id,
+          tenant_id: tenantId,
+          description: item.description,
+          quantity: item.quantity || 1,
+          identity_tier: "visually_unique",
         })
       }
     }
 
-    console.log(`✓ Job ${job.ref} created for workspace: "${workspacePrefix || "Section 9"}"`)
+    console.log(`✓ Job ${jobData_.ref} created for workspace: "${workspacePrefix || "Section 9"}"`)
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        job_id: job.id,
-        job_ref: job.ref,
-        workspace: workspacePrefix || "Section 9",
-        items_count: jobData.items?.length || 0,
-      }),
-      { status: 201, headers: { "Content-Type": "application/json" } }
-    )
+    return new Response("ok")
   } catch (error) {
     console.error("Intake error:", error)
-    return new Response(
-      JSON.stringify({ error: String(error) }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    )
+    return new Response("ok")
   }
 })
