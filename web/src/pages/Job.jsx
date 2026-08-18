@@ -232,6 +232,10 @@ export default function Job() {
                       Tier {it.identity_tier} · {photoCount(it.id) > 0
                         ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
                         : "no photos yet"}
+                      {it.attributes?.dimensions && <><br />{it.attributes.dimensions}</>}
+                      {it.attributes?.special_handling && (
+                        <><br /><span style={{ color: "var(--warn)" }}>{it.attributes.special_handling}</span></>
+                      )}
                     </div>
                   </div>
                 </div>

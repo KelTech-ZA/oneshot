@@ -153,6 +153,20 @@ export default function Item() {
       <h1 style={{ marginTop: 0 }}>{rec.description}</h1>
       <div className="muted" style={{ marginBottom: 16 }}>{rec.jobs?.ref} · {rec.identity_tier ? `Tier ${rec.identity_tier}` : "Untiered"}</div>
 
+      {(rec.attributes?.dimensions || rec.attributes?.special_handling || rec.attributes?.declared_value) && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          {rec.attributes?.dimensions && (
+            <div><span className="muted">Dimensions</span><div>{rec.attributes.dimensions}</div></div>
+          )}
+          {rec.attributes?.special_handling && (
+            <div style={{ marginTop: 8 }}><span className="muted">Special handling</span><div>{rec.attributes.special_handling}</div></div>
+          )}
+          {rec.attributes?.declared_value && (
+            <div style={{ marginTop: 8 }}><span className="muted">Declared value</span><div>{rec.attributes.declared_value}</div></div>
+          )}
+        </div>
+      )}
+
       {rec.anchor_image_path && signedUrls[rec.anchor_image_path] && (
         <img src={signedUrls[rec.anchor_image_path]} alt="" style={{ width: "100%", borderRadius: 10, marginBottom: 16, maxHeight: "50vh", objectFit: "cover" }} />
       )}
