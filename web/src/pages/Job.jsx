@@ -34,6 +34,7 @@ export default function Job() {
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
   const jobOpen = job && !["closed", "completed", "cancelled"].includes(job.status);
+  const jobActive = job && ["confirmed", "assigned", "accepted", "in_progress"].includes(job.status);
 
   const load = async () => {
     const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
@@ -81,6 +82,25 @@ export default function Job() {
       });
       const out = await res.json();
       if (out.error) { window.alert("Could not log job event: " + out.error); return; }
+      await load();
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logItemEvent = async (itemId, type) => {
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/log-event`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ job_id: id, item_id: itemId, type }),
+      });
+      const out = await res.json();
+      if (out.error) { window.alert("Could not log event: " + out.error); return; }
+      setLoggingEventItemId(null);
       await load();
       window.dispatchEvent(new Event("queue-updated"));
     } finally {
@@ -211,6 +231,13 @@ export default function Job() {
         {isOps && <button className="btn btn-warn" disabled={busy} onClick={() => logJobEvent("closed")}>Close Job</button>}
       </div>
 
+      {jobActive && (
+        <button className="btn btn-accent" style={{ marginBottom: 12 }}
+          onClick={() => nav(`/job/${id}/shoot`)}>
+          📷 Shoot job
+        </button>
+      )}
+
       <h2>Items ({items.length})</h2>
       {checkedItems.size > 0 && (
         <div className="card" style={{ marginBottom: 12, background: "var(--ok-light)" }}>
@@ -261,7 +288,7 @@ export default function Job() {
               </div>
             </Link>
           </div>
-          {job.status === "in_progress" && loggingEventItemId === it.id && (
+          {jobActive && loggingEventItemId === it.id && (
             <div style={{ padding: 8, background: "var(--card)", borderRadius: 6, marginBottom: 8 }}>
               <div style={{ marginBottom: 8, fontWeight: 600 }}>Log event:</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
@@ -270,9 +297,7 @@ export default function Job() {
                     key={tag}
                     className="btn btn-ghost"
                     style={{ marginTop: 0, textTransform: "capitalize" }}
-                    onClick={() => {
-                      // TODO: log single item event
-                    }}
+                    onClick={() => logItemEvent(it.id, tag)}
                     disabled={busy}>
                     {tag}
                   </button>
@@ -280,7 +305,7 @@ export default function Job() {
               </div>
             </div>
           )}
-          {job.status === "in_progress" && (
+          {jobActive && (
             <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
               <button className="btn btn-accent" style={{ flex: 1 }} onClick={() => nav(`/job/${id}/shoot`)}>
                 📷 Shoot

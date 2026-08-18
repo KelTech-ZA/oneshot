@@ -12,7 +12,8 @@ export default function EditJob() {
   const [f, setF] = useState(null);
   const [items, setItems] = useState([]);
   const [newItem, setNewItem] = useState("");
-  const [renames, setRenames] = useState({});
+  const [edits, setEdits] = useState({});
+  const [uploading, setUploading] = useState(null);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export default function EditJob() {
     })();
   }, [id]);
 
-  if (profile.role !== "ops") return <div className="empty">Only ops can edit jobs.</div>;
+
   if (!f) return <div className="empty">Loading job…</div>;
 
   const save = async () => {
@@ -42,12 +43,19 @@ export default function EditJob() {
       updated_at: new Date().toISOString(),
     };
     await supabase.from("jobs").update(patch).eq("id", id);
-    for (const [itemId, desc] of Object.entries(renames)) {
+    for (const [itemId, e] of Object.entries(edits)) {
       const it = items.find((x) => x.id === itemId);
-      if (!it || !desc.trim() || desc === it.description) continue;
+      if (!it) continue;
+      const description = (e.description ?? it.description ?? "").trim();
+      if (!description) continue;
       await supabase.from("line_items").update({
-        description: desc.trim(),
-        attributes: { ...(it.attributes ?? {}), needs_details: false },
+        description,
+        attributes: {
+          ...(it.attributes ?? {}),
+          dimensions: (e.dimensions ?? it.attributes?.dimensions ?? "") || null,
+          special_handling: (e.special_handling ?? it.attributes?.special_handling ?? "") || null,
+          needs_details: false,
+        },
       }).eq("id", itemId);
     }
     await supabase.from("custody_events").insert({
@@ -66,6 +74,26 @@ export default function EditJob() {
     setNewItem("");
     const { data: it } = await supabase.from("line_items").select("*").eq("job_id", id).order("created_at");
     setItems(it ?? []);
+  };
+
+  const uploadItemPhoto = async (it, file) => {
+    if (!file) return;
+    setUploading(it.id);
+    setMsg("");
+    try {
+      const path = `${it.tenant_id}/${id}/${it.id}/anchor-${Date.now()}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from("photos").upload(path, file, { contentType: file.type || "image/jpeg", upsert: true });
+      if (upErr) { setMsg("Photo upload failed: " + upErr.message); return; }
+      const { error: dbErr } = await supabase.from("line_items")
+        .update({ anchor_image_path: path }).eq("id", it.id);
+      if (dbErr) { setMsg("Could not save photo: " + dbErr.message); return; }
+      const { data: fresh } = await supabase.from("line_items")
+        .select("*").eq("job_id", id).order("created_at");
+      setItems(fresh ?? []);
+    } finally {
+      setUploading(null);
+    }
   };
 
   const removeItem = async (it) => {
@@ -120,19 +148,39 @@ export default function EditJob() {
       <h2>Items</h2>
       <div className="card">
         {items.map((it) => (
-          <div className="row" key={it.id} style={{ padding: "7px 0", borderBottom: "1px solid var(--line)" }}>
-            {it.attributes?.needs_details ? (
-              <input style={{ marginBottom: 0, flex: 1, borderColor: "var(--warn)" }}
-                placeholder="What is this item? (added by crew in the field)"
-                value={renames[it.id] ?? it.description}
-                onChange={(ev) => setRenames({ ...renames, [it.id]: ev.target.value })} />
-            ) : (
-              <span style={{ fontSize: 14 }}>{it.description}</span>
-            )}
-            {it.status === "expected" && !it.anchor_image_path
-              ? <button className="muted" style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer" }}
+          <div key={it.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+            <label>Description</label>
+            <input style={{ marginBottom: 6 }}
+              value={edits[it.id]?.description ?? it.description ?? ""}
+              placeholder="What is this item?"
+              onChange={(ev) => setEdits({ ...edits, [it.id]: { ...edits[it.id], description: ev.target.value } })} />
+
+            <label>Dimensions</label>
+            <input style={{ marginBottom: 6 }}
+              value={edits[it.id]?.dimensions ?? it.attributes?.dimensions ?? ""}
+              placeholder="120 x 90 x 45 cm"
+              onChange={(ev) => setEdits({ ...edits, [it.id]: { ...edits[it.id], dimensions: ev.target.value } })} />
+
+            <label>Special handling</label>
+            <input style={{ marginBottom: 6 }}
+              value={edits[it.id]?.special_handling ?? it.attributes?.special_handling ?? ""}
+              placeholder="Pack on arrival, glass side up…"
+              onChange={(ev) => setEdits({ ...edits, [it.id]: { ...edits[it.id], special_handling: ev.target.value } })} />
+
+            <label>Reference photo</label>
+            <input type="file" accept="image/*" style={{ marginBottom: 6 }}
+              disabled={uploading === it.id}
+              onChange={(ev) => uploadItemPhoto(it, ev.target.files?.[0])} />
+            {uploading === it.id && <div className="muted">Uploading…</div>}
+            {it.anchor_image_path && <div className="muted">Photo on file ✓</div>}
+
+            <div className="row" style={{ marginTop: 4 }}>
+              <span className="muted">{it.status.replace("_", " ")}</span>
+              {it.status === "expected" && !it.anchor_image_path && (
+                <button className="muted" style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer" }}
                   onClick={() => removeItem(it)}>remove</button>
-              : <span className="muted">{it.status.replace("_", " ")}</span>}
+              )}
+            </div>
           </div>
         ))}
         <label style={{ marginTop: 10 }}>Add item</label>
