@@ -9,57 +9,41 @@ const anthropic = new Anthropic({
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!
 const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 
-// Extract workspace prefix from subject
 function extractWorkspacePrefix(subject: string | null | undefined): [string | null, string] {
   if (!subject) return [null, ""]
   const match = subject.match(/^([^:]+):\s*(.+)$/)
-  if (match) {
-    return [match[1].trim(), match[2]]
-  }
+  if (match) return [match[1].trim(), match[2]]
   return [null, subject]
 }
 
-// Get tenant by workspace name
 async function getTenantByName(workspaceName: string | null): Promise<string | null> {
   if (!workspaceName) return null
-
   try {
     const sb = createClient(supabaseUrl, supabaseKey)
-    const { data, error } = await sb
+    const { data } = await sb
       .from("tenants")
       .select("id")
       .ilike("name", `%${workspaceName}%`)
       .limit(1)
       .single()
-
-    if (error || !data) return null
-    console.log(`Found tenant: "${workspaceName}" (${data.id})`)
-    return data.id
+    if (data) console.log(`Found tenant: "${workspaceName}"`)
+    return data?.id || null
   } catch (e) {
-    console.error(`Error querying tenant:`, e)
     return null
   }
 }
 
-// Get default tenant (Section 9)
 async function getDefaultTenant(): Promise<string> {
   try {
     const sb = createClient(supabaseUrl, supabaseKey)
-    const { data, error } = await sb
+    const { data } = await sb
       .from("tenants")
       .select("id")
       .eq("name", "Section 9")
       .limit(1)
       .single()
-
-    if (error || !data) {
-      console.warn("Could not query default tenant")
-      return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
-    }
-    console.log(`Using default tenant: Section 9 (${data.id})`)
-    return data.id
-  } catch (e) {
-    console.error("Error querying default tenant:", e)
+    return data?.id || "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
+  } catch {
     return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
   }
 }
@@ -68,11 +52,9 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return new Response("ok")
 
   try {
-    // Handle both JSON and form-encoded
     let sender = ""
     let subject = ""
     let body = ""
-
     const contentType = req.headers.get("content-type") || ""
 
     if (contentType.includes("application/json")) {
@@ -84,77 +66,52 @@ Deno.serve(async (req) => {
       const form = await req.formData()
       sender = String(form.get("sender") ?? form.get("from") ?? "")
       subject = String(form.get("subject") ?? "")
-      body = String(form.get("stripped-text") ?? form.get("body-plain") ?? form.get("text") ?? "")
+      body = String(form.get("stripped-text") ?? form.get("body-plain") ?? "")
     }
 
-    console.log(`Email from ${sender}, subject: "${subject}"`)
+    console.log(`Email from ${sender}`)
 
-    // Extract workspace prefix
     const [workspacePrefix] = extractWorkspacePrefix(subject)
+    let tenantId = workspacePrefix ? await getTenantByName(workspacePrefix) : null
+    if (!tenantId) tenantId = await getDefaultTenant()
 
-    // Get tenant ID
-    let tenantId = null
-    if (workspacePrefix) {
-      tenantId = await getTenantByName(workspacePrefix)
-    }
-
-    if (!tenantId) {
-      console.log("Workspace not found, using default (Section 9)")
-      tenantId = await getDefaultTenant()
-    }
-
-    // Parse with Anthropic
     const message = await anthropic.messages.create({
       model: "claude-opus-4-8",
       max_tokens: 1024,
-      system: `Extract job details from email. Return ONLY valid JSON:
-{
-  "origin_address": "string or null",
-  "origin_contact_name": "string or null",
-  "origin_contact_phone": "string or null",
-  "destination_address": "string or null",
-  "destination_contact_name": "string or null",
-  "destination_contact_phone": "string or null",
-  "contact_name": "string or null",
-  "contact_phone": "string or null",
-  "scheduled_date": "YYYY-MM-DD or null",
-  "time_window": "string or null",
-  "items": [{"description": "string", "quantity": 1}],
-  "notes": "string or null"
-}`,
-      messages: [{ role: "user", content: `Parse this:\n\n${body}` }],
+      messages: [
+        {
+          role: "user",
+          content: `EXTRACT ONLY. Return ONLY this JSON structure with no other text:
+{"origin_address":"string","origin_contact_name":"string","origin_contact_phone":"string","destination_address":"string","destination_contact_name":"string","destination_contact_phone":"string","contact_name":"string","contact_phone":"string","scheduled_date":"YYYY-MM-DD or null","time_window":"string or null","items":[{"description":"string","quantity":1}],"notes":"string"}
+
+Email to parse:
+${body}`,
+        },
+      ],
     })
 
-    let jobData
-    const content = message.content[0]
-    if (content.type === "text") {
-      jobData = JSON.parse(content.text)
-    } else {
-      throw new Error("No text response")
-    }
+    const text = message.content[0].type === "text" ? message.content[0].text : ""
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error("No JSON found in response")
 
-    // Create job
+    const jobData = JSON.parse(jsonMatch[0])
     const sb = createClient(supabaseUrl, supabaseKey)
 
-    const origin = {
-      address: jobData.origin_address,
-      contact_name: jobData.origin_contact_name,
-      contact_phone: jobData.origin_contact_phone,
-    }
-
-    const destination = {
-      address: jobData.destination_address,
-      contact_name: jobData.destination_contact_name,
-      contact_phone: jobData.destination_contact_phone,
-    }
-
-    const { data: jobData_, error: jobError } = await sb
+    const { data: job, error } = await sb
       .from("jobs")
       .insert({
         tenant_id: tenantId,
         type: "delivery",
-        origin,
-        destination,
+        origin: {
+          address: jobData.origin_address,
+          contact_name: jobData.origin_contact_name,
+          contact_phone: jobData.origin_contact_phone,
+        },
+        destination: {
+          address: jobData.destination_address,
+          contact_name: jobData.destination_contact_name,
+          contact_phone: jobData.destination_contact_phone,
+        },
         contact_name: jobData.contact_name,
         contact_phone: jobData.contact_phone,
         scheduled_date: jobData.scheduled_date,
@@ -164,16 +121,15 @@ Deno.serve(async (req) => {
       .select()
       .single()
 
-    if (jobError) {
-      console.error("Job creation failed:", jobError)
+    if (error) {
+      console.error("Job creation failed:", error)
       return new Response("ok")
     }
 
-    // Add items
-    if (jobData.items && Array.isArray(jobData.items)) {
+    if (jobData.items?.length) {
       for (const item of jobData.items) {
         await sb.from("line_items").insert({
-          job_id: jobData_.id,
+          job_id: job.id,
           tenant_id: tenantId,
           description: item.description,
           quantity: item.quantity || 1,
@@ -182,8 +138,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`✓ Job ${jobData_.ref} created for workspace: "${workspacePrefix || "Section 9"}"`)
-
+    console.log(`✓ Job ${job.ref} created for workspace: "${workspacePrefix || "Section 9"}"`)
     return new Response("ok")
   } catch (error) {
     console.error("Intake error:", error)
