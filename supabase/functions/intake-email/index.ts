@@ -17,12 +17,7 @@ interface ResendEmail {
 }
 
 // Parse workspace prefix from subject
-// Examples:
-//   "Blank Projects: Pickup 3 sculptures..." → "Blank Projects"
-//   "NORVAL: Collection of artworks..." → "NORVAL"
-//   "Pickup artworks..." → null (defaults to Section 9)
 function extractWorkspacePrefix(subject: string | null | undefined): [string | null, string] {
-  // FIX: null/undefined check
   if (!subject) {
     return [null, ""]
   }
@@ -45,7 +40,7 @@ async function getTenantByName(workspaceName: string | null): Promise<string | n
       `${supabaseUrl}/rest/v1/tenants?name=ilike.%25${encodeURIComponent(workspaceName)}%25&select=id`,
       {
         headers: {
-          authorization: `Bearer ${supabaseKey}`,
+          "apikey": supabaseKey,
           "content-type": "application/json",
         },
       }
@@ -77,7 +72,7 @@ async function getDefaultTenant(): Promise<string> {
       `${supabaseUrl}/rest/v1/tenants?name=eq.Section%209&select=id&limit=1`,
       {
         headers: {
-          authorization: `Bearer ${supabaseKey}`,
+          "apikey": supabaseKey,
           "content-type": "application/json",
         },
       }
@@ -91,7 +86,7 @@ async function getDefaultTenant(): Promise<string> {
       }
     }
 
-    // Fallback: hardcoded Section 9 UUID
+    // Fallback
     console.warn("Could not query default tenant, using fallback")
     return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
   } catch (e) {
@@ -113,7 +108,7 @@ serve(async (req) => {
 
     console.log(`Email from ${body.from}, workspace prefix: "${workspacePrefix || "none (using default)"}"`)
 
-    // Look up tenant UUID (by name, or default to Section 9)
+    // Look up tenant UUID
     let tenantId = null
     if (workspacePrefix) {
       tenantId = await getTenantByName(workspacePrefix)
@@ -162,11 +157,11 @@ Return ONLY valid JSON (no preamble):
       )
     }
 
-    // Create the job in Supabase
+    // Create the job in Supabase using REST API
     const createJobRes = await fetch(`${supabaseUrl}/rest/v1/jobs`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${supabaseKey}`,
+        "apikey": supabaseKey,
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -201,7 +196,7 @@ Return ONLY valid JSON (no preamble):
         await fetch(`${supabaseUrl}/rest/v1/line_items`, {
           method: "POST",
           headers: {
-            authorization: `Bearer ${supabaseKey}`,
+            "apikey": supabaseKey,
             "content-type": "application/json",
           },
           body: JSON.stringify({
