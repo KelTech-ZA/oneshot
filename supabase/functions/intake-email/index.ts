@@ -11,7 +11,7 @@ const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 interface ResendEmail {
   from: string
   to: string
-  subject: string
+  subject?: string
   text: string
   html?: string
 }
@@ -21,12 +21,17 @@ interface ResendEmail {
 //   "Blank Projects: Pickup 3 sculptures..." → "Blank Projects"
 //   "NORVAL: Collection of artworks..." → "NORVAL"
 //   "Pickup artworks..." → null (defaults to Section 9)
-function extractWorkspacePrefix(subject: string): string | null {
+function extractWorkspacePrefix(subject: string | null | undefined): [string | null, string] {
+  // FIX: null/undefined check
+  if (!subject) {
+    return [null, ""]
+  }
+  
   const match = subject.match(/^([^:]+):\s*(.+)$/)
   if (match) {
-    return match[1].trim()
+    return [match[1].trim(), match[2]]
   }
-  return null
+  return [null, subject]
 }
 
 // Query Supabase for tenant UUID by workspace name
@@ -86,13 +91,12 @@ async function getDefaultTenant(): Promise<string> {
       }
     }
 
-    // Fallback: hardcoded Section 9 UUID (from your setup)
-    // Replace with your actual Section 9 tenant UUID
+    // Fallback: hardcoded Section 9 UUID
     console.warn("Could not query default tenant, using fallback")
-    return "YOUR-SECTION9-TENANT-UUID"
+    return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
   } catch (e) {
     console.error("Error querying default tenant:", e)
-    return "YOUR-SECTION9-TENANT-UUID"
+    return "fec57d4d-fcd4-418a-a74f-4d1bde5d92f2"
   }
 }
 
@@ -105,7 +109,7 @@ serve(async (req) => {
     const body = await req.json() as ResendEmail
 
     // Extract workspace prefix from subject
-    const workspacePrefix = extractWorkspacePrefix(body.subject)
+    const [workspacePrefix, cleanSubject] = extractWorkspacePrefix(body.subject)
 
     console.log(`Email from ${body.from}, workspace prefix: "${workspacePrefix || "none (using default)"}"`)
 
