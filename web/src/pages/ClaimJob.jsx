@@ -17,6 +17,8 @@ export default function ClaimJob() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [jobInfo, setJobInfo] = useState(null);
+  const [wsForm, setWsForm] = useState(null);
 
   const loadMemberships = async (uid) => {
     const { data } = await supabase.from("memberships")
@@ -25,11 +27,46 @@ export default function ClaimJob() {
   };
 
   useEffect(() => {
+    fetch(`${FUNCTIONS_URL}/job-record?id=${jobId}`)
+      .then((r) => r.json()).then((d) => { if (!d.error) setJobInfo(d); }).catch(() => {});
+  }, [jobId]);
+
+  useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session);
       if (data.session) await loadMemberships(data.session.user.id);
     });
   }, []);
+
+  // Original design: take the job on behalf of the workspace that sent it.
+  // claim-job adds crew membership there if absent, assigns the caller, and
+  // rotates the token so the link cannot be reused.
+  const acceptAsCrew = async () => {
+    setBusy(true); setMsg("");
+    const res = await fetch(`${FUNCTIONS_URL}/claim-job`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ job_id: jobId, token }),
+    });
+    const out = await res.json(); setBusy(false);
+    if (out.error) { setMsg(`\u26a0 ${out.error}`); return; }
+    setResult({ kind: "claimed", workspace: out.workspace, ...out });
+  };
+
+  // Third path: signed in but belongs to no workspace at all. Create one here
+  // so they can bring the job in as its ops, rather than dead-ending.
+  const createWorkspace = async (name) => {
+    if (!name?.trim()) return;
+    setBusy(true); setMsg("");
+    const res = await fetch(`${FUNCTIONS_URL}/new-workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ company: name.trim() }),
+    });
+    const out = await res.json(); setBusy(false);
+    if (out.error) { setMsg(`\u26a0 ${out.error}`); return; }
+    setWsForm(null);
+    await loadMemberships(session.user.id);
+  };
 
   const routeToPending = async (m) => {
     setBusy(true); setMsg("");
@@ -78,7 +115,13 @@ export default function ClaimJob() {
   if (result) return (
     <div className="page" style={{ maxWidth: 420, paddingTop: "12vh", textAlign: "center" }}>
       <div style={{ fontSize: 40, marginBottom: 8 }}>✓</div>
-      {result.kind === "took" ? (<>
+      {result.kind === "claimed" ? (<>
+        <h1 style={{ marginBottom: 6 }}>{result.job_ref} accepted</h1>
+        <p className="muted" style={{ marginBottom: 20 }}>
+          You're assigned as crew on <b>{result.workspace}</b> and it's on your Today list.
+        </p>
+        <button className="btn btn-primary" onClick={() => { window.location.href = `/`; }}>Open Today</button>
+      </>) : result.kind === "took" ? (<>
         <h1 style={{ marginBottom: 6 }}>{result.job_ref} is yours</h1>
         <p className="muted" style={{ marginBottom: 20 }}>
           Taken under <b>{result.workspace}</b> and on your Today list. The original sender stays on the record.
@@ -146,8 +189,19 @@ export default function ClaimJob() {
   return (
     <div className="page" style={{ maxWidth: 420, paddingTop: "9vh" }}>
       <div className="wordmark" style={{ fontSize: 22, marginBottom: 6 }}>ONE<b>SHOT</b></div>
-      <p className="muted" style={{ marginBottom: 4 }}>You've been sent a job.</p>
-      <h2>Which profile are you acting as?</h2>
+      <p className="muted" style={{ marginBottom: 4 }}>
+        You've been sent {jobInfo?.ref ? <b>{jobInfo.ref}</b> : "a job"}
+        {jobInfo?.tenants?.name ? <> by <b>{jobInfo.tenants.name}</b></> : null}.
+      </p>
+
+      <button className="btn btn-primary" disabled={busy} onClick={acceptAsCrew}>
+        {busy ? "Working\u2026" : "\u2713 Accept and drive this job"}
+      </button>
+      <p className="muted" style={{ marginTop: 6, marginBottom: 18 }}>
+        You'll be added as crew on {jobInfo?.tenants?.name ?? "the sender's workspace"} for this job only.
+      </p>
+
+      <h2>Or bring it into your own workspace</h2>
       {memberships.map((m) => (
         <button key={m.tenant_id} className="card" disabled={busy}
           onClick={() => (m.role === "ops" ? setChosen(m) : routeToPending(m))}>
@@ -163,7 +217,27 @@ export default function ClaimJob() {
         </button>
       ))}
       {memberships.length === 0 && (
-        <div className="muted">Your account isn't a member of any workspace yet. Ask an ops manager to add you, or create your own workspace after signing in.</div>
+        <div className="card">
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>This account isn't a member of any workspace yet.</div>
+          <p className="muted" style={{ marginBottom: 10 }}>
+            Accept above to drive this job for the sender \u2014 or start your own workspace and bring the job in as its ops.
+          </p>
+          {wsForm === null ? (
+            <button className="btn btn-ghost" style={{ marginTop: 0 }} onClick={() => setWsForm("")}>
+              \uff0b Create my own workspace
+            </button>
+          ) : (<>
+            <label>Workspace name (your company)</label>
+            <input value={wsForm} autoFocus placeholder="Gallery Movers CC"
+              onChange={(e) => setWsForm(e.target.value)} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary" style={{ flex: 1, marginTop: 0 }} disabled={busy}
+                onClick={() => createWorkspace(wsForm)}>Create \u2014 you'll be its ops</button>
+              <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0 }}
+                onClick={() => setWsForm(null)}>Cancel</button>
+            </div>
+          </>)}
+        </div>
       )}
       <p className="muted" style={{ marginTop: 14 }}>
         You can only act within workspaces you belong to. To pass this to another business, ask their manager to add you first — that's what keeps ownership tracked.
