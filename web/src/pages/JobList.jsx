@@ -7,6 +7,33 @@ import { Ctx } from "../main";
 // Shared chronological job list.
 // Sort: scheduled_date ascending (undated last), tiebreak on creation time —
 // so the list reads top-to-bottom as "what's next, what's running, what's done."
+// Minutes-from-midnight for a free-text time window ("9:00am", "14:30",
+// "morning"). Unparseable or absent sorts to the end of its day.
+function timeRank(tw) {
+  if (!tw) return 9999;
+  const t = String(tw).toLowerCase();
+  const m = t.match(/(\d{1,2})[:h.]?(\d{2})?\s*(am|pm)?/);
+  if (!m) return t.includes("morning") ? 540 : t.includes("afternoon") ? 840 : 9999;
+  let h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  if (m[3] === "pm" && h < 12) h += 12;
+  if (m[3] === "am" && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function dayLabel(dateStr) {
+  if (!dateStr) return "Unscheduled";
+  const today = new Date();
+  const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
+  if (dateStr === localISO(today)) return "Today";
+  if (dateStr === localISO(tomorrow)) return "Tomorrow";
+  const d = new Date(`${dateStr}T00:00:00`);
+  const pretty = d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "short" });
+  return dateStr < localISO(today) ? `Overdue \u00b7 ${pretty}` : pretty;
+}
+
 const GROUPS = {
   "To do": ["pending_confirmation", "confirmed", "assigned", "accepted"],
   "In progress": ["in_progress"],
@@ -60,8 +87,19 @@ export default function JobList({ jobs, canDelete = false }) {
       if (a.scheduled_date && b.scheduled_date && a.scheduled_date !== b.scheduled_date)
         return a.scheduled_date < b.scheduled_date ? -1 : 1;
       if (!!a.scheduled_date !== !!b.scheduled_date) return a.scheduled_date ? -1 : 1;
+      const ta = timeRank(a.time_window), tb = timeRank(b.time_window);
+      if (ta !== tb) return ta - tb;
       return a.created_at < b.created_at ? -1 : 1;
     });
+
+  // Consecutive runs of the same date become labelled sections.
+  const sections = [];
+  for (const j of shown) {
+    const key = j.scheduled_date ?? "none";
+    if (!sections.length || sections[sections.length - 1].key !== key)
+      sections.push({ key, label: dayLabel(j.scheduled_date), jobs: [] });
+    sections[sections.length - 1].jobs.push(j);
+  }
 
   return (
     <>
@@ -75,7 +113,12 @@ export default function JobList({ jobs, canDelete = false }) {
         ))}
       </div>
       {shown.length === 0 && <div className="empty">Nothing here.</div>}
-      {shown.map((j) => (
+      {sections.map((sec) => (
+        <div key={sec.key}>
+          <div style={{ margin: "14px 0 6px", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: sec.label.startsWith("Overdue") ? "var(--warn)" : "var(--muted, #8b9498)" }}>
+            {sec.label}{sec.key !== "none" && !["Today", "Tomorrow"].includes(sec.label) ? "" : sec.key !== "none" ? ` \u00b7 ${sec.key}` : ""}
+          </div>
+          {sec.jobs.map((j) => (
         <Link className="card" key={j.id} to={`/job/${j.id}`}>
           <div className="row">
             <span className="ref">{j.ref}</span>
@@ -96,6 +139,8 @@ export default function JobList({ jobs, canDelete = false }) {
             </button>
           )}
         </Link>
+          ))}
+        </div>
       ))}
     </>
   );
