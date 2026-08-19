@@ -53,6 +53,22 @@ export default function Job() {
     }
   };
 
+  const shareUrl = async (url, title) => {
+    if (navigator.share) { try { await navigator.share({ title, url }); return; } catch {} }
+    try {
+      await navigator.clipboard.writeText(url);
+      window.alert("Link copied:\n\n" + url);
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  };
+
+  const shareToDriver = () =>
+    shareUrl(`${window.location.origin}/claim/${id}/${job.claim_token}`, `OneShot job ${job.ref}`);
+
+  const shareRecord = () =>
+    shareUrl(`${window.location.origin}/j/${id}`, `${job.ref} — job record`);
+
   const setJobStatus = async (newStatus, extra = {}) => {
     setBusy(true);
     try {
@@ -221,6 +237,19 @@ export default function Job() {
         <div className="muted" style={{ marginTop: 6 }}>
           {job.scheduled_date ?? "unscheduled"}{job.time_window ? ` · ${job.time_window}` : ""}{job.hard_deadline ? " · HARD DEADLINE" : ""}
         </div>
+      </div>
+
+      <div className="quiet-actions no-print" style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        {isOps && job.claim_token && (
+          <button style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+            onClick={shareToDriver}>
+            🔗 Share to driver
+          </button>
+        )}
+        <button style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+          onClick={shareRecord}>
+          👁 Share read-only record
+        </button>
       </div>
 
       <h2>Job Status</h2>
