@@ -85,6 +85,9 @@ export default function Dashboard() {
   return (
     <div className="page">
       <h1>Office</h1>
+      <Link to="/settings/types" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Edit job types &amp; events
+      </Link>
 
       <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
         {showNew ? "Cancel" : "+ New job"}

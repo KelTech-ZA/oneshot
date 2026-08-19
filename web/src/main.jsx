@@ -14,6 +14,7 @@ import Notices from "./pages/Notices";
 import EmailSetup from "./pages/EmailSetup";
 import WhatsAppSetup from "./pages/WhatsAppSetup";
 import EditJob from "./pages/EditJob";
+import TypeSettings from "./pages/TypeSettings";
 import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
 
@@ -237,6 +238,7 @@ function Shell() {
         <Route path="/setup/email" element={<EmailSetup />} />
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
+        <Route path="/settings/types" element={<TypeSettings />} />
       </Routes>
 
       {/* Sync badge with error display */}
