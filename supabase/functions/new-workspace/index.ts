@@ -20,6 +20,11 @@ Deno.serve(async (req) => {
   if (tErr) return new Response(JSON.stringify({ error: tErr.message }), { status: 400, headers: cors });
 
   await admin.from("memberships").insert({ user_id: user.id, tenant_id: tenant.id, role: "ops" });
+
+  // Give the new workspace its own editable copy of the standard job and
+  // event types. Without this it starts with no vocabulary at all.
+  const { error: seedErr } = await admin.rpc("seed_type_defaults", { t: tenant.id });
+  if (seedErr) console.error("seed_type_defaults failed:", seedErr.message);
   await admin.from("profiles").update({ active_tenant_id: tenant.id }).eq("id", user.id);
 
   return new Response(JSON.stringify({ ok: true, tenant_id: tenant.id }), { headers: cors });

@@ -27,6 +27,10 @@ Deno.serve(async (req) => {
     .insert({ name: company }).select().single();
   if (tErr) return new Response(JSON.stringify({ error: tErr.message }), { status: 400 });
 
+  // Seed the workspace's own editable job and event types.
+  const { error: seedErr } = await admin.rpc("seed_type_defaults", { t: tenant.id });
+  if (seedErr) console.error("seed_type_defaults failed:", seedErr.message);
+
   // 2. Their first login — email or phone (same synthetic-identity scheme as invite-user)
   let loginEmail = email, normPhone: string | null = null;
   if (!email && phone) {
