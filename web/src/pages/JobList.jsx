@@ -23,7 +23,7 @@ function timeRank(tw) {
 
 const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-function dayLabel(dateStr) {
+function dayLabel(dateStr, outstanding = true) {
   if (!dateStr) return "Unscheduled";
   const today = new Date();
   const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
@@ -31,7 +31,7 @@ function dayLabel(dateStr) {
   if (dateStr === localISO(tomorrow)) return "Tomorrow";
   const d = new Date(`${dateStr}T00:00:00`);
   const pretty = d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "short" });
-  return dateStr < localISO(today) ? `Overdue \u00b7 ${pretty}` : pretty;
+  return outstanding && dateStr < localISO(today) ? `Overdue \u00b7 ${pretty}` : pretty;
 }
 
 const GROUPS = {
@@ -97,9 +97,11 @@ export default function JobList({ jobs, canDelete = false }) {
   for (const j of shown) {
     const key = j.scheduled_date ?? "none";
     if (!sections.length || sections[sections.length - 1].key !== key)
-      sections.push({ key, label: dayLabel(j.scheduled_date), jobs: [] });
+      sections.push({ key, date: j.scheduled_date, jobs: [] });
     sections[sections.length - 1].jobs.push(j);
   }
+  for (const sec of sections)
+    sec.label = dayLabel(sec.date, sec.jobs.some((j) => !GROUPS.Done.includes(j.status)));
 
   return (
     <>
