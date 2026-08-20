@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import ClashWarning from "./ClashWarning";
+import ItemDocuments from "./ItemDocuments";
 import { Ctx } from "../main";
 
 // Ops-only tap-to-edit fallback (spec 2.4): conversation is the front door,
@@ -16,6 +17,7 @@ export default function EditJob() {
   const [edits, setEdits] = useState({});
   const [uploading, setUploading] = useState(null);
   const [jobTypes, setJobTypes] = useState([]);
+  const [photos, setPhotos] = useState({});   // item_id -> [{id,path,url}]
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
@@ -25,6 +27,7 @@ export default function EditJob() {
       const { data: jt } = await supabase.from("job_types")
         .select("key,label").eq("active", true).order("sort");
       setJobTypes(jt ?? []);
+      await loadPhotos(it ?? []);
       setF({
         type: j.type, scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
         o_addr: j.origin?.address ?? "", o_name: j.origin?.contact_name ?? "", o_phone: j.origin?.contact_phone ?? "",
@@ -81,21 +84,52 @@ export default function EditJob() {
     setItems(it ?? []);
   };
 
+  const loadPhotos = async (list) => {
+    const ids = list.map((x) => x.id);
+    if (!ids.length) { setPhotos({}); return; }
+    const { data } = await supabase.from("item_photos")
+      .select("id,item_id,path").in("item_id", ids).order("created_at");
+    const rows = data ?? [];
+    const map = {};
+    if (rows.length) {
+      const { data: signed } = await supabase.storage.from("photos")
+        .createSignedUrls(rows.map((r) => r.path), 3600);
+      rows.forEach((r, i) => {
+        (map[r.item_id] ||= []).push({ ...r, url: signed?.[i]?.signedUrl });
+      });
+    }
+    setPhotos(map);
+  };
+
+  const removeItemPhoto = async (it, photo) => {
+    if (!window.confirm("Remove this photo?")) return;
+    const { error } = await supabase.from("item_photos").delete().eq("id", photo.id);
+    if (error) { setMsg("Could not remove photo: " + error.message); return; }
+    await supabase.storage.from("photos").remove([photo.path]);
+    const { data: fresh } = await supabase.from("line_items")
+      .select("*").eq("job_id", id).order("created_at");
+    setItems(fresh ?? []);
+    await loadPhotos(fresh ?? []);
+  };
+
   const uploadItemPhoto = async (it, file) => {
     if (!file) return;
     setUploading(it.id);
     setMsg("");
     try {
-      const path = `${it.tenant_id}/${id}/${it.id}/anchor-${Date.now()}.jpg`;
+      if ((photos[it.id]?.length ?? 0) >= 3) { setMsg("Up to 3 photos per item."); return; }
+      const path = `${it.tenant_id}/${id}/${it.id}/ref-${Date.now()}.jpg`;
       const { error: upErr } = await supabase.storage
         .from("photos").upload(path, file, { contentType: file.type || "image/jpeg", upsert: true });
       if (upErr) { setMsg("Photo upload failed: " + upErr.message); return; }
-      const { error: dbErr } = await supabase.from("line_items")
-        .update({ anchor_image_path: path }).eq("id", it.id);
+      const { error: dbErr } = await supabase.from("item_photos").insert({
+        tenant_id: it.tenant_id, job_id: id, item_id: it.id, path,
+      });
       if (dbErr) { setMsg("Could not save photo: " + dbErr.message); return; }
       const { data: fresh } = await supabase.from("line_items")
         .select("*").eq("job_id", id).order("created_at");
       setItems(fresh ?? []);
+      await loadPhotos(fresh ?? []);
     } finally {
       setUploading(null);
     }
@@ -176,12 +210,27 @@ export default function EditJob() {
               placeholder="Pack on arrival, glass side up…"
               onChange={(ev) => setEdits({ ...edits, [it.id]: { ...edits[it.id], special_handling: ev.target.value } })} />
 
-            <label>Reference photo</label>
-            <input type="file" accept="image/*" style={{ marginBottom: 6 }}
-              disabled={uploading === it.id}
-              onChange={(ev) => uploadItemPhoto(it, ev.target.files?.[0])} />
+            <label>Reference photos ({photos[it.id]?.length ?? 0}/3)</label>
+            {!!photos[it.id]?.length && (
+              <div style={{ display: "flex", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                {photos[it.id].map((ph) => (
+                  <div key={ph.id} style={{ position: "relative" }}>
+                    {ph.url && <img src={ph.url} alt="" style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8 }} />}
+                    <button onClick={() => removeItemPhoto(it, ph)} aria-label="Remove photo"
+                      style={{ position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: "50%",
+                        border: "none", background: "var(--warn)", color: "#fff", cursor: "pointer", lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(photos[it.id]?.length ?? 0) < 3 && (
+              <input type="file" accept="image/*" style={{ marginBottom: 6 }}
+                disabled={uploading === it.id}
+                onChange={(ev) => uploadItemPhoto(it, ev.target.files?.[0])} />
+            )}
             {uploading === it.id && <div className="muted">Uploading…</div>}
-            {it.anchor_image_path && <div className="muted">Photo on file ✓</div>}
+
+            <ItemDocuments item={it} jobId={id} />
 
             <div className="row" style={{ marginTop: 4 }}>
               <span className="muted">{it.status.replace("_", " ")}</span>
