@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import ClashWarning from "./ClashWarning";
 import { Ctx } from "../main";
 
 // Ops-only tap-to-edit fallback (spec 2.4): conversation is the front door,
@@ -136,6 +137,7 @@ export default function EditJob() {
         <label>Booked date</label>
         <input type="date" value={f.scheduled_date} onChange={(e) => setF({ ...f, scheduled_date: e.target.value })} />
         {inp("time_window", "Time window", "09:00–12:00")}
+        <ClashWarning date={f.scheduled_date} timeWindow={f.time_window} excludeId={id} />
       </div>
 
       <h2>Origin</h2>

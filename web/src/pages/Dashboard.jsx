@@ -4,13 +4,14 @@ import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { Ctx } from "../main";
 import { JobStamp } from "./Today";
 import JobList from "./JobList";
+import ClashWarning from "./ClashWarning";
 
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ type: "move", origin: "", destination: "", date: "", items: "" });
+  const [form, setForm] = useState({ type: "move", origin: "", destination: "", date: "", time: "", items: "" });
 
   const load = () =>
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
@@ -36,7 +37,8 @@ export default function Dashboard() {
       tenant_id: profile.tenant_id, type: form.type,
       origin: form.origin ? { address: form.origin } : null,
       destination: form.destination ? { address: form.destination } : null,
-      scheduled_date: form.date || null, status: "confirmed", created_by: profile.id,
+      scheduled_date: form.date || null, time_window: form.time || null,
+      status: "confirmed", created_by: profile.id,
     }).select().single();
     if (error || !job) {
       window.alert("Could not create job: " + (error?.message ?? "unknown error"));
@@ -113,6 +115,10 @@ export default function Dashboard() {
           <input value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
           <label>Date</label>
           <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+          <label>Time window</label>
+          <input value={form.time} placeholder="09:00-12:00"
+            onChange={(e) => setForm({ ...form, time: e.target.value })} />
+          <ClashWarning date={form.date} timeWindow={form.time} />
           <label>Items — one per line</label>
           <textarea rows={3} value={form.items} onChange={(e) => setForm({ ...form, items: e.target.value })}
             placeholder={"Kentridge charcoal drawing 80×60\nCrated bronze, 40kg"} />
