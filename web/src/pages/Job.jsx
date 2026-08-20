@@ -229,7 +229,7 @@ export default function Job() {
             <strong>To:</strong> {job.destination.address}{job.destination.contact_name && ` · ${job.destination.contact_name}`}
           </div>
         )}
-        {job.origin?.contact_name && (
+        {job.destination?.contact_name && (
           <div className="muted" style={{ marginTop: 6 }}>
             Delivery contact: {job.destination.contact_name}{" "}
             {job.destination.contact_phone && <a href={`tel:${job.destination.contact_phone}`}>{job.destination.contact_phone}</a>}
