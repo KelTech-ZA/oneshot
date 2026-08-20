@@ -8,6 +8,7 @@ import JobList from "./JobList";
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState([]);
+  const [jobTypes, setJobTypes] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ type: "move", origin: "", destination: "", date: "", items: "" });
 
@@ -15,7 +16,11 @@ export default function Dashboard() {
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
       .order("created_at", { ascending: false }).limit(50)
       .then(({ data }) => setJobs(data ?? []));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    supabase.from("job_types").select("key,label").eq("active", true).order("sort")
+      .then(({ data }) => setJobTypes(data ?? []));
+  }, []);
 
   const confirm = async (job) => {
     await supabase.from("jobs").update({ status: "confirmed", updated_at: new Date().toISOString() }).eq("id", job.id);
@@ -100,7 +105,7 @@ export default function Dashboard() {
         <div className="card" style={{ marginTop: 10 }}>
           <label>Type</label>
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {["pickup", "delivery", "move", "storage_in", "storage_out"].map((t) => <option key={t}>{t}</option>)}
+            {jobTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
           <label>Origin address</label>
           <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
