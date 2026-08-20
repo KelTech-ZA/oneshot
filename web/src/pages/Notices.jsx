@@ -1,11 +1,20 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { pendingCount } from "../lib/queue";
 
-function browserNotify(title, body) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "granted") new Notification(title, { body, icon: "/icon-192.png" });
+// iOS PWAs do not support `new Notification()` - they require the service
+// worker's showNotification(). Try that first, fall back for desktop browsers.
+async function browserNotify(title, body) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg?.showNotification) {
+      await reg.showNotification(title, { body, icon: "/icon-192.png", badge: "/icon-192.png" });
+      return;
+    }
+  } catch { /* fall through */ }
+  try { new Notification(title, { body, icon: "/icon-192.png" }); } catch { /* unsupported */ }
 }
 
 // In-app banner stack + browser notifications.
@@ -14,14 +23,39 @@ function browserNotify(title, body) {
 //    pops a persistent "Job still open" notice on app open.
 export default function Notices({ profile }) {
   const [notices, setNotices] = useState([]);
+  const labels = useRef({});   // event_types key -> label
+  const people = useRef({});   // user id -> name
+  const [perm, setPerm] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported");
+  const [askDismissed, setAskDismissed] = useState(
+    () => sessionStorage.getItem("oneshot_notify_ask") === "0");
+
+  // iOS only shows the prompt from a user gesture, never on page load.
+  const enableNotifications = async () => {
+    try {
+      const p = await Notification.requestPermission();
+      setPerm(p);
+      if (p === "granted") {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        await reg?.showNotification?.("Notifications on", { body: "You'll hear about job activity here.", icon: "/icon-192.png" });
+      }
+    } catch { setPerm("denied"); }
+  };
 
   const push = (n) => setNotices((cur) =>
     cur.some((x) => x.key === n.key) ? cur : [...cur, n]);
   const dismiss = (key) => setNotices((cur) => cur.filter((x) => x.key !== key));
 
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "default")
-      Notification.requestPermission();
+    // Vocabulary and names for readable notices
+    (async () => {
+      const [{ data: et }, { data: ppl }] = await Promise.all([
+        supabase.from("event_types").select("key,label"),
+        supabase.from("profiles").select("id,full_name"),
+      ]);
+      labels.current = Object.fromEntries((et ?? []).map((r) => [r.key, r.label]));
+      people.current = Object.fromEntries((ppl ?? []).map((r) => [r.id, r.full_name || "crew"]));
+    })();
 
     // Realtime: new jobs
     const ch = supabase.channel("jobs-feed")
@@ -32,6 +66,24 @@ export default function Notices({ profile }) {
         push({ key: `job-${j.id}`, tone: "accent", title, jobId: j.id,
           body: `${j.ref} · ${j.scheduled_date ?? "no date"}` });
         browserNotify(title, j.ref);
+      })
+      // Realtime: custody events logged by someone else
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "custody_events" }, async ({ new: ev }) => {
+        if (ev.user_id === profile.id) return;              // your own action
+        const { data: j } = await supabase.from("jobs")
+          .select("ref, crew").eq("id", ev.job_id).single();
+        if (!j) return;
+        // Ops hear everything; crew only about jobs they are on.
+        const mine = Array.isArray(j.crew) && j.crew.includes(profile.id);
+        if (profile.role !== "ops" && !mine) return;
+
+        const label = labels.current[ev.type]
+          ?? ev.type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+        const who = ev.user_id ? (people.current[ev.user_id] ?? "crew") : "crew";
+        const title = `${label} logged`;
+        push({ key: `ev-${ev.id}`, tone: "accent", title, jobId: ev.job_id,
+          body: `${j.ref} · by ${who}${ev.photo_path ? " · photo" : ""}` });
+        browserNotify(title, `${j.ref} — ${label}`);
       })
       .subscribe();
 
@@ -56,9 +108,24 @@ export default function Notices({ profile }) {
     return () => supabase.removeChannel(ch);
   }, [profile.id]);
 
-  if (!notices.length) return null;
+  const askToEnable = perm === "default" && !askDismissed && typeof Notification !== "undefined";
+  if (!notices.length && !askToEnable) return null;
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: "10px 16px 0" }}>
+      {askToEnable && (
+        <div className="card" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Turn on job alerts</div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              Get told when crew log events or a new request arrives.
+            </div>
+          </div>
+          <button className="btn btn-primary" style={{ marginTop: 0 }} onClick={enableNotifications}>Enable</button>
+          <button aria-label="Not now"
+            onClick={() => { sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); }}
+            style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer" }}>×</button>
+        </div>
+      )}
       {notices.map((n) => (
         <div key={n.key} className="card" style={{
           background: "var(--ink)", color: "#fff", border: "none",
