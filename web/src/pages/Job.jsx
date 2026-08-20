@@ -370,7 +370,7 @@ export default function Job() {
         </div>
       ))}
 
-      {job.status !== "in_progress" && job.status !== "cancelled" && (
+      {!["in_progress", "completed", "closed", "cancelled"].includes(job.status) && (
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button className={job.status !== "pending_confirmation" ? "btn btn-ghost" : "btn btn-primary"}
@@ -378,7 +378,8 @@ export default function Job() {
               onClick={acceptJob}>
               {job.status !== "pending_confirmation" ? "✓ Accepted" : "Accept"}
             </button>
-            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }} disabled={busy || job.status === "pending_confirmation"}
+            <button className="btn btn-accent" style={{ flex: 1, marginTop: 0 }}
+              disabled={busy || !["confirmed", "assigned", "accepted"].includes(job.status)}
               onClick={startJob}>
               ▶ Start job
             </button>
