@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
 import { Ctx } from "../main";
+import JobDocuments from "./JobDocuments";
 
 const ITEM_STAMP = {
   expected: ["pending", "EXPECTED"], collected: ["live", "COLLECTED"],
@@ -273,6 +274,8 @@ export default function Job() {
           📷 Shoot job
         </button>
       )}
+
+      <JobDocuments jobId={id} tenantId={job.tenant_id} canEdit={jobOpen} />
 
       <h2>Items ({items.length})</h2>
       {checkedItems.size > 0 && (
