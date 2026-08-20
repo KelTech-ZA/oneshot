@@ -11,7 +11,8 @@ const ITEM_STAMP = {
   exception: ["bad", "EXCEPTION"],
 };
 
-const TAGS = ["collected", "packed", "loaded", "delivered"];
+// Event vocabulary now lives per workspace in event_types.
+// `quick` types stay as one-tap buttons; the rest sit behind a dropdown.
 
 export function ItemStamp({ status }) {
   const [cls, label] = ITEM_STAMP[status] ?? ["pending", status];
@@ -30,6 +31,9 @@ export default function Job() {
   const [checkedItems, setCheckedItems] = useState(new Set());
   const [loggingEventItemId, setLoggingEventItemId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [eventTypes, setEventTypes] = useState([]);
+  const [pickedBulk, setPickedBulk] = useState("");
+  const [pickedItem, setPickedItem] = useState("");
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
@@ -41,6 +45,9 @@ export default function Job() {
     const { data: it } = await supabase.from("line_items").select("*").eq("job_id", id).order("created_at");
     const { data: ev } = await supabase.from("custody_events").select("*").eq("job_id", id).order("taken_at");
     const { data: ppl } = await supabase.from("profiles").select("id, full_name");
+    const { data: et } = await supabase.from("event_types")
+      .select("key,label,quick").eq("active", true).order("sort");
+    setEventTypes(et ?? []);
     setJob(j); setItems(it ?? []); setEvents(ev ?? []);
     setNames(Object.fromEntries((ppl ?? []).map((p) => [p.id, p.full_name || "team member"])));
     const paths = (it ?? []).filter((x) => x.anchor_image_path);
@@ -272,16 +279,22 @@ export default function Job() {
         <div className="card" style={{ marginBottom: 12, background: "var(--ok-light)" }}>
           <div style={{ marginBottom: 8, fontWeight: 600 }}>{checkedItems.size} item{checkedItems.size > 1 ? "s" : ""} selected</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            {TAGS.map((tag) => (
-              <button
-                key={tag}
-                className="btn btn-ghost"
-                style={{ marginTop: 0, textTransform: "capitalize" }}
-                onClick={() => logBulkItemEvent(tag)}
-                disabled={busy}>
-                {tag}
+            {eventTypes.filter((t) => t.quick).map((t) => (
+              <button key={t.key} className="btn btn-ghost" style={{ marginTop: 0 }}
+                onClick={() => logBulkItemEvent(t.key)} disabled={busy}>
+                {t.label}
               </button>
             ))}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <select style={{ flex: 1 }} value={pickedBulk} onChange={(e) => setPickedBulk(e.target.value)}>
+              <option value="">Other event…</option>
+              {eventTypes.filter((t) => !t.quick).map((t) => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
+            </select>
+            <button className="btn btn-ghost" style={{ marginTop: 0 }} disabled={busy || !pickedBulk}
+              onClick={() => { logBulkItemEvent(pickedBulk); setPickedBulk(""); }}>Log</button>
           </div>
         </div>
       )}
@@ -321,16 +334,22 @@ export default function Job() {
             <div style={{ padding: 8, background: "var(--card)", borderRadius: 6, marginBottom: 8 }}>
               <div style={{ marginBottom: 8, fontWeight: 600 }}>Log event:</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    className="btn btn-ghost"
-                    style={{ marginTop: 0, textTransform: "capitalize" }}
-                    onClick={() => logItemEvent(it.id, tag)}
-                    disabled={busy}>
-                    {tag}
+                {eventTypes.filter((t) => t.quick).map((t) => (
+                  <button key={t.key} className="btn btn-ghost" style={{ marginTop: 0 }}
+                    onClick={() => logItemEvent(it.id, t.key)} disabled={busy}>
+                    {t.label}
                   </button>
                 ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <select style={{ flex: 1 }} value={pickedItem} onChange={(e) => setPickedItem(e.target.value)}>
+                  <option value="">Other event…</option>
+                  {eventTypes.filter((t) => !t.quick).map((t) => (
+                    <option key={t.key} value={t.key}>{t.label}</option>
+                  ))}
+                </select>
+                <button className="btn btn-ghost" style={{ marginTop: 0 }} disabled={busy || !pickedItem}
+                  onClick={() => { logItemEvent(it.id, pickedItem); setPickedItem(""); }}>Log</button>
               </div>
             </div>
           )}

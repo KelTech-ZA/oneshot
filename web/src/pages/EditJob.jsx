@@ -14,12 +14,16 @@ export default function EditJob() {
   const [newItem, setNewItem] = useState("");
   const [edits, setEdits] = useState({});
   const [uploading, setUploading] = useState(null);
+  const [jobTypes, setJobTypes] = useState([]);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
     (async () => {
       const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
       const { data: it } = await supabase.from("line_items").select("*").eq("job_id", id).order("created_at");
+      const { data: jt } = await supabase.from("job_types")
+        .select("key,label").eq("active", true).order("sort");
+      setJobTypes(jt ?? []);
       setF({
         type: j.type, scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
         o_addr: j.origin?.address ?? "", o_name: j.origin?.contact_name ?? "", o_phone: j.origin?.contact_phone ?? "",
@@ -124,7 +128,10 @@ export default function EditJob() {
       <div className="card">
         <label>Type</label>
         <select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
-          {["pickup", "delivery", "move", "storage_in", "storage_out"].map((t) => <option key={t}>{t}</option>)}
+          {jobTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+          {/* keep the job's existing type selectable even if since retired */}
+          {f.type && !jobTypes.some((t) => t.key === f.type) &&
+            <option value={f.type}>{f.type} (retired)</option>}
         </select>
         <label>Booked date</label>
         <input type="date" value={f.scheduled_date} onChange={(e) => setF({ ...f, scheduled_date: e.target.value })} />
