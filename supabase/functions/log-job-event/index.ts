@@ -67,13 +67,18 @@ Deno.serve(async (req) => {
   if (insertErr) return out({ error: "insert failed: " + insertErr.message }, 500);
 
   // Update job status to match the event type
-  const statusMap: Record<string, string> = {
-    "collected": "in_progress",
-    "in_transit": "in_progress",
-    "delivered": "completed",
-    "closed": "closed",
-  };
-  const newStatus = statusMap[type];
+  // Job status follows the workspace's own vocabulary, not a hardcoded map.
+  // "closed" stays special: it ends the job regardless of event config.
+  let newStatus: string | null = null;
+  if (type === "closed") {
+    newStatus = "closed";
+  } else {
+    const { data: et } = await admin.from("event_types")
+      .select("starts_job, completes_job")
+      .eq("tenant_id", job.tenant_id).eq("key", type).eq("active", true).maybeSingle();
+    if (et?.completes_job) newStatus = "completed";
+    else if (et?.starts_job) newStatus = "in_progress";
+  }
   if (newStatus) {
     await admin.from("jobs").update({ status: newStatus }).eq("id", job_id);
   }
