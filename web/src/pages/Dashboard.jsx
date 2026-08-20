@@ -8,7 +8,6 @@ import JobList from "./JobList";
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState([]);
-  const [jobTypes, setJobTypes] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ type: "move", origin: "", destination: "", date: "", items: "" });
 
@@ -16,11 +15,7 @@ export default function Dashboard() {
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
       .order("created_at", { ascending: false }).limit(50)
       .then(({ data }) => setJobs(data ?? []));
-  useEffect(() => {
-    load();
-    supabase.from("job_types").select("key,label").eq("active", true).order("sort")
-      .then(({ data }) => setJobTypes(data ?? []));
-  }, []);
+  useEffect(() => { load(); }, []);
 
   const confirm = async (job) => {
     await supabase.from("jobs").update({ status: "confirmed", updated_at: new Date().toISOString() }).eq("id", job.id);
@@ -32,12 +27,16 @@ export default function Dashboard() {
   };
 
   const createJob = async () => {
-    const { data: job } = await supabase.from("jobs").insert({
+    const { data: job, error } = await supabase.from("jobs").insert({
       tenant_id: profile.tenant_id, type: form.type,
       origin: form.origin ? { address: form.origin } : null,
       destination: form.destination ? { address: form.destination } : null,
       scheduled_date: form.date || null, status: "confirmed", created_by: profile.id,
     }).select().single();
+    if (error || !job) {
+      window.alert("Could not create job: " + (error?.message ?? "unknown error"));
+      return;
+    }
     const items = form.items.split("\n").map((s) => s.trim()).filter(Boolean)
       .map((description) => ({ tenant_id: profile.tenant_id, job_id: job.id, description }));
     if (items.length) await supabase.from("line_items").insert(items);
@@ -101,7 +100,7 @@ export default function Dashboard() {
         <div className="card" style={{ marginTop: 10 }}>
           <label>Type</label>
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {jobTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            {["pickup", "delivery", "move", "storage_in", "storage_out"].map((t) => <option key={t}>{t}</option>)}
           </select>
           <label>Origin address</label>
           <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
