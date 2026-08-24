@@ -19,15 +19,18 @@ export default function EditJob() {
   const [jobTypes, setJobTypes] = useState([]);
   const [photos, setPhotos] = useState({});   // item_id -> [{id,path,url}]
   const [msg, setMsg] = useState("");
+  const [loadErr, setLoadErr] = useState("");
 
   useEffect(() => {
     (async () => {
-      const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
-      const { data: it } = await supabase.from("line_items").select("*").eq("job_id", id).order("created_at");
-      const { data: jt } = await supabase.from("job_types")
-        .select("key,label").eq("active", true).order("sort");
-      setJobTypes(jt ?? []);
-      await loadPhotos(it ?? []);
+      // The form must be populated before anything optional runs - `f` gates
+      // the whole render, so a later failure would hang on "Loading job..."
+      const { data: j, error: jErr } = await supabase.from("jobs").select("*").eq("id", id).single();
+      if (jErr || !j) { setLoadErr(jErr?.message ?? "Job not found, or you do not have access to it."); return; }
+
+      const { data: it } = await supabase.from("line_items")
+        .select("*").eq("job_id", id).order("created_at");
+
       setF({
         type: j.type, scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
         o_addr: j.origin?.address ?? "", o_name: j.origin?.contact_name ?? "", o_phone: j.origin?.contact_phone ?? "",
@@ -35,10 +38,27 @@ export default function EditJob() {
         _job: j,
       });
       setItems(it ?? []);
-    })();
+
+      // Anything below here is optional - never let it block the form.
+      try {
+        const { data: jt } = await supabase.from("job_types")
+          .select("key,label").eq("active", true).order("sort");
+        setJobTypes(jt ?? []);
+      } catch (e) { console.warn("job types unavailable", e); }
+
+      try {
+        await loadPhotos(it ?? []);
+      } catch (e) { console.warn("item photos unavailable", e); }
+    })().catch((e) => setLoadErr(String(e?.message ?? e)));
   }, [id]);
 
 
+  if (loadErr) return (
+    <div className="page">
+      <div className="card" style={{ color: "var(--warn)" }}>Could not open this job: {loadErr}</div>
+      <button className="btn btn-ghost" onClick={() => nav(`/job/${id}`)}>← Back to job</button>
+    </div>
+  );
   if (!f) return <div className="empty">Loading job…</div>;
 
   const save = async () => {
@@ -87,8 +107,9 @@ export default function EditJob() {
   const loadPhotos = async (list) => {
     const ids = list.map((x) => x.id);
     if (!ids.length) { setPhotos({}); return; }
-    const { data } = await supabase.from("item_photos")
+    const { data, error } = await supabase.from("item_photos")
       .select("id,item_id,path").in("item_id", ids).order("created_at");
+    if (error) { console.warn("item_photos not available:", error.message); setPhotos({}); return; }
     const rows = data ?? [];
     const map = {};
     if (rows.length) {
