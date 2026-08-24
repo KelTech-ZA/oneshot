@@ -20,6 +20,7 @@ export default function EditJob() {
   const [photos, setPhotos] = useState({});   // item_id -> [{id,path,url}]
   const [msg, setMsg] = useState("");
   const [loadErr, setLoadErr] = useState("");
+  const [eventCounts, setEventCounts] = useState({});  // item_id -> custody events
 
   useEffect(() => {
     (async () => {
@@ -49,6 +50,14 @@ export default function EditJob() {
       try {
         await loadPhotos(it ?? []);
       } catch (e) { console.warn("item photos unavailable", e); }
+
+      try {
+        const { data: ev } = await supabase.from("custody_events")
+          .select("item_id").eq("job_id", id).not("item_id", "is", null);
+        const counts = {};
+        (ev ?? []).forEach((e) => { counts[e.item_id] = (counts[e.item_id] ?? 0) + 1; });
+        setEventCounts(counts);
+      } catch (e) { console.warn("custody counts unavailable", e); }
     })().catch((e) => setLoadErr(String(e?.message ?? e)));
   }, [id]);
 
@@ -156,14 +165,29 @@ export default function EditJob() {
     }
   };
 
+  // An item may be removed until it has custody history. Reference photos
+  // added in this screen are descriptive, not evidence, so they don't lock it.
+  const canRemove = (it) => (eventCounts[it.id] ?? 0) === 0;
+
   const removeItem = async (it) => {
-    // Only items untouched by custody can be removed — evidence is never deleted.
-    if (it.status !== "expected" || it.anchor_image_path) {
-      setMsg("⚠ Items with custody history can't be removed — mark an exception instead.");
+    if (!canRemove(it)) {
+      setMsg("This item has custody events and can't be removed — log an exception instead.");
       return;
     }
-    await supabase.from("line_items").delete().eq("id", it.id);
+    if (!window.confirm(`Remove "${it.description}"? This cannot be undone.`)) return;
+
+    // Clear its reference photos first: they hold a foreign key to the item.
+    const mine = photos[it.id] ?? [];
+    if (mine.length) {
+      await supabase.from("item_photos").delete().eq("item_id", it.id);
+      await supabase.storage.from("photos").remove(mine.map((p) => p.path));
+    }
+    await supabase.from("job_documents").delete().eq("item_id", it.id);
+
+    const { error } = await supabase.from("line_items").delete().eq("id", it.id);
+    if (error) { setMsg("Could not remove item: " + error.message); return; }
     setItems(items.filter((x) => x.id !== it.id));
+    setPhotos((prev) => { const n = { ...prev }; delete n[it.id]; return n; });
   };
 
   const inp = (k, label, ph = "") => (
@@ -255,9 +279,13 @@ export default function EditJob() {
 
             <div className="row" style={{ marginTop: 4 }}>
               <span className="muted">{it.status.replace("_", " ")}</span>
-              {it.status === "expected" && !it.anchor_image_path && (
+              {canRemove(it) ? (
                 <button className="muted" style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer" }}
                   onClick={() => removeItem(it)}>remove</button>
+              ) : (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {eventCounts[it.id]} event{eventCounts[it.id] > 1 ? "s" : ""} logged
+                </span>
               )}
             </div>
           </div>
