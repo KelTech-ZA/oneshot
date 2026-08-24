@@ -59,9 +59,11 @@ function Shell() {
         setForcePasswordChange(true);
       }
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
-      if (s?.user?.user_metadata?.recovery_session) {
+      // Two routes into a reset: an ops-initiated one (custom metadata flag)
+      // and Supabase's own reset email, which fires PASSWORD_RECOVERY.
+      if (event === "PASSWORD_RECOVERY" || s?.user?.user_metadata?.recovery_session) {
         setForcePasswordChange(true);
       }
     });
