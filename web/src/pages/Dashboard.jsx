@@ -132,7 +132,7 @@ export default function Dashboard() {
         <div className="card" key={j.id}>
           <div className="row">
             <Link to={`/job/${j.id}`} className="ref" style={{ color: "inherit" }}>{j.ref}</Link>
-            <JobStamp status={j.status} />
+            <JobStamp status={j.status} lastEvent={j.last_event_label} />
           </div>
           <div style={{ margin: "6px 0", fontWeight: 600 }}>
             {j.origin?.address || j.origin?.label || "—"} → {j.destination?.address || j.destination?.label || "—"}

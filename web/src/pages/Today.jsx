@@ -10,9 +10,16 @@ const STAMP = {
   completed: ["done", "COMPLETED"], closed: ["done", "CLOSED"], cancelled: ["bad", "CANCELLED"],
 };
 
-export function JobStamp({ status }) {
-  const [cls, label] = STAMP[status] ?? ["pending", status];
-  return <span className={`stamp ${cls}`}>{label}</span>;
+// The colour comes from the lifecycle status; the WORD comes from the last
+// event logged, so a finished job reads DELIVERED or BUILT rather than the
+// uninformative COMPLETED. Statuses that describe the contract rather than
+// the work - awaiting confirmation, closed, cancelled - keep their own word.
+const CONTRACT_STATES = ["pending_confirmation", "closed", "cancelled"];
+
+export function JobStamp({ status, lastEvent }) {
+  const [cls, statusLabel] = STAMP[status] ?? ["pending", status];
+  const label = lastEvent && !CONTRACT_STATES.includes(status) ? lastEvent.toUpperCase() : statusLabel;
+  return <span className={`stamp ${cls}`} title={statusLabel}>{label}</span>;
 }
 
 export default function Today() {
