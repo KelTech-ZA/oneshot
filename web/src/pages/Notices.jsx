@@ -19,7 +19,8 @@ async function browserNotify(title, body) {
 
 // In-app banner stack + browser notifications.
 // 1. Realtime: new jobs (inbound requests / assignments) pop a "New job" notice.
-// 2. Reminder: any in-progress job with unfinished items, or unsynced events,
+// 2. Realtime: custody events logged by someone else.
+// 3. Reminder: any in-progress job with unfinished items, or unsynced events,
 //    pops a persistent "Job still open" notice on app open.
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 
@@ -61,21 +62,38 @@ export default function Notices({ profile }) {
     typeof Notification !== "undefined" ? Notification.permission : "unsupported");
   const [askDismissed, setAskDismissed] = useState(
     () => sessionStorage.getItem("oneshot_notify_ask") === "0");
+  const [askBusy, setAskBusy] = useState(false);
+  const [askNote, setAskNote] = useState("");
 
-  // iOS only shows the prompt from a user gesture, never on page load.
+  // Browsers do not always show a visible prompt: Chrome can use a small
+  // address-bar icon, and auto-denies after past dismissals. iOS only prompts
+  // from a user gesture. So this always reports the outcome rather than
+  // leaving the tap looking like nothing happened.
   const enableNotifications = async () => {
+    setAskBusy(true);
+    setAskNote("");
     try {
       const p = await Notification.requestPermission();
       setPerm(p);
+
       if (p === "granted") {
         await registerPush(profile);
         const reg = await navigator.serviceWorker?.getRegistration();
-        await reg?.showNotification?.("Notifications on", {
-          body: "You'll now hear about job activity even when OneShot is closed.",
+        await reg?.showNotification?.("Alerts are on", {
+          body: "You'll hear about job activity even when OneShot is closed.",
           icon: "/icon-192.png",
         });
+        setAskNote("Alerts are on for this device.");
+      } else if (p === "denied") {
+        setAskNote("Your browser is blocking notifications for OneShot. Turn them back on in site settings — the icon beside the web address — then tap Try again.");
+      } else {
+        setAskNote("No answer yet. Look for the permission prompt, or a small bell icon beside the web address.");
       }
-    } catch { setPerm("denied"); }
+    } catch (e) {
+      setAskNote("Could not turn alerts on: " + (e?.message ?? e));
+    } finally {
+      setAskBusy(false);
+    }
   };
 
   const push = (n) => setNotices((cur) =>
@@ -147,24 +165,49 @@ export default function Notices({ profile }) {
     return () => supabase.removeChannel(ch);
   }, [profile.id]);
 
-  const askToEnable = perm === "default" && !askDismissed && typeof Notification !== "undefined";
+  // Shown while permission is undecided OR blocked - a blocked device needs a
+  // route back, otherwise the card disappears and there is no way to recover.
+  const askToEnable = ["default", "denied"].includes(perm)
+    && !askDismissed && typeof Notification !== "undefined";
+
   if (!notices.length && !askToEnable) return null;
+
   return (
-    <div style={{ maxWidth: 720, margin: "0 auto", padding: "10px 16px 0" }}>
+    // width:100% matters: #root is a flex column, and auto cross-axis margins
+    // cancel `stretch`, which collapses this block to its narrowest content.
+    <div style={{ width: "100%", maxWidth: 720, margin: "0 auto", padding: "10px 16px 0" }}>
       {askToEnable && (
-        <div className="card" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Turn on job alerts</div>
-            <div className="muted" style={{ fontSize: 13 }}>
-              Get told when crew log events or a new request arrives.
+        <div className="card">
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>Turn on job alerts</div>
+              <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                Get told when crew log an event or a new request arrives — even with OneShot closed.
+              </div>
             </div>
+            <button aria-label="Not now"
+              onClick={() => { sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); }}
+              style={{ background: "none", border: "none", fontSize: 20, lineHeight: 1,
+                color: "var(--ink-soft)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+              ×
+            </button>
           </div>
-          <button className="btn btn-primary" style={{ marginTop: 0 }} onClick={enableNotifications}>Enable</button>
-          <button aria-label="Not now"
-            onClick={() => { sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); }}
-            style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer" }}>×</button>
+
+          {askNote && (
+            <div style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5,
+              color: perm === "granted" ? "var(--ok)"
+                   : perm === "denied" ? "var(--warn)" : "var(--ink-soft)" }}>
+              {askNote}
+            </div>
+          )}
+
+          <button className="btn btn-primary" style={{ marginTop: 12 }}
+            disabled={askBusy} onClick={enableNotifications}>
+            {askBusy ? "Asking…" : perm === "denied" ? "Try again" : "Enable alerts"}
+          </button>
         </div>
       )}
+
       {notices.map((n) => (
         <div key={n.key} className="card" style={{
           background: "var(--ink)", color: "#fff", border: "none",
