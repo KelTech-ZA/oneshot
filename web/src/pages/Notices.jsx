@@ -21,6 +21,38 @@ async function browserNotify(title, body) {
 // 1. Realtime: new jobs (inbound requests / assignments) pop a "New job" notice.
 // 2. Reminder: any in-progress job with unfinished items, or unsynced events,
 //    pops a persistent "Job still open" notice on app open.
+const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+
+const urlBase64ToUint8Array = (b64) => {
+  const padded = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(padded);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+};
+
+// Registers this device for push. Without it notifications only arrive while
+// the app is open, which defeats the point.
+async function registerPush(profile) {
+  if (!VAPID_PUBLIC || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC),
+    });
+    const j = sub.toJSON();
+    await supabase.from("push_subscriptions").upsert({
+      user_id: profile.id,
+      tenant_id: profile.tenant_id,
+      endpoint: j.endpoint,
+      p256dh: j.keys.p256dh,
+      auth: j.keys.auth,
+      user_agent: navigator.userAgent.slice(0, 200),
+    }, { onConflict: "endpoint" });
+  } catch (e) {
+    console.warn("push registration failed:", e?.message ?? e);
+  }
+}
+
 export default function Notices({ profile }) {
   const [notices, setNotices] = useState([]);
   const labels = useRef({});   // event_types key -> label
@@ -36,8 +68,12 @@ export default function Notices({ profile }) {
       const p = await Notification.requestPermission();
       setPerm(p);
       if (p === "granted") {
+        await registerPush(profile);
         const reg = await navigator.serviceWorker?.getRegistration();
-        await reg?.showNotification?.("Notifications on", { body: "You'll hear about job activity here.", icon: "/icon-192.png" });
+        await reg?.showNotification?.("Notifications on", {
+          body: "You'll now hear about job activity even when OneShot is closed.",
+          icon: "/icon-192.png",
+        });
       }
     } catch { setPerm("denied"); }
   };
@@ -47,6 +83,9 @@ export default function Notices({ profile }) {
   const dismiss = (key) => setNotices((cur) => cur.filter((x) => x.key !== key));
 
   useEffect(() => {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted")
+      registerPush(profile);
+
     // Vocabulary and names for readable notices
     (async () => {
       const [{ data: et }, { data: ppl }] = await Promise.all([

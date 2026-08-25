@@ -7,7 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      workbox: { navigateFallback: "/index.html" },
+      // injectManifest (not generateSW) so src/sw.js can handle push events.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.js",
+      injectManifest: { globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"] },
       manifest: {
         name: "OneShot",
         short_name: "OneShot",
