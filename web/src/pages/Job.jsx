@@ -33,6 +33,7 @@ export default function Job() {
   const [loggingEventItemId, setLoggingEventItemId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [eventTypes, setEventTypes] = useState([]);
+  const [typeLabel, setTypeLabel] = useState("");
   const [pickedBulk, setPickedBulk] = useState("");
   const [pickedItem, setPickedItem] = useState("");
 
@@ -49,6 +50,9 @@ export default function Job() {
     const { data: et } = await supabase.from("event_types")
       .select("key,label,quick").eq("active", true).order("sort");
     setEventTypes(et ?? []);
+    const { data: jt } = await supabase.from("job_types")
+      .select("key,label").eq("key", j?.type ?? "").maybeSingle();
+    setTypeLabel(jt?.label ?? (j?.type ? String(j.type).replace(/_/g, " ") : ""));
     setJob(j); setItems(it ?? []); setEvents(ev ?? []);
     setNames(Object.fromEntries((ppl ?? []).map((p) => [p.id, p.full_name || "team member"])));
     const paths = (it ?? []).filter((x) => x.anchor_image_path);
@@ -184,7 +188,12 @@ export default function Job() {
     <div className="page">
       <Link className="muted" style={{ marginBottom: 10 }} to="/">← Today</Link>
       <div className="row">
-        <span className="ref" style={{ fontSize: 18 }}>{job.ref}</span>
+        <div>
+          <span className="ref" style={{ fontSize: 18 }}>{job.ref}</span>
+          {typeLabel && (
+            <div className="muted" style={{ fontSize: 13, textTransform: "capitalize" }}>{typeLabel}</div>
+          )}
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           {job.status !== "cancelled" && (
             <button className="btn btn-ghost" style={{ marginTop: 0, padding: "4px 8px" }}
@@ -211,6 +220,12 @@ export default function Job() {
           <div className="row" style={{ marginTop: 4 }}>
             <span className="muted">Started</span>
             <span style={{ fontWeight: 600 }}>{new Date(job.started_at).toLocaleDateString()}</span>
+          </div>
+        )}
+        {job.client_ref && (
+          <div className="row" style={{ marginTop: 4 }}>
+            <span className="muted">Reference</span>
+            <span style={{ fontWeight: 600 }}>{job.client_ref}</span>
           </div>
         )}
         <div className="row" style={{ marginTop: 4 }}>

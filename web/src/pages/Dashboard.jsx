@@ -11,7 +11,7 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ type: "move", origin: "", destination: "", date: "", time: "", items: "" });
+  const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "" });
 
   const load = () =>
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
@@ -37,6 +37,7 @@ export default function Dashboard() {
       tenant_id: profile.tenant_id, type: form.type,
       origin: form.origin ? { address: form.origin } : null,
       destination: form.destination ? { address: form.destination } : null,
+      client_ref: form.client_ref || null,
       scheduled_date: form.date || null, time_window: form.time || null,
       status: "confirmed", created_by: profile.id,
     }).select().single();
@@ -109,6 +110,9 @@ export default function Dashboard() {
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
             {jobTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
+          <label>Client reference</label>
+          <input value={form.client_ref} placeholder="Stevenson Gallery / Wendy, PO-4471"
+            onChange={(e) => setForm({ ...form, client_ref: e.target.value })} />
           <label>Origin address</label>
           <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
           <label>Destination address</label>

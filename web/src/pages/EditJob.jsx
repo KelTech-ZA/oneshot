@@ -33,7 +33,8 @@ export default function EditJob() {
         .select("*").eq("job_id", id).order("created_at");
 
       setF({
-        type: j.type, scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
+        type: j.type, client_ref: j.client_ref ?? "",
+        scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
         o_addr: j.origin?.address ?? "", o_name: j.origin?.contact_name ?? "", o_phone: j.origin?.contact_phone ?? "",
         d_addr: j.destination?.address ?? "", d_name: j.destination?.contact_name ?? "", d_phone: j.destination?.contact_phone ?? "",
         _job: j,
@@ -73,6 +74,7 @@ export default function EditJob() {
   const save = async () => {
     const patch = {
       type: f.type,
+      client_ref: f.client_ref || null,
       scheduled_date: f.scheduled_date || null,
       time_window: f.time_window || null,
       origin: { ...(f._job.origin ?? {}), address: f.o_addr || null, contact_name: f.o_name || null, contact_phone: f.o_phone || null },
@@ -213,6 +215,7 @@ export default function EditJob() {
           {f.type && !jobTypes.some((t) => t.key === f.type) &&
             <option value={f.type}>{f.type} (retired)</option>}
         </select>
+        {inp("client_ref", "Client reference", "Stevenson Gallery / Wendy, PO-4471")}
         <label>Booked date</label>
         <input type="date" value={f.scheduled_date} onChange={(e) => setF({ ...f, scheduled_date: e.target.value })} />
         {inp("time_window", "Time window", "09:00–12:00")}

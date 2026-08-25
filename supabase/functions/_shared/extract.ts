@@ -1,14 +1,15 @@
 // Shared LLM extraction — classifies an inbound message and extracts job fields.
 // Used by intake-email and intake-whatsapp.
 
-const SYSTEM = `You are the intake parser for OneShot, a logistics job system.
+const buildSystem = (jobTypes: string) => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
 {
  "kind": "request" | "amendment" | "status_query" | "chatter",
  "confidence": 0.0-1.0,
  "existing_job_ref": "JOB-YYYY-NNNN or null",
  "job": {
-   "type": "pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null,
+   "type": ${jobTypes},
+   "client_ref": "the requester's own reference for this job, or null",
    "origin": {"label":null,"address":null,"contact_name":null,"contact_phone":null} | null,
    "destination": { same shape } | null,
    "scheduled_date": "YYYY-MM-DD or null (resolve relative dates against message date, timezone Africa/Johannesburg)",
@@ -20,6 +21,26 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
  "missing": ["field names required but absent"],
  "amendment_changes": {"field":"new value"} | null
 }
+
+ITEM FIELDS — keep these strictly separate. This matters more than anything else:
+- "description" is WHAT THE OBJECT IS, as a short noun phrase: "Crate", "Framed painting",
+  "Bronze sculpture", "Pallet of catalogues". Two or three words. NEVER put measurements,
+  dates, addresses, instructions or prices in it.
+- "dimensions" holds measurements ONLY, verbatim as written: "138 x 118 x 42 cm (h)".
+  If the message gives sizes, they belong here and must NOT also appear in description.
+- "special_handling" holds instructions: "pack on arrival", "glass side up", "two-person lift".
+- "quantity" is the count. "1x crate of 138 x 118 x 42cm" is ONE item, quantity 1,
+  description "Crate", dimensions "138 x 118 x 42 cm". Do not repeat the count in description.
+- A line like "5 crates: 79x62x46 (x2), 73x62x47 (x2), 79x66x54 (x1)" is THREE item entries
+  with quantities 2, 2 and 1 — not one item and not five identical ones.
+
+"type" must be one of the keys listed above, chosen by what the work IS: building or making
+something, installing it, moving it, storing it, collecting it. If none fits, use null.
+
+"client_ref": if the sender names the job in their own terms — a gallery and contact
+("Stevenson / Wendy"), a PO or quote number, an exhibition or project name — put it here
+verbatim. Do not invent one.
+
 Rules: identity_tier 1 = visually unique (artworks, antiques, custom furniture);
 2 = has serial/label/barcode; 3 = commodity/identical units.
 kind=chatter for greetings, logistics banter, anything that is not a work request.
@@ -30,13 +51,14 @@ fields where relevant). Provider verification emails (e.g. a Gmail forwarding co
 code) are kind=chatter — never a job.
 A job requires: a type, at least one of origin/destination, at least one item. List anything absent in "missing".`;
 
+
 export interface Extraction {
   kind: string; confidence: number; existing_job_ref: string | null;
   job: Record<string, unknown> | null; missing: string[];
   amendment_changes: Record<string, unknown> | null;
 }
 
-export async function extract(body: string, meta: string): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string): Promise<Extraction> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -47,7 +69,7 @@ export async function extract(body: string, meta: string): Promise<Extraction> {
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: 1500,
-      system: SYSTEM,
+      system: buildSystem(jobTypes),
       messages: [{ role: "user", content: `Message date: ${new Date().toISOString()}\n${meta}\n---\n${body}` }],
     }),
   });
@@ -61,8 +83,17 @@ export async function extract(body: string, meta: string): Promise<Extraction> {
 // Creates message + (job + items) rows. Returns a human summary for the reply.
 // deno-lint-ignore no-explicit-any
 export async function ingest(sb: any, tenantId: string, channel: string, sender: string, subject: string | null, body: string, raw: unknown): Promise<string> {
+  // The workspace defines its own job types, so the parser is told about
+  // theirs rather than a list hardcoded here.
+  const { data: types } = await sb.from("job_types")
+    .select("key,label").eq("tenant_id", tenantId).eq("active", true).order("sort");
+  const typeList = (types ?? []).length
+    ? (types as { key: string; label: string }[])
+        .map((t) => `"${t.key}" (${t.label})`).join(" | ") + " | null"
+    : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
+
   let ex: Extraction;
-  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`); }
+  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList); }
   catch (_e) { ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction; }
 
   const { data: msg } = await sb.from("messages").insert({
@@ -93,6 +124,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   const flags = (ex.missing ?? []).map((m) => `missing_info:${m}`);
   const { data: job } = await sb.from("jobs").insert({
     tenant_id: tenantId, type: j.type ?? "move", origin: j.origin, destination: j.destination,
+    client_ref: j.client_ref ?? null,
     scheduled_date: j.scheduled_date, time_window: j.time_window,
     hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
   }).select().single();

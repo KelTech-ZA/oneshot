@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { JobStamp } from "./Today";
 import { supabase } from "../lib/supabase";
@@ -45,7 +45,13 @@ export default function JobList({ jobs, canDelete = false }) {
   const { profile } = useContext(Ctx);
   const [removed, setRemoved] = useState(new Set());
   const [busyId, setBusyId] = useState(null);
+  const [typeLabels, setTypeLabels] = useState({});
   const isOps = profile?.role === "ops";
+
+  useEffect(() => {
+    supabase.from("job_types").select("key,label")
+      .then(({ data }) => setTypeLabels(Object.fromEntries((data ?? []).map((r) => [r.key, r.label]))));
+  }, []);
 
   // Ops may delete a job only while it carries no custody evidence.
   // Once events exist the record is permanent - that is the whole point.
@@ -129,8 +135,9 @@ export default function JobList({ jobs, canDelete = false }) {
           <div style={{ margin: "6px 0 4px", fontWeight: 600 }}>
             {j.origin?.label || j.origin?.address || "—"} → {j.destination?.label || j.destination?.address || "—"}
           </div>
+          {j.client_ref && <div className="muted" style={{ fontSize: 13 }}>Ref: {j.client_ref}</div>}
           <div className="muted">
-            {j.line_items?.[0]?.count ?? 0} item(s) · {j.scheduled_date ?? "unscheduled"}
+            {typeLabels[j.type] ?? j.type} · {j.line_items?.[0]?.count ?? 0} item(s) · {j.scheduled_date ?? "unscheduled"}
             {j.time_window ? ` · ${j.time_window}` : ""}
           </div>
           {isOps && canDelete && (
