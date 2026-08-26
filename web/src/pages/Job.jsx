@@ -233,6 +233,14 @@ export default function Job() {
             <span style={{ fontWeight: 600 }}>{job.client_ref}</span>
           </div>
         )}
+        {job.last_amended_at && (
+          <div className="row" style={{ marginTop: 4 }}>
+            <span className="muted">{job.last_amended_label ?? "Amended"}</span>
+            <span style={{ fontWeight: 600 }}>
+              {names[job.last_amended_by] ?? "team member"} · {new Date(job.last_amended_at).toLocaleDateString("en-ZA")}
+            </span>
+          </div>
+        )}
         <div className="row" style={{ marginTop: 4 }}>
           <span className="muted">Photos logged</span>
           <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path && e.item_id).length}</span>
