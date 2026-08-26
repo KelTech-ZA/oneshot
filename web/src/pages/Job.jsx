@@ -42,7 +42,10 @@ export default function Job() {
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
   const jobOpen = job && !["closed", "completed", "cancelled"].includes(job.status);
-  const jobActive = job && ["confirmed", "assigned", "accepted", "in_progress"].includes(job.status);
+  // Crew must be able to log events until ops deliberately close the job.
+  // "completed" is INFERRED - one item delivered can set it - so it must never
+  // remove the controls from items that are still outstanding.
+  const jobActive = job && !["closed", "cancelled"].includes(job.status);
 
   const load = async () => {
     const { data: j } = await supabase.from("jobs").select("*").eq("id", id).single();
