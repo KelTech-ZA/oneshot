@@ -56,6 +56,18 @@ verbatim. Do not invent one.
 Rules: identity_tier 1 = visually unique (artworks, antiques, custom furniture);
 2 = has serial/label/barcode; 3 = commodity/identical units.
 kind=chatter for greetings, logistics banter, anything that is not a work request.
+
+DECIDING request vs chatter - read the WHOLE message before deciding:
+- If the message contains a collection, delivery or site address AND any items
+  (named, listed, or shown by [IMAGE n] markers), it IS a request. It stays a
+  request even when the same email also carries internal commentary, staff
+  instructions, forwarded discussion, or remarks about the OneShot system
+  itself. Ignore the surrounding talk and extract the job underneath it.
+- An email whose items are only photographs is a request, not chatter.
+- Confidence reflects how well you read the JOB, not how tidy the email was.
+  A clear address and clear items is high confidence even in a messy thread.
+- Only chatter when there is genuinely no job present: no addresses, no items,
+  nothing to move, make, pack or install.
 FORWARDED EMAILS: many requests arrive forwarded by staff. If the body contains a forwarded
 message (Fwd:, "---------- Forwarded message", "From: ... Sent: ..."), extract the job from the
 ORIGINAL message and treat the original sender as the requester (note them in origin/contact
@@ -109,7 +121,7 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
 
 // Creates message + (job + items) rows. Returns a human summary for the reply.
 // deno-lint-ignore no-explicit-any
-export async function ingest(sb: any, tenantId: string, channel: string, sender: string, subject: string | null, body: string, raw: unknown): Promise<string> {
+export async function ingest(sb: any, tenantId: string, channel: string, sender: string, subject: string | null, body: string, raw: unknown, images: InboundImage[] = []): Promise<string> {
   // The workspace defines its own job types, so the parser is told about
   // theirs rather than a list hardcoded here.
   const { data: types } = await sb.from("job_types")
@@ -121,14 +133,21 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
 
   let ex: Extraction;
   try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList, images); }
-  catch (_e) { ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction; }
+  catch (e) {
+    console.error("ingest: extraction failed:", e instanceof Error ? e.message : String(e));
+    ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+  }
 
   const { data: msg } = await sb.from("messages").insert({
     tenant_id: tenantId, channel, kind: ex.kind ?? "unknown",
     sender, subject, body, raw,
   }).select().single();
 
-  if (ex.kind === "chatter" || ex.confidence < 0.5) return "";
+  console.log(`ingest: kind=${ex.kind} confidence=${ex.confidence} items=${(ex.job as { items?: unknown[] } | null)?.items?.length ?? 0} images=${images.length} bodyChars=${body.length}`);
+  if (ex.kind === "chatter" || ex.confidence < 0.5) {
+    console.log("ingest: not treated as a job. Body began:", body.slice(0, 400).replace(/\s+/g, " "));
+    return "";
+  }
 
   // Amendment to an existing job
   if (ex.kind === "amendment" && ex.existing_job_ref) {
