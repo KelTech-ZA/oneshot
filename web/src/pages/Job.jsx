@@ -38,6 +38,7 @@ export default function Job() {
   const [stops, setStops] = useState([]);
   const [pickedBulk, setPickedBulk] = useState("");
   const [pickedItem, setPickedItem] = useState("");
+  const [pickedJob, setPickedJob] = useState("");
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
@@ -317,12 +318,37 @@ export default function Job() {
       </div>
 
       <h2>Job Status</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
-        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("collected")}>Collected</button>
-        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("in_transit")}>In Transit</button>
-        <button className="btn btn-ghost" disabled={busy} onClick={() => logJobEvent("delivered")}>Delivered</button>
-        {isOps && <button className="btn btn-warn" disabled={busy} onClick={() => logJobEvent("closed")}>Close Job</button>}
+      {/* Reads the workspace's own event types, so a fabrication job can be
+          marked Built here and not just Delivered. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 6 }}>
+        {eventTypes.filter((t) => t.quick).map((t) => (
+          <button key={t.key} className="btn btn-ghost" disabled={busy}
+            onClick={() => logJobEvent(t.key)}>
+            {t.label}
+          </button>
+        ))}
       </div>
+      {eventTypes.some((t) => !t.quick) && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          <select style={{ flex: 1, marginBottom: 0 }} value={pickedJob}
+            onChange={(e) => setPickedJob(e.target.value)}>
+            <option value="">Other event for the whole job…</option>
+            {eventTypes.filter((t) => !t.quick).map((t) => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
+          <button className="btn btn-ghost" style={{ marginTop: 0 }} disabled={busy || !pickedJob}
+            onClick={() => { logJobEvent(pickedJob); setPickedJob(""); }}>
+            Log
+          </button>
+        </div>
+      )}
+      {isOps && (
+        <button className="btn btn-warn" style={{ marginTop: 0, marginBottom: 12 }} disabled={busy}
+          onClick={() => logJobEvent("closed")}>
+          Close Job
+        </button>
+      )}
 
       {jobActive && (
         <button className="btn btn-accent" style={{ marginBottom: 12 }}
