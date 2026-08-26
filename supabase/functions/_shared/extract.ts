@@ -16,7 +16,8 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
    "time_window": "text or null",
    "hard_deadline": bool,
    "items": [{"description":"","quantity":1,"identity_tier":1|2|3,
-              "dimensions":null,"declared_value":null,"special_handling":null}]
+              "dimensions":null,"declared_value":null,"special_handling":null,
+              "image_indexes":[]}]
  } | null,
  "missing": ["field names required but absent"],
  "amendment_changes": {"field":"new value"} | null
@@ -29,6 +30,17 @@ ITEM FIELDS — keep these strictly separate. This matters more than anything el
 - "dimensions" holds measurements ONLY, verbatim as written: "138 x 118 x 42 cm (h)".
   If the message gives sizes, they belong here and must NOT also appear in description.
 - "special_handling" holds instructions: "pack on arrival", "glass side up", "two-person lift".
+- "image_indexes": the photographs that show THIS item, as numbers. The body
+  contains markers like [IMAGE 1], [IMAGE 2] placed exactly where each photo
+  appeared in the original email. "Item 1: [IMAGE 3]" means item 1 is shown by
+  image 3. Use the markers for the mapping - they are positional truth. Look at
+  the photographs to write the description ("Framed work on paper", "Ceramic
+  vessel", "Bronze sculpture") and to read any dimensions written on labels or
+  crates. If a line names an item but no marker follows, leave image_indexes
+  empty. Never guess a mapping the markers do not support.
+- An email whose items are ONLY photographs is still a valid request: nine
+  markers under nine "Item N:" headings means nine items, described from the
+  pictures.
 - "quantity" is the count. "1x crate of 138 x 118 x 42cm" is ONE item, quantity 1,
   description "Crate", dimensions "138 x 118 x 42 cm". Do not repeat the count in description.
 - A line like "5 crates: 79x62x46 (x2), 73x62x47 (x2), 79x66x54 (x1)" is THREE item entries
@@ -52,13 +64,19 @@ code) are kind=chatter — never a job.
 A job requires: a type, at least one of origin/destination, at least one item. List anything absent in "missing".`;
 
 
+export interface InboundImage {
+  media_type: string;   // image/jpeg, image/png
+  data: string;         // base64, no data: prefix
+  filename?: string;
+}
+
 export interface Extraction {
   kind: string; confidence: number; existing_job_ref: string | null;
   job: Record<string, unknown> | null; missing: string[];
   amendment_changes: Record<string, unknown> | null;
 }
 
-export async function extract(body: string, meta: string, jobTypes: string): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = []): Promise<Extraction> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -70,7 +88,16 @@ export async function extract(body: string, meta: string, jobTypes: string): Pro
       model: "claude-sonnet-4-6",
       max_tokens: 1500,
       system: buildSystem(jobTypes),
-      messages: [{ role: "user", content: `Message date: ${new Date().toISOString()}\n${meta}\n---\n${body}` }],
+      messages: [{
+        role: "user",
+        content: [
+          ...images.map((im, i) => ([
+            { type: "text", text: `[IMAGE ${i + 1}]` },
+            { type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } },
+          ])).flat(),
+          { type: "text", text: `${meta}\n\n${body}` },
+        ],
+      }],
     }),
   });
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
@@ -93,7 +120,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
   let ex: Extraction;
-  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList); }
+  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList, images); }
   catch (_e) { ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction; }
 
   const { data: msg } = await sb.from("messages").insert({
@@ -130,14 +157,52 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   }).select().single();
   await sb.from("messages").update({ job_id: job.id }).eq("id", msg.id);
 
-  const items = ((j.items ?? []) as Record<string, unknown>[]).flatMap((it) =>
+  // Keep each row's source item alongside it, so its photographs can be
+  // attached after insert. A quantity of 3 makes 3 rows that share the photos.
+  const rows = ((j.items ?? []) as Record<string, unknown>[]).flatMap((it) =>
     Array.from({ length: Number(it.quantity ?? 1) }, () => ({
-      tenant_id: tenantId, job_id: job.id, description: it.description ?? "Item",
-      identity_tier: it.identity_tier ?? 1,
-      attributes: { dimensions: it.dimensions, declared_value: it.declared_value, special_handling: it.special_handling },
+      row: {
+        tenant_id: tenantId, job_id: job.id, description: it.description ?? "Item",
+        identity_tier: it.identity_tier ?? 1,
+        attributes: { dimensions: it.dimensions, declared_value: it.declared_value, special_handling: it.special_handling },
+      },
+      imageIdx: (Array.isArray(it.image_indexes) ? it.image_indexes as number[] : [])
+        .map((n) => Number(n) - 1)               // prompt is 1-based
+        .filter((n) => n >= 0 && n < images.length),
     })));
-  if (items.length) await sb.from("line_items").insert(items);
+
+  const items = rows.map((r) => r.row);
+  let inserted: { id: string }[] = [];
+  if (items.length) {
+    const { data } = await sb.from("line_items").insert(items).select("id");
+    inserted = data ?? [];
+  }
+
+  // Store the photographs against the item each one shows.
+  let photosSaved = 0;
+  for (let i = 0; i < inserted.length && i < rows.length; i++) {
+    const idxs = rows[i].imageIdx.slice(0, 3);     // db caps at 3 per item
+    for (const idx of idxs) {
+      const im = images[idx];
+      if (!im) continue;
+      try {
+        const ext = im.media_type === "image/png" ? "png" : "jpg";
+        const path = `${tenantId}/${job.id}/${inserted[i].id}/intake-${idx + 1}.${ext}`;
+        const bytes = Uint8Array.from(atob(im.data), (c) => c.charCodeAt(0));
+        const { error: upErr } = await sb.storage.from("photos")
+          .upload(path, bytes, { contentType: im.media_type, upsert: true });
+        if (upErr) { console.error("intake photo upload failed:", upErr.message); continue; }
+        const { error: dbErr } = await sb.from("item_photos").insert({
+          tenant_id: tenantId, job_id: job.id, item_id: inserted[i].id, path,
+        });
+        if (dbErr) { console.error("intake photo record failed:", dbErr.message); continue; }
+        photosSaved++;
+      } catch (e) {
+        console.error("intake photo error:", e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
 
   const miss = ex.missing?.length ? ` Missing: ${ex.missing.join(", ")}.` : "";
-  return `${job.ref} created — ${items.length} item(s), pending confirmation.${miss}`;
+  return `${job.ref} created — ${items.length} item(s)${photosSaved ? `, ${photosSaved} photo(s)` : ""}, pending confirmation.${miss}`;
 }
