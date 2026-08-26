@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import ClashWarning from "./ClashWarning";
 import ItemDocuments from "./ItemDocuments";
+import JobStops, { KINDS, stopName } from "./JobStops";
 import { Ctx } from "../main";
 
 // Ops-only tap-to-edit fallback (spec 2.4): conversation is the front door,
@@ -21,6 +22,7 @@ export default function EditJob() {
   const [msg, setMsg] = useState("");
   const [loadErr, setLoadErr] = useState("");
   const [eventCounts, setEventCounts] = useState({});  // item_id -> custody events
+  const [stops, setStops] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -31,6 +33,10 @@ export default function EditJob() {
 
       const { data: it } = await supabase.from("line_items")
         .select("*").eq("job_id", id).order("created_at");
+
+      const { data: st } = await supabase.from("job_stops")
+        .select("*").eq("job_id", id).order("kind").order("seq");
+      setStops(st ?? []);
 
       setF({
         type: j.type, client_ref: j.client_ref ?? "",
@@ -77,8 +83,7 @@ export default function EditJob() {
       client_ref: f.client_ref || null,
       scheduled_date: f.scheduled_date || null,
       time_window: f.time_window || null,
-      origin: { ...(f._job.origin ?? {}), address: f.o_addr || null, contact_name: f.o_name || null, contact_phone: f.o_phone || null },
-      destination: { ...(f._job.destination ?? {}), address: f.d_addr || null, contact_name: f.d_name || null, contact_phone: f.d_phone || null },
+      // origin/destination are maintained by the job_stops trigger.
       updated_at: new Date().toISOString(),
     };
     await supabase.from("jobs").update(patch).eq("id", id);
@@ -113,6 +118,22 @@ export default function EditJob() {
     setNewItem("");
     const { data: it } = await supabase.from("line_items").select("*").eq("job_id", id).order("created_at");
     setItems(it ?? []);
+  };
+
+  const reloadStops = async () => {
+    const { data } = await supabase.from("job_stops")
+      .select("*").eq("job_id", id).order("kind").order("seq");
+    setStops(data ?? []);
+    const { data: fresh } = await supabase.from("line_items")
+      .select("*").eq("job_id", id).order("created_at");
+    setItems(fresh ?? []);
+  };
+
+  const setItemStop = async (it, field, stopId) => {
+    const { error } = await supabase.from("line_items")
+      .update({ [field]: stopId || null }).eq("id", it.id);
+    if (error) { setMsg(error.message); return; }
+    setItems((cur) => cur.map((x) => (x.id === it.id ? { ...x, [field]: stopId || null } : x)));
   };
 
   const loadPhotos = async (list) => {
@@ -222,19 +243,18 @@ export default function EditJob() {
         <ClashWarning date={f.scheduled_date} timeWindow={f.time_window} excludeId={id} />
       </div>
 
-      <h2>Origin</h2>
-      <div className="card">
-        {inp("o_addr", "Address")}
-        {inp("o_name", "Contact name")}
-        {inp("o_phone", "Contact phone")}
-      </div>
+      <JobStops jobId={id} tenantId={f._job.tenant_id} stops={stops}
+        onChange={reloadStops} setMsg={setMsg} />
 
-      <h2>Destination</h2>
-      <div className="card">
-        {inp("d_addr", "Address")}
-        {inp("d_name", "Contact name")}
-        {inp("d_phone", "Contact phone")}
-      </div>
+      {!stops.some((x) => x.kind === "delivery" || x.kind === "site") && (
+        <div className="card" style={{ borderLeft: "3px solid var(--warn)" }}>
+          <div style={{ fontWeight: 600, color: "var(--warn)" }}>No destination yet</div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+            Add a delivery address, or a site if the work happens in one place.
+            Without it the crew has nowhere to take this.
+          </div>
+        </div>
+      )}
 
       <h2>Items</h2>
       <div className="card">
@@ -257,6 +277,31 @@ export default function EditJob() {
               value={edits[it.id]?.special_handling ?? it.attributes?.special_handling ?? ""}
               placeholder="Pack on arrival, glass side up…"
               onChange={(ev) => setEdits({ ...edits, [it.id]: { ...edits[it.id], special_handling: ev.target.value } })} />
+
+            {stops.length > 1 && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <label>Collected from</label>
+                  <select value={it.from_stop_id ?? ""}
+                    onChange={(e) => setItemStop(it, "from_stop_id", e.target.value)}>
+                    <option value="">—</option>
+                    {stops.filter((x) => x.kind === "collection").map((x) => (
+                      <option key={x.id} value={x.id}>{stopName(x)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Going to</label>
+                  <select value={it.to_stop_id ?? ""}
+                    onChange={(e) => setItemStop(it, "to_stop_id", e.target.value)}>
+                    <option value="">—</option>
+                    {stops.filter((x) => x.kind === "delivery" || x.kind === "site").map((x) => (
+                      <option key={x.id} value={x.id}>{stopName(x)}{x.kind === "site" ? " (site)" : ""}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <label>Reference photos ({photos[it.id]?.length ?? 0}/3)</label>
             {!!photos[it.id]?.length && (

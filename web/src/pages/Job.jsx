@@ -4,6 +4,7 @@ import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
+import { stopName } from "./JobStops";
 
 const ITEM_STAMP = {
   expected: ["pending", "EXPECTED"], collected: ["live", "COLLECTED"],
@@ -34,6 +35,7 @@ export default function Job() {
   const [busy, setBusy] = useState(false);
   const [eventTypes, setEventTypes] = useState([]);
   const [typeLabel, setTypeLabel] = useState("");
+  const [stops, setStops] = useState([]);
   const [pickedBulk, setPickedBulk] = useState("");
   const [pickedItem, setPickedItem] = useState("");
 
@@ -50,6 +52,9 @@ export default function Job() {
     const { data: et } = await supabase.from("event_types")
       .select("key,label,quick").eq("active", true).order("sort");
     setEventTypes(et ?? []);
+    const { data: st } = await supabase.from("job_stops")
+      .select("*").eq("job_id", id).order("kind").order("seq");
+    setStops(st ?? []);
     const { data: jt } = await supabase.from("job_types")
       .select("key,label").eq("key", j?.type ?? "").maybeSingle();
     setTypeLabel(jt?.label ?? (j?.type ? String(j.type).replace(/_/g, " ") : ""));
@@ -234,6 +239,31 @@ export default function Job() {
         </div>
       </div>
 
+      {stops.length > 2 && (
+        <div className="card">
+          {["collection", "delivery", "site"].map((kind) => {
+            const list = stops.filter((x) => x.kind === kind);
+            if (!list.length) return null;
+            const heading = kind === "collection" ? "Collect from" : kind === "delivery" ? "Deliver to" : "On site at";
+            return (
+              <div key={kind} style={{ marginBottom: 8 }}>
+                <div className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: ".1em" }}>
+                  {heading}
+                </div>
+                {list.map((st) => (
+                  <div key={st.id} style={{ marginTop: 2 }}>
+                    <span style={{ fontWeight: 600 }}>{stopName(st)}</span>
+                    {st.label && st.address && <span className="muted"> · {st.address}</span>}
+                    {st.contact_name && <span className="muted"> · {st.contact_name}</span>}
+                    {st.contact_phone && <> <a href={`tel:${st.contact_phone}`}>{st.contact_phone}</a></>}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="card">
         {job.origin && (
           <div className="muted" style={{ marginBottom: 6 }}>
@@ -332,6 +362,11 @@ export default function Job() {
                     : <div className="thumb" aria-hidden="true" />}
                   <div>
                     <div style={{ fontWeight: 600 }}>{it.description}</div>
+                    {stops.filter((x) => x.kind === "delivery" || x.kind === "site").length > 1 && (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        → {stopName(stops.find((x) => x.id === it.to_stop_id)) }
+                      </div>
+                    )}
                     <div className="muted">
                       {it.attributes?.needs_details && <span style={{ color: "var(--warn)" }}>⚠ needs details · </span>}
                       Tier {it.identity_tier} · {photoCount(it.id) > 0
