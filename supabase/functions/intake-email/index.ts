@@ -81,8 +81,15 @@ Deno.serve(async (req) => {
   const images: InboundImage[] = [];
   const cidOrder: string[] = [];
   try {
-    const { data: atts } = await resend.emails.receiving.attachments.list({ emailId });
-    const pics = (atts ?? []).filter((a: Record<string, unknown>) =>
+    const { data: attRes } = await resend.emails.receiving.attachments.list({ emailId });
+    // The SDK returns a list OBJECT: { object: "list", data: [...] }.
+    // Accept either shape so a future SDK change cannot silently drop images.
+    const atts: Record<string, unknown>[] = Array.isArray(attRes)
+      ? attRes
+      : ((attRes as { data?: unknown } | null)?.data as Record<string, unknown>[] ?? []);
+    console.log(`intake-email: ${atts.length} attachment(s) listed`);
+
+    const pics = atts.filter((a: Record<string, unknown>) =>
       String(a.content_type ?? "").startsWith("image/") && Number(a.size ?? 0) <= MAX_BYTES);
 
     // Order by appearance in the HTML when we can; fall back to list order.
