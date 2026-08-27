@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { JobStamp } from "./Today";
-import { supabase } from "../lib/supabase";
+import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { Ctx } from "../main";
 
 // Shared chronological job list.
@@ -53,31 +53,41 @@ export default function JobList({ jobs, canDelete = false }) {
       .then(({ data }) => setTypeLabels(Object.fromEntries((data ?? []).map((r) => [r.key, r.label]))));
   }, []);
 
-  // Ops may delete a job only while it carries no custody evidence.
-  // Once events exist the record is permanent - that is the whole point.
+  // Ops may delete any job, including one that carries custody evidence -
+  // duplicates from a mis-parsed date are common and leaving them undeletable
+  // makes a mess of the dashboard. The deletion is never silent: delete-job
+  // records what was removed, by whom, in deleted_jobs.
   const deleteJob = async (e, j) => {
     e.preventDefault();
     e.stopPropagation();
     setBusyId(j.id);
     try {
-      const { count, error: cErr } = await supabase
+      const { count } = await supabase
         .from("custody_events")
         .select("id", { count: "exact", head: true })
         .eq("job_id", j.id);
-      if (cErr) { window.alert("Could not check job history: " + cErr.message); return; }
-      if (count && count > 0) {
-        window.alert(
-          `${j.ref} has ${count} custody event(s) and cannot be deleted.\n\n` +
-          "Cancel it instead - the photographic record is your proof of custody."
-        );
+
+      const evidence = count ?? 0;
+      if (evidence > 0) {
+        const typed = window.prompt(
+          `${j.ref} has ${evidence} custody event(s) — photos and timestamps that may be your proof of handling.\n\n` +
+          `Deleting is permanent. The record of the deletion is kept, the evidence is not.\n\n` +
+          `Type ${j.ref} to confirm:`);
+        if (typed?.trim().toUpperCase() !== j.ref.toUpperCase()) return;
+      } else if (!window.confirm(`Delete ${j.ref}? This cannot be undone.`)) {
         return;
       }
-      if (!window.confirm(`Delete ${j.ref} permanently? This cannot be undone.`)) return;
 
-      const { error: liErr } = await supabase.from("line_items").delete().eq("job_id", j.id);
-      if (liErr) { window.alert("Could not delete items: " + liErr.message); return; }
-      const { error: jErr } = await supabase.from("jobs").delete().eq("id", j.id);
-      if (jErr) { window.alert("Could not delete job: " + jErr.message); return; }
+      const reason = window.prompt("Why is it being deleted? (optional, kept on record)") ?? null;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/delete-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ job_id: j.id, reason }),
+      });
+      const result = await res.json();
+      if (result.error) { window.alert("Could not delete: " + result.error); return; }
 
       setRemoved((prev) => new Set(prev).add(j.id));
       window.dispatchEvent(new Event("queue-updated"));
