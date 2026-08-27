@@ -277,27 +277,45 @@ export default function Job() {
       )}
 
       <div className="card">
-        {job.origin && (
-          <div className="muted" style={{ marginBottom: 6 }}>
-            <strong>From:</strong> {job.origin.address}{job.origin.contact_name && ` · ${job.origin.contact_name}`}
-          </div>
-        )}
-        {job.destination && (
-          <div className="muted" style={{ marginBottom: 6 }}>
-            <strong>To:</strong> {job.destination.address}{job.destination.contact_name && ` · ${job.destination.contact_name}`}
-          </div>
-        )}
-        {job.destination?.contact_name && (
-          <div className="muted" style={{ marginTop: 6 }}>
-            Delivery contact: {job.destination.contact_name}{" "}
-            {job.destination.contact_phone && <a href={`tel:${job.destination.contact_phone}`}>{job.destination.contact_phone}</a>}
-          </div>
-        )}
-        {job.origin?.contact_name && (
-          <div className="muted" style={{ marginTop: 6 }}>
-            Contact: {job.origin.contact_name}{" "}
-            {job.origin.contact_phone && <a href={`tel:${job.origin.contact_phone}`}>{job.origin.contact_phone}</a>}
-          </div>
+        {/* Addresses come from job_stops, which is where they are edited.
+            jobs.origin / jobs.destination are a mirror kept for older screens
+            and can lag; reading them here showed a blank "From:" while the
+            stop itself held the address. Falls back to the mirror only when a
+            job has no stops at all. */}
+        {(() => {
+          const shown = [
+            ...stops.filter((x) => x.kind === "collection")
+              .map((x) => ({ ...x, heading: "From:" })),
+            ...stops.filter((x) => x.kind === "delivery")
+              .map((x) => ({ ...x, heading: "To:" })),
+            ...stops.filter((x) => x.kind === "site")
+              .map((x) => ({ ...x, heading: "On site:" })),
+          ].filter((x) => x.address || x.label);
+
+          if (!shown.length) {
+            return (<>
+              {job.origin?.address && (
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  <strong>From:</strong> {job.origin.address}
+                </div>
+              )}
+              {job.destination?.address && (
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  <strong>To:</strong> {job.destination.address}
+                </div>
+              )}
+            </>);
+          }
+
+          return shown.map((st) => (
+            <div className="muted" key={st.id} style={{ marginBottom: 6 }}>
+              <strong>{st.heading}</strong> {st.address || st.label}
+              {st.address && st.label && st.label !== st.address && ` (${st.label})`}
+              {st.contact_name && ` · ${st.contact_name}`}
+              {st.contact_phone && <> · <a href={`tel:${st.contact_phone}`}>{st.contact_phone}</a></>}
+            </div>
+          ));
+        })()}
         )}
         <div className="muted" style={{ marginTop: 6 }}>
           {job.scheduled_date ?? "unscheduled"}{job.time_window ? ` · ${job.time_window}` : ""}{job.hard_deadline ? " · HARD DEADLINE" : ""}
