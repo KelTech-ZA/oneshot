@@ -310,13 +310,12 @@ export default function Job() {
           return shown.map((st) => (
             <div className="muted" key={st.id} style={{ marginBottom: 6 }}>
               <strong>{st.heading}</strong> {st.address || st.label}
-              {st.address && st.label && st.label !== st.address && ` (${st.label})`}
+              {st.address && st.label?.trim() && st.label.trim() !== st.address.trim() && ` (${st.label.trim()})`}
               {st.contact_name && ` · ${st.contact_name}`}
               {st.contact_phone && <> · <a href={`tel:${st.contact_phone}`}>{st.contact_phone}</a></>}
             </div>
           ));
         })()}
-        )}
         <div className="muted" style={{ marginTop: 6 }}>
           {job.scheduled_date ?? "unscheduled"}{job.time_window ? ` · ${job.time_window}` : ""}{job.hard_deadline ? " · HARD DEADLINE" : ""}
         </div>
