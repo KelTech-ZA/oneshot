@@ -86,6 +86,45 @@
       font-family: var(--mono); font-size: 12px; letter-spacing:.08em;
       padding: 8px 14px; border-radius: 999px; z-index: 10; }
     .empty { text-align:center; color: var(--ink-soft); padding: 48px 16px; }
+    /* ---- wide screens ----------------------------------------------------
+       720px is a reading width, not an accident: long lines are harder to
+       scan, so the job page and forms stay narrow. But a list of twenty jobs
+       has no reason to waste two thirds of a monitor, so card lists flow into
+       columns instead. Only pages that actually contain a card list widen -
+       :has() picks them out, and browsers without it keep today's layout. */
+    @media (min-width: 960px) {
+      .page:has(> div > a.card) { max-width: 1140px; }
+
+      .page > div:has(> a.card) {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+        gap: 12px;
+        align-items: start;
+      }
+      /* the date heading spans the full row */
+      .page > div:has(> a.card) > div:first-child { grid-column: 1 / -1; }
+      .page > div:has(> a.card) > a.card { margin-bottom: 0; }
+
+      /* headings and prose keep the reading width even on a wide page */
+      .page > h1, .page > p { max-width: 720px; }
+    }
+
+    /* ---- Edit job: stop cards side by side ----
+       Collections, deliveries and sites read better as a row than a stack -
+       the whole shape of a job is visible at once. Scoped to the stops region
+       so the forms below it keep their reading width. Everything else on the
+       edit screen is untouched. */
+    @media (min-width: 960px) {
+      .page:has(> .stops) { max-width: 1140px; }
+
+      .stops { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 0 18px; align-items: start; }
+      .stops > h2 { grid-column: 1 / -1; }
+      .stops > .card { margin-bottom: 10px; }
+      /* the add button sits under its own column, not across the row */
+      .stops > .btn { margin-bottom: 14px; }
+    }
+
     @media (prefers-reduced-motion: reduce) { * { transition:none!important; animation:none!important; } }
     @media print {
       .topbar, .btn, .quiet-actions, .syncbadge, .no-print { display: none !important; }

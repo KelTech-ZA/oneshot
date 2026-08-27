@@ -47,7 +47,7 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
   };
 
   return (
-    <>
+    <div className="stops">
       {KINDS.map(({ kind, title, one }) => {
         const list = of(kind);
         // Sites are uncommon, so only show that section once one exists.
@@ -98,6 +98,6 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
           ＋ Add a site address (work happens here, nothing moves)
         </button>
       )}
-    </>
+    </div>
   );
 }
