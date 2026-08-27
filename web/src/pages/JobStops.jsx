@@ -57,9 +57,20 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
   const patch = async (stop, field) => {
     const value = draft[stop.id]?.[field] ?? "";
     if ((stop[field] ?? "") === value) return;          // nothing changed
-    const { error } = await supabase.from("job_stops")
-      .update({ [field]: value || null }).eq("id", stop.id);
-    if (error) { setMsg("Could not save: " + error.message); return; }
+
+    // .select() matters: without it a row blocked by RLS returns success with
+    // nothing changed, and the save fails silently.
+    const { data, error } = await supabase.from("job_stops")
+      .update({ [field]: value || null })
+      .eq("id", stop.id)
+      .select("id");
+
+    if (error) { setMsg(`Could not save ${field}: ${error.message}`); return; }
+    if (!data || data.length === 0) {
+      setMsg("That address was not saved — the database refused the change. "
+        + "You may not have permission to edit this job's addresses.");
+      return;
+    }
     flash(stop.id);
     await onChange();
   };
