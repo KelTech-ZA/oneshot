@@ -73,7 +73,14 @@ message (Fwd:, "---------- Forwarded message", "From: ... Sent: ..."), extract t
 ORIGINAL message and treat the original sender as the requester (note them in origin/contact
 fields where relevant). Provider verification emails (e.g. a Gmail forwarding confirmation
 code) are kind=chatter — never a job.
-A job requires: a type, at least one of origin/destination, at least one item. List anything absent in "missing".`;
+A job requires a type, at least one item, and somewhere for the work to happen.
+WHERE depends on the kind of job:
+- Moving work (collection, delivery, transport) needs an origin AND a destination.
+- Work done in one place - fabrication, building, installation, packing,
+  condition checking - needs only ONE address: where the work happens. Put it in
+  "destination". Do NOT report a missing origin for this kind of job; there is
+  no collection, nothing is being moved from anywhere.
+List genuinely absent fields in "missing", judged against the job type above.`;
 
 
 export interface InboundImage {
@@ -198,29 +205,35 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   }
 
   // Store the photographs against the item each one shows.
+  // Uploaded in parallel - each item's photos are independent, and doing these
+  // one at a time was adding seconds to every intake.
   let photosSaved = 0;
+  const uploads: Promise<void>[] = [];
   for (let i = 0; i < inserted.length && i < rows.length; i++) {
     const idxs = rows[i].imageIdx.slice(0, 3);     // db caps at 3 per item
     for (const idx of idxs) {
       const im = images[idx];
       if (!im) continue;
+      uploads.push((async () => {
       try {
         const ext = im.media_type === "image/png" ? "png" : "jpg";
         const path = `${tenantId}/${job.id}/${inserted[i].id}/intake-${idx + 1}.${ext}`;
         const bytes = Uint8Array.from(atob(im.data), (c) => c.charCodeAt(0));
         const { error: upErr } = await sb.storage.from("photos")
           .upload(path, bytes, { contentType: im.media_type, upsert: true });
-        if (upErr) { console.error("intake photo upload failed:", upErr.message); continue; }
+        if (upErr) { console.error("intake photo upload failed:", upErr.message); return; }
         const { error: dbErr } = await sb.from("item_photos").insert({
           tenant_id: tenantId, job_id: job.id, item_id: inserted[i].id, path,
         });
-        if (dbErr) { console.error("intake photo record failed:", dbErr.message); continue; }
+        if (dbErr) { console.error("intake photo record failed:", dbErr.message); return; }
         photosSaved++;
       } catch (e) {
         console.error("intake photo error:", e instanceof Error ? e.message : String(e));
       }
+      })());
     }
   }
+  await Promise.all(uploads);
 
   const miss = ex.missing?.length ? ` Missing: ${ex.missing.join(", ")}.` : "";
   return `${job.ref} created — ${items.length} item(s)${photosSaved ? `, ${photosSaved} photo(s)` : ""}, pending confirmation.${miss}`;

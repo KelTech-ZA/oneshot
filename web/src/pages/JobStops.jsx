@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 // A stop is a place where work happens. Three roles:
@@ -17,6 +17,29 @@ export const stopName = (s) =>
   s?.label || s?.address || (s ? "Unnamed stop" : "—");
 
 export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
+  // Controlled drafts: typing stays put even when the list reloads underneath,
+  // and each field reports that it saved instead of committing invisibly.
+  const [draft, setDraft] = useState({});
+  const [saved, setSaved] = useState({});
+
+  useEffect(() => {
+    setDraft((cur) => {
+      const next = { ...cur };
+      for (const s of stops) if (!next[s.id]) next[s.id] = {
+        label: s.label ?? "", address: s.address ?? "",
+        contact_name: s.contact_name ?? "", contact_phone: s.contact_phone ?? "",
+      };
+      return next;
+    });
+  }, [stops]);
+
+  const edit = (id, field, value) =>
+    setDraft((cur) => ({ ...cur, [id]: { ...cur[id], [field]: value } }));
+
+  const flash = (id) => {
+    setSaved((cur) => ({ ...cur, [id]: true }));
+    setTimeout(() => setSaved((cur) => ({ ...cur, [id]: false })), 1800);
+  };
   const of = (kind) => stops.filter((s) => s.kind === kind)
     .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
 
@@ -31,10 +54,13 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
     await onChange();
   };
 
-  const patch = async (stop, field, value) => {
+  const patch = async (stop, field) => {
+    const value = draft[stop.id]?.[field] ?? "";
+    if ((stop[field] ?? "") === value) return;          // nothing changed
     const { error } = await supabase.from("job_stops")
       .update({ [field]: value || null }).eq("id", stop.id);
-    if (error) { setMsg(error.message); return; }
+    if (error) { setMsg("Could not save: " + error.message); return; }
+    flash(stop.id);
     await onChange();
   };
 
@@ -59,7 +85,9 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
               <div className="card" key={s.id}>
                 <div className="row" style={{ marginBottom: 8 }}>
                   <span className="muted" style={{ fontSize: 12 }}>
-                    {list.length > 1 ? `${i + 1} of ${list.length}` : "\u00a0"}
+                    {saved[s.id]
+                      ? <span style={{ color: "var(--ok)" }}>saved ✓</span>
+                      : list.length > 1 ? `${i + 1} of ${list.length}` : "\u00a0"}
                   </span>
                   <button onClick={() => removeStop(s)}
                     style={{ background: "none", border: "none", color: "var(--warn)",
@@ -68,17 +96,21 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
                   </button>
                 </div>
                 <label>Name (optional)</label>
-                <input defaultValue={s.label ?? ""} placeholder="Workshop, Blank Projects"
-                  onBlur={(e) => patch(s, "label", e.target.value)} />
+                <input value={draft[s.id]?.label ?? ""} placeholder="Workshop, Blank Projects"
+                  onChange={(e) => edit(s.id, "label", e.target.value)}
+                  onBlur={() => patch(s, "label")} />
                 <label>Address</label>
-                <input defaultValue={s.address ?? ""}
-                  onBlur={(e) => patch(s, "address", e.target.value)} />
+                <input value={draft[s.id]?.address ?? ""} placeholder="Street, suburb, city"
+                  onChange={(e) => edit(s.id, "address", e.target.value)}
+                  onBlur={() => patch(s, "address")} />
                 <label>Contact name</label>
-                <input defaultValue={s.contact_name ?? ""}
-                  onBlur={(e) => patch(s, "contact_name", e.target.value)} />
+                <input value={draft[s.id]?.contact_name ?? ""}
+                  onChange={(e) => edit(s.id, "contact_name", e.target.value)}
+                  onBlur={() => patch(s, "contact_name")} />
                 <label>Contact phone</label>
-                <input defaultValue={s.contact_phone ?? ""}
-                  onBlur={(e) => patch(s, "contact_phone", e.target.value)} />
+                <input value={draft[s.id]?.contact_phone ?? ""}
+                  onChange={(e) => edit(s.id, "contact_phone", e.target.value)}
+                  onBlur={() => patch(s, "contact_phone")} />
               </div>
             ))}
             {list.length < 3 && (
