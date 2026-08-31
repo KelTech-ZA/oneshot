@@ -14,6 +14,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { Resend } from "npm:resend";
+import { Image } from "https://deno.land/x/imagescript@1.2.17/mod.ts";
 import { ingest } from "../_shared/extract.ts";
 import type { InboundImage } from "../_shared/extract.ts";
 
@@ -36,6 +37,28 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+// Measured on a real nine-photo intake (Outlook already ships ~960x1280):
+//   1568px  1262KB  14745 vision tokens  100%
+//   1024px   923KB   9437                 64%
+//    800px   602KB   5760                 39%   <- chosen
+// The parser is identifying WHAT an object is, not inspecting detail, so 800px
+// loses nothing that matters and cuts the dominant cost by ~60%.
+const MAX_EDGE = 800;
+
+async function downscale(buf: ArrayBuffer, mediaType: string): Promise<{ data: string; media_type: string }> {
+  try {
+    const img = await Image.decode(new Uint8Array(buf));
+    if (Math.max(img.width, img.height) > MAX_EDGE) {
+      const scale = MAX_EDGE / Math.max(img.width, img.height);
+      img.resize(Math.round(img.width * scale), Math.round(img.height * scale));
+    }
+    return { data: b64((await img.encodeJPEG(78)).buffer), media_type: "image/jpeg" };
+  } catch (e) {
+    console.warn("downscale failed, sending original:", e instanceof Error ? e.message : String(e));
+    return { data: b64(buf), media_type: mediaType };
+  }
+}
+
 const b64 = (buf: ArrayBuffer) => {
   const bytes = new Uint8Array(buf);
   let s = "";
@@ -56,6 +79,11 @@ Deno.serve(async (req) => {
   const emailId: string | undefined = event.data?.email_id;
   const sender: string = event.data?.from ?? "";
   const subject: string = event.data?.subject ?? "";
+  // Kept so progress emails reply into the client's own thread, and so
+  // everyone they copied hears about the job too.
+  const cc: string[] = Array.isArray(event.data?.cc) ? event.data.cc : [];
+  const toList: string[] = Array.isArray(event.data?.to) ? event.data.to : [];
+  const messageId: string | null = event.data?.message_id ?? null;
   if (!emailId) {
     console.error("intake-email: ABORT — webhook had no data.email_id");
     return new Response("ok");
@@ -103,17 +131,36 @@ Deno.serve(async (req) => {
         !inline.includes(String(a.content_id ?? "").replace(/^<|>$/g, ""))),
     ].slice(0, MAX_IMAGES);
 
-    for (const a of ordered as Record<string, unknown>[]) {
-      const res = await fetch(String(a.download_url));
-      if (!res.ok) { console.warn("attachment download failed:", a.filename); continue; }
-      images.push({
-        media_type: String(a.content_type),
-        data: b64(await res.arrayBuffer()),
-        filename: String(a.filename ?? ""),
-      });
-      cidOrder.push(String(a.content_id ?? "").replace(/^<|>$/g, ""));
+    // Downloaded in parallel: nine sequential round-trips to a CDN was the
+    // largest single cost, and they do not depend on each other.
+    const t0 = Date.now();
+    const fetched = await Promise.all((ordered as Record<string, unknown>[]).map(async (a) => {
+      try {
+        const res = await fetch(String(a.download_url));
+        if (!res.ok) { console.warn("attachment download failed:", a.filename); return null; }
+        const raw = await res.arrayBuffer();
+        const small = await downscale(raw, String(a.content_type));
+        return {
+          image: { ...small, filename: String(a.filename ?? "") } as InboundImage,
+          cid: String(a.content_id ?? "").replace(/^<|>$/g, ""),
+          before: raw.byteLength,
+          after: small.data.length,
+        };
+      } catch (e) {
+        console.warn("attachment error:", a.filename, e instanceof Error ? e.message : String(e));
+        return null;
+      }
+    }));
+
+    for (const f of fetched) {
+      if (!f) continue;
+      images.push(f.image);
+      cidOrder.push(f.cid);
     }
-    console.log(`intake-email: ${images.length} image(s) attached`);
+    const before = fetched.reduce((n, f) => n + (f?.before ?? 0), 0);
+    const after = fetched.reduce((n, f) => n + (f?.after ?? 0), 0);
+    console.log(`intake-email: ${images.length} image(s) attached in ${Date.now() - t0}ms ` +
+      `(${Math.round(before / 1024)}KB -> ${Math.round(after / 1024)}KB)`);
   } catch (e) {
     // Images are a bonus, never a reason to drop the job.
     console.warn("intake-email: attachments unavailable:",
@@ -145,6 +192,24 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
+  // ---- STOP replies -------------------------------------------------------
+  // Progress emails invite the client to reply STOP. That reply arrives here,
+  // so it is recognised and recorded rather than parsed as a new job.
+  const firstWords = `${subject} ${body}`.slice(0, 200).toLowerCase();
+  if (/\b(stop|unsubscribe|opt[\s-]?out|no more emails)\b/.test(firstWords)
+      && !/\b(collect|deliver|pickup|pick up|install|build|fabricat|pack|crate)\b/.test(firstWords)) {
+    const from = sender.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0]?.toLowerCase();
+    if (from) {
+      const { data: t } = await sb.from("tenants").select("id").eq("name", "Section 9").limit(1).maybeSingle();
+      if (t) {
+        await sb.from("notification_optouts")
+          .upsert({ tenant_id: t.id, email: from, source: "reply" }, { onConflict: "tenant_id,email" });
+        console.log(`intake-email: ${from} opted out of progress emails`);
+      }
+    }
+    return new Response("ok");
+  }
+
   // ---- workspace from the subject prefix -----------------------------------
   const cleanSubject = subject.replace(/^\s*((RE|FW|FWD)\s*:\s*)+/i, "").trim();
   const prefixMatch = cleanSubject.match(/^([^:]+):\s*(.+)$/);
@@ -168,7 +233,8 @@ Deno.serve(async (req) => {
   }
 
   const reply = await ingest(sb, tenant.id, "email", sender, subject, body,
-    { subject, sender, email_id: emailId, images: images.length }, images);
+    { subject, sender, email_id: emailId, images: images.length,
+      cc, to: toList, message_id: messageId }, images);
 
   console.log("intake-email:", reply || "(no action)",
     "| workspace:", workspaceName ?? "Section 9");

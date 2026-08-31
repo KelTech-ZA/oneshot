@@ -40,6 +40,7 @@ export default function EditJob() {
 
       setF({
         type: j.type, client_ref: j.client_ref ?? "",
+        notify: (j.notify_emails ?? []).join(", "),
         scheduled_date: j.scheduled_date ?? "", time_window: j.time_window ?? "",
         o_addr: j.origin?.address ?? "", o_name: j.origin?.contact_name ?? "", o_phone: j.origin?.contact_phone ?? "",
         d_addr: j.destination?.address ?? "", d_name: j.destination?.contact_name ?? "", d_phone: j.destination?.contact_phone ?? "",
@@ -81,6 +82,7 @@ export default function EditJob() {
     const patch = {
       type: f.type,
       client_ref: f.client_ref || null,
+      notify_emails: (f.notify ?? "").split(/[,;\s]+/).filter((e) => e.includes("@")).slice(0, 3),
       scheduled_date: f.scheduled_date || null,
       time_window: f.time_window || null,
       // origin/destination are maintained by the job_stops trigger.
@@ -237,6 +239,11 @@ export default function EditJob() {
             <option value={f.type}>{f.type} (retired)</option>}
         </select>
         {inp("client_ref", "Client reference", "Stevenson Gallery / Wendy, PO-4471")}
+        {inp("notify", "Notify by email (up to 3)", "wendy@stevenson.co.za, ops@gallery.com")}
+        <div className="muted" style={{ fontSize: 12, marginTop: -6, marginBottom: 10 }}>
+          Two emails only: when work starts, and when it's done. Anyone on the
+          original request is included automatically.
+        </div>
         <label>Booked date</label>
         <input type="date" value={f.scheduled_date} onChange={(e) => setF({ ...f, scheduled_date: e.target.value })} />
         {inp("time_window", "Time window", "09:00–12:00")}
