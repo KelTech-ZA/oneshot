@@ -68,7 +68,10 @@ DECIDING request vs chatter - read the WHOLE message before deciding:
   appear as [DOCUMENT n: filename]. Read them properly: packing lists, delivery
   notes, condition reports, quotes and schedules routinely carry the addresses,
   dates and the whole item list while the email body says only "see attached".
-  A table of works in a PDF IS the item list - one entry per row, taking
+  An attached WORD document is unpacked before you see it: its text appears
+  under "--- attached document ---" with [IMAGE n] markers where its pictures
+  were, so an illustrated packing list maps picture to item exactly as an email
+  does. A table of works in a PDF IS the item list - one entry per row, taking
   description, dimensions and values from the columns, and the quantity column
   if there is one. Where a PDF and the email body disagree, the email wins: it
   is the more recent instruction.
