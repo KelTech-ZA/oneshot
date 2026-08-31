@@ -96,6 +96,33 @@ export default function JobList({ jobs, canDelete = false }) {
     }
   };
 
+  // Long jobs run over several days - collect Monday, pack Tuesday, deliver
+  // Thursday. Duplicating carries the addresses and items, never the evidence.
+  const duplicateJob = async (e, j) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const when = window.prompt(
+      `Duplicate ${j.ref}?\n\nAddresses and items are copied. Photos, events and documents are not.\n\n` +
+      `Date for the copy (YYYY-MM-DD), or leave blank:`, j.scheduled_date ?? "");
+    if (when === null) return;
+
+    setBusyId(j.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/duplicate-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ job_id: j.id, scheduled_date: when.trim() || null }),
+      });
+      const result = await res.json();
+      if (result.error) { window.alert("Could not duplicate: " + result.error); return; }
+      window.dispatchEvent(new Event("queue-updated"));
+      window.location.href = `/job/${result.id}`;
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const shown = jobs
     .filter((j) => !removed.has(j.id))
     .filter((j) => filter === "All" || GROUPS[filter].includes(j.status))
@@ -151,11 +178,18 @@ export default function JobList({ jobs, canDelete = false }) {
             {j.time_window ? ` · ${j.time_window}` : ""}
           </div>
           {isOps && canDelete && (
-            <button className="muted no-print" disabled={busyId === j.id}
-              style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", padding: 0, marginTop: 6, font: "inherit" }}
-              onClick={(e) => deleteJob(e, j)}>
-              {busyId === j.id ? "deleting…" : "delete"}
-            </button>
+            <div className="no-print" style={{ display: "flex", gap: 16, marginTop: 6 }}>
+              <button className="muted" disabled={busyId === j.id}
+                style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+                onClick={(e) => duplicateJob(e, j)}>
+                duplicate
+              </button>
+              <button className="muted" disabled={busyId === j.id}
+                style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", padding: 0, font: "inherit" }}
+                onClick={(e) => deleteJob(e, j)}>
+                {busyId === j.id ? "working…" : "delete"}
+              </button>
+            </div>
           )}
         </Link>
           ))}

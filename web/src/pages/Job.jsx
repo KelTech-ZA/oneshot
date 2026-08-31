@@ -84,6 +84,29 @@ export default function Job() {
     }
   };
 
+  // A job that runs over several days is duplicated rather than retyped:
+  // addresses and items carry over, evidence does not.
+  const duplicateJob = async () => {
+    const when = window.prompt(
+      `Duplicate ${job.ref}?\n\nAddresses and items are copied. Photos, events and documents are not.\n\n` +
+      `Date for the copy (YYYY-MM-DD), or leave blank:`, job.scheduled_date ?? "");
+    if (when === null) return;
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/duplicate-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ job_id: id, scheduled_date: when.trim() || null }),
+      });
+      const outcome = await res.json();
+      if (outcome.error) { window.alert("Could not duplicate: " + outcome.error); return; }
+      nav(`/job/${outcome.id}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const shareToDriver = () =>
     shareUrl(`${window.location.origin}/claim/${id}/${job.claim_token}`, `OneShot job ${job.ref}`);
 
@@ -332,6 +355,13 @@ export default function Job() {
           onClick={shareRecord}>
           👁 Share read-only record
         </button>
+        {isOps && (
+          <button disabled={busy}
+            style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+            onClick={duplicateJob}>
+            ⧉ Duplicate job
+          </button>
+        )}
       </div>
 
       <h2>Job Status</h2>
