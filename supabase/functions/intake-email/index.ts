@@ -16,12 +16,15 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { Resend } from "npm:resend";
 import { Image } from "https://deno.land/x/imagescript@1.2.17/mod.ts";
 import { ingest } from "../_shared/extract.ts";
-import type { InboundImage } from "../_shared/extract.ts";
+import type { InboundImage, InboundDoc } from "../_shared/extract.ts";
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY")!);
 
 const MAX_IMAGES = 12;
-const MAX_BYTES = 4 * 1024 * 1024;   // per image, well under the API limit
+const MAX_BYTES = 4 * 1024 * 1024;    // per image, well under the API limit
+const MAX_DOC_BYTES = 10 * 1024 * 1024;  // per PDF
+const MAX_DOCS = 3;
+const DOC_TYPES = ["application/pdf"];
 
 function htmlToText(html: string): string {
   return html
@@ -107,6 +110,7 @@ Deno.serve(async (req) => {
 
   // ---- images, and where they sat in the message ---------------------------
   const images: InboundImage[] = [];
+  const docs: InboundDoc[] = [];
   const cidOrder: string[] = [];
   try {
     const { data: attRes } = await resend.emails.receiving.attachments.list({ emailId });
@@ -157,6 +161,27 @@ Deno.serve(async (req) => {
       images.push(f.image);
       cidOrder.push(f.cid);
     }
+    // Packing lists, delivery notes and schedules arrive as PDFs and often
+    // carry the whole job while the email says only "see attached".
+    const pdfs = atts.filter((a: Record<string, unknown>) =>
+      DOC_TYPES.includes(String(a.content_type ?? ""))
+      && Number(a.size ?? 0) <= MAX_DOC_BYTES).slice(0, MAX_DOCS);
+
+    await Promise.all(pdfs.map(async (a: Record<string, unknown>) => {
+      try {
+        const res = await fetch(String(a.download_url));
+        if (!res.ok) { console.warn("pdf download failed:", a.filename); return; }
+        docs.push({
+          media_type: String(a.content_type),
+          data: b64(await res.arrayBuffer()),
+          filename: String(a.filename ?? "attachment.pdf"),
+        });
+      } catch (e) {
+        console.warn("pdf error:", a.filename, e instanceof Error ? e.message : String(e));
+      }
+    }));
+    if (docs.length) console.log(`intake-email: ${docs.length} PDF(s) attached`);
+
     const before = fetched.reduce((n, f) => n + (f?.before ?? 0), 0);
     const after = fetched.reduce((n, f) => n + (f?.after ?? 0), 0);
     console.log(`intake-email: ${images.length} image(s) attached in ${Date.now() - t0}ms ` +
@@ -182,7 +207,7 @@ Deno.serve(async (req) => {
     body = htmlToText(html);
   }
 
-  if (!body && !images.length) {
+  if (!body && !images.length && !docs.length) {
     console.error(`intake-email: ABORT — nothing to parse for ${emailId}`);
     return new Response("ok");
   }
@@ -234,7 +259,7 @@ Deno.serve(async (req) => {
 
   const reply = await ingest(sb, tenant.id, "email", sender, subject, body,
     { subject, sender, email_id: emailId, images: images.length,
-      cc, to: toList, message_id: messageId }, images);
+      cc, to: toList, message_id: messageId, docs: docs.length }, images, docs);
 
   console.log("intake-email:", reply || "(no action)",
     "| workspace:", workspaceName ?? "Section 9");

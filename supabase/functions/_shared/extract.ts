@@ -64,6 +64,14 @@ DECIDING request vs chatter - read the WHOLE message before deciding:
   instructions, forwarded discussion, or remarks about the OneShot system
   itself. Ignore the surrounding talk and extract the job underneath it.
 - An email whose items are only photographs is a request, not chatter.
+- An email whose details sit in an ATTACHED PDF is also a request. Attachments
+  appear as [DOCUMENT n: filename]. Read them properly: packing lists, delivery
+  notes, condition reports, quotes and schedules routinely carry the addresses,
+  dates and the whole item list while the email body says only "see attached".
+  A table of works in a PDF IS the item list - one entry per row, taking
+  description, dimensions and values from the columns, and the quantity column
+  if there is one. Where a PDF and the email body disagree, the email wins: it
+  is the more recent instruction.
 - Confidence reflects how well you read the JOB, not how tidy the email was.
   A clear address and clear items is high confidence even in a messy thread.
 - Only chatter when there is genuinely no job present: no addresses, no items,
@@ -83,6 +91,12 @@ WHERE depends on the kind of job:
 List genuinely absent fields in "missing", judged against the job type above.`;
 
 
+export interface InboundDoc {
+  media_type: string;   // application/pdf
+  data: string;         // base64
+  filename: string;
+}
+
 export interface InboundImage {
   media_type: string;   // image/jpeg, image/png
   data: string;         // base64, no data: prefix
@@ -95,7 +109,7 @@ export interface Extraction {
   amendment_changes: Record<string, unknown> | null;
 }
 
-export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = []): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<Extraction> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -110,6 +124,10 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
       messages: [{
         role: "user",
         content: [
+          ...docs.map((d, i) => ([
+            { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
+            { type: "document", source: { type: "base64", media_type: d.media_type, data: d.data } },
+          ])).flat(),
           ...images.map((im, i) => ([
             { type: "text", text: `[IMAGE ${i + 1}]` },
             { type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } },
@@ -128,7 +146,7 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
 
 // Creates message + (job + items) rows. Returns a human summary for the reply.
 // deno-lint-ignore no-explicit-any
-export async function ingest(sb: any, tenantId: string, channel: string, sender: string, subject: string | null, body: string, raw: unknown, images: InboundImage[] = []): Promise<string> {
+export async function ingest(sb: any, tenantId: string, channel: string, sender: string, subject: string | null, body: string, raw: unknown, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<string> {
   // The workspace defines its own job types, so the parser is told about
   // theirs rather than a list hardcoded here.
   const { data: types } = await sb.from("job_types")
@@ -139,7 +157,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
   let ex: Extraction;
-  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList, images); }
+  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList, images, docs); }
   catch (e) {
     console.error("ingest: extraction failed:", e instanceof Error ? e.message : String(e));
     ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
@@ -235,6 +253,28 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   }
   await Promise.all(uploads);
 
+  // Keep the source paperwork on the job: ops can check the parse against the
+  // PDF the client actually sent.
+  let docsSaved = 0;
+  for (const d of docs) {
+    try {
+      const safe = d.filename.replace(/[^\w.\-]+/g, "_").slice(-80);
+      const path = `${tenantId}/${job.id}/intake-${Date.now()}-${safe}`;
+      const bytes = Uint8Array.from(atob(d.data), (c) => c.charCodeAt(0));
+      const { error: upErr } = await sb.storage.from("documents")
+        .upload(path, bytes, { contentType: d.media_type, upsert: true });
+      if (upErr) { console.error("intake doc upload failed:", upErr.message); continue; }
+      const { error: dbErr } = await sb.from("job_documents").insert({
+        tenant_id: tenantId, job_id: job.id, name: d.filename, path,
+        mime: d.media_type, size_bytes: bytes.length,
+      });
+      if (dbErr) { console.error("intake doc record failed:", dbErr.message); continue; }
+      docsSaved++;
+    } catch (e) {
+      console.error("intake doc error:", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const miss = ex.missing?.length ? ` Missing: ${ex.missing.join(", ")}.` : "";
-  return `${job.ref} created — ${items.length} item(s)${photosSaved ? `, ${photosSaved} photo(s)` : ""}, pending confirmation.${miss}`;
+  return `${job.ref} created — ${items.length} item(s)${photosSaved ? `, ${photosSaved} photo(s)` : ""}${docsSaved ? `, ${docsSaved} document(s)` : ""}, pending confirmation.${miss}`;
 }
