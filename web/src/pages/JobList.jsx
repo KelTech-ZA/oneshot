@@ -53,7 +53,7 @@ export default function JobList({ jobs, canDelete = false }) {
   const [ghost, setGhost] = useState(null);   // { x, y, ref }
   const [drop, setDrop] = useState(null);     // { job, date, label }
   const [dropBusy, setDropBusy] = useState(false);
-  const lift = useRef({ timer: null, startX: 0, startY: 0, id: null, active: false });
+  const lift = useRef({ timer: null, startX: 0, startY: 0, job: null, active: false });
   const isOps = profile?.role === "ops";
 
   useEffect(() => {
@@ -131,8 +131,10 @@ export default function JobList({ jobs, canDelete = false }) {
     }
   };
 
-  // A press-and-hold lifts the card. Waiting ~280ms and requiring the finger to
-  // stay still means an ordinary swipe still scrolls the list.
+  // A press-and-hold lifts the card. The drag itself is tracked on the WINDOW,
+  // not the card: an <a> is natively draggable, so a mouse drag would otherwise
+  // become the browser's own link drag, and on touch the browser claims any
+  // vertical movement for scrolling. A non-passive listener takes both back.
   const HOLD_MS = 280;
   const SLOP = 10;
 
@@ -143,55 +145,82 @@ export default function JobList({ jobs, canDelete = false }) {
 
   const endLift = () => {
     clearTimeout(lift.current.timer);
-    lift.current = { timer: null, startX: 0, startY: 0, id: null, active: false };
+    lift.current = { timer: null, startX: 0, startY: 0, job: null, active: false };
     setDragId(null);
     setOverKey(null);
     setGhost(null);
   };
 
+  // Everything that happens once a card is in the air.
+  useEffect(() => {
+    if (!dragId) return;
+
+    const onMove = (e) => {
+      e.preventDefault();                       // stops scrolling and text selection
+      const x = e.clientX, y = e.clientY;
+      setGhost((g) => (g ? { ...g, x, y } : g));
+      setOverKey(dayKeyAt(x, y));
+      const edge = 90;
+      if (y < edge) window.scrollBy({ top: -16 });
+      else if (window.innerHeight - y < edge) window.scrollBy({ top: 16 });
+    };
+
+    const onUp = (e) => {
+      const job = lift.current.job;
+      const key = dayKeyAt(e.clientX, e.clientY);
+      endLift();
+      if (!job || !key || key === "none" || job.scheduled_date === key) return;
+      const section = sections.find((sc) => sc.key === key);
+      setDrop({ job, date: key, label: section?.label ?? key });
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", endLift);
+    // Belt and braces for older mobile Safari, which can still scroll on
+    // touchmove even when the pointer event is cancelled.
+    const block = (e) => e.preventDefault();
+    window.addEventListener("touchmove", block, { passive: false });
+    const prevSelect = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", endLift);
+      window.removeEventListener("touchmove", block);
+      document.body.style.userSelect = prevSelect;
+    };
+  }, [dragId, sections]);
+
   const onPointerDown = (e, j) => {
     if (!isOps || e.button === 2) return;
     lift.current.startX = e.clientX;
     lift.current.startY = e.clientY;
-    lift.current.id = j.id;
+    lift.current.job = j;
     lift.current.active = false;
     lift.current.timer = setTimeout(() => {
       lift.current.active = true;
       setDragId(j.id);
-      setGhost({ x: e.clientX, y: e.clientY, ref: j.ref });
-      if (navigator.vibrate) navigator.vibrate(12);   // the lift is felt, not guessed
-      try { e.target.setPointerCapture?.(e.pointerId); } catch { /* not critical */ }
+      setGhost({ x: lift.current.startX, y: lift.current.startY, ref: j.ref });
+      if (navigator.vibrate) navigator.vibrate(12);
     }, HOLD_MS);
   };
 
-  const onPointerMove = (e) => {
-    if (!lift.current.id) return;
-    const dx = Math.abs(e.clientX - lift.current.startX);
-    const dy = Math.abs(e.clientY - lift.current.startY);
-
-    // Moved before the hold completed: they are scrolling, not dragging.
-    if (!lift.current.active) {
-      if (dx > SLOP || dy > SLOP) { clearTimeout(lift.current.timer); lift.current.id = null; }
-      return;
+  // Before the hold completes, any real movement means they are scrolling.
+  const onPointerMoveCard = (e) => {
+    if (!lift.current.job || lift.current.active) return;
+    if (Math.abs(e.clientX - lift.current.startX) > SLOP
+     || Math.abs(e.clientY - lift.current.startY) > SLOP) {
+      clearTimeout(lift.current.timer);
+      lift.current.job = null;
     }
-
-    e.preventDefault();
-    setGhost((g) => (g ? { ...g, x: e.clientX, y: e.clientY } : g));
-    setOverKey(dayKeyAt(e.clientX, e.clientY));
-
-    // Nudge the page when dragging near an edge, or long lists are unreachable.
-    const edge = 90;
-    if (e.clientY < edge) window.scrollBy({ top: -14 });
-    else if (window.innerHeight - e.clientY < edge) window.scrollBy({ top: 14 });
   };
 
-  const onPointerUp = (e, j) => {
-    const wasDragging = lift.current.active;
-    const key = wasDragging ? dayKeyAt(e.clientX, e.clientY) : null;
-    endLift();
-    if (!wasDragging || !key || key === "none" || j.scheduled_date === key) return;
-    const section = sections.find((sc) => sc.key === key);
-    setDrop({ job: j, date: key, label: section?.label ?? key });
+  const onPointerUpCard = () => {
+    if (lift.current.active) return;    // the window handler deals with a drop
+    clearTimeout(lift.current.timer);
+    lift.current.job = null;
   };
 
   const moveJob = async (job, date) => {
@@ -313,15 +342,17 @@ export default function JobList({ jobs, canDelete = false }) {
           </div>
           {sec.jobs.map((j) => (
         <Link className="card" key={j.id} to={`/job/${j.id}`}
+          draggable={false}
           onPointerDown={(e) => onPointerDown(e, j)}
-          onPointerMove={onPointerMove}
-          onPointerUp={(e) => onPointerUp(e, j)}
-          onPointerCancel={endLift}
-          onContextMenu={(e) => { if (dragId) e.preventDefault(); }}
+          onPointerMove={onPointerMoveCard}
+          onPointerUp={onPointerUpCard}
+          onPointerCancel={onPointerUpCard}
+          onDragStart={(e) => e.preventDefault()}
+          onContextMenu={(e) => { if (isOps) e.preventDefault(); }}
           onClick={(e) => { if (dragId || lift.current.active) e.preventDefault(); }}
           style={dragId === j.id
-            ? { opacity: 0.4, touchAction: "none" }
-            : isOps ? { touchAction: "pan-y" } : undefined}>
+            ? { opacity: 0.4, WebkitTouchCallout: "none" }
+            : isOps ? { WebkitTouchCallout: "none" } : undefined}>
           <div className="row">
             <span className="ref">{j.ref}</span>
             <JobStamp status={j.status} lastEvent={j.last_event_label} alert={j.last_event_alert} />
