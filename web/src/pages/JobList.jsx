@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { JobStamp } from "./Today";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
@@ -46,6 +46,14 @@ export default function JobList({ jobs, canDelete = false }) {
   const [removed, setRemoved] = useState(new Set());
   const [busyId, setBusyId] = useState(null);
   const [typeLabels, setTypeLabels] = useState({});
+  // Pointer-based so it works with a finger as well as a mouse. HTML5 drag
+  // events never fire on touch screens, so they are not used at all.
+  const [dragId, setDragId] = useState(null);
+  const [overKey, setOverKey] = useState(null);
+  const [ghost, setGhost] = useState(null);   // { x, y, ref }
+  const [drop, setDrop] = useState(null);     // { job, date, label }
+  const [dropBusy, setDropBusy] = useState(false);
+  const lift = useRef({ timer: null, startX: 0, startY: 0, id: null, active: false });
   const isOps = profile?.role === "ops";
 
   useEffect(() => {
@@ -123,6 +131,99 @@ export default function JobList({ jobs, canDelete = false }) {
     }
   };
 
+  // A press-and-hold lifts the card. Waiting ~280ms and requiring the finger to
+  // stay still means an ordinary swipe still scrolls the list.
+  const HOLD_MS = 280;
+  const SLOP = 10;
+
+  const dayKeyAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    return el?.closest("[data-daykey]")?.getAttribute("data-daykey") ?? null;
+  };
+
+  const endLift = () => {
+    clearTimeout(lift.current.timer);
+    lift.current = { timer: null, startX: 0, startY: 0, id: null, active: false };
+    setDragId(null);
+    setOverKey(null);
+    setGhost(null);
+  };
+
+  const onPointerDown = (e, j) => {
+    if (!isOps || e.button === 2) return;
+    lift.current.startX = e.clientX;
+    lift.current.startY = e.clientY;
+    lift.current.id = j.id;
+    lift.current.active = false;
+    lift.current.timer = setTimeout(() => {
+      lift.current.active = true;
+      setDragId(j.id);
+      setGhost({ x: e.clientX, y: e.clientY, ref: j.ref });
+      if (navigator.vibrate) navigator.vibrate(12);   // the lift is felt, not guessed
+      try { e.target.setPointerCapture?.(e.pointerId); } catch { /* not critical */ }
+    }, HOLD_MS);
+  };
+
+  const onPointerMove = (e) => {
+    if (!lift.current.id) return;
+    const dx = Math.abs(e.clientX - lift.current.startX);
+    const dy = Math.abs(e.clientY - lift.current.startY);
+
+    // Moved before the hold completed: they are scrolling, not dragging.
+    if (!lift.current.active) {
+      if (dx > SLOP || dy > SLOP) { clearTimeout(lift.current.timer); lift.current.id = null; }
+      return;
+    }
+
+    e.preventDefault();
+    setGhost((g) => (g ? { ...g, x: e.clientX, y: e.clientY } : g));
+    setOverKey(dayKeyAt(e.clientX, e.clientY));
+
+    // Nudge the page when dragging near an edge, or long lists are unreachable.
+    const edge = 90;
+    if (e.clientY < edge) window.scrollBy({ top: -14 });
+    else if (window.innerHeight - e.clientY < edge) window.scrollBy({ top: 14 });
+  };
+
+  const onPointerUp = (e, j) => {
+    const wasDragging = lift.current.active;
+    const key = wasDragging ? dayKeyAt(e.clientX, e.clientY) : null;
+    endLift();
+    if (!wasDragging || !key || key === "none" || j.scheduled_date === key) return;
+    const section = sections.find((sc) => sc.key === key);
+    setDrop({ job: j, date: key, label: section?.label ?? key });
+  };
+
+  const moveJob = async (job, date) => {
+    setDropBusy(true);
+    try {
+      const { data, error } = await supabase.from("jobs")
+        .update({ scheduled_date: date, updated_at: new Date().toISOString() })
+        .eq("id", job.id).select("id");
+      if (error) { window.alert("Could not move: " + error.message); return; }
+      if (!data?.length) { window.alert("That job was not moved — the database refused the change."); return; }
+      setDrop(null);
+      window.dispatchEvent(new Event("queue-updated"));
+      window.location.reload();
+    } finally { setDropBusy(false); }
+  };
+
+  const copyJobTo = async (job, date) => {
+    setDropBusy(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/duplicate-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ job_id: job.id, scheduled_date: date }),
+      });
+      const result = await res.json();
+      if (result.error) { window.alert("Could not duplicate: " + result.error); return; }
+      setDrop(null);
+      window.location.href = `/job/${result.id}`;
+    } finally { setDropBusy(false); }
+  };
+
   const shown = jobs
     .filter((j) => !removed.has(j.id))
     .filter((j) => filter === "All" || GROUPS[filter].includes(j.status))
@@ -158,13 +259,69 @@ export default function JobList({ jobs, canDelete = false }) {
         ))}
       </div>
       {shown.length === 0 && <div className="empty">Nothing here.</div>}
+      {isOps && shown.length > 1 && (
+        <div className="muted no-print" style={{ fontSize: 12, marginTop: 4 }}>
+          Press and hold a job to move it to another day.
+        </div>
+      )}
+      {ghost && (
+        <div style={{ position: "fixed", left: ghost.x, top: ghost.y, zIndex: 60,
+          transform: "translate(-50%, -140%)", pointerEvents: "none",
+          background: "var(--ink)", color: "#fff", padding: "8px 14px",
+          borderRadius: 10, fontSize: 13, fontWeight: 600,
+          boxShadow: "0 6px 20px rgba(16,19,20,.3)" }}>
+          {ghost.ref}
+        </div>
+      )}
+
+      {drop && (
+        <div role="dialog" aria-modal="true"
+          style={{ position: "fixed", inset: 0, background: "rgba(16,19,20,.45)", zIndex: 50,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => !dropBusy && setDrop(null)}>
+          <div className="card" style={{ maxWidth: 380, width: "100%", marginBottom: 0 }}
+            onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              {drop.job.ref} → {drop.label}
+            </div>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 14 }}>
+              Move it to this day, or leave the original where it is and put a copy here?
+            </div>
+            <button className="btn btn-primary" disabled={dropBusy}
+              onClick={() => moveJob(drop.job, drop.date)}>
+              Move it here
+            </button>
+            <button className="btn btn-ghost" disabled={dropBusy}
+              onClick={() => copyJobTo(drop.job, drop.date)}>
+              Duplicate it here
+            </button>
+            <button className="btn btn-ghost" disabled={dropBusy}
+              onClick={() => setDrop(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {sections.map((sec) => (
-        <div key={sec.key}>
+        <div key={sec.key} data-daykey={sec.key}
+          style={overKey === sec.key && dragId && sec.key !== "none"
+            ? { outline: "2px dashed var(--accent)", outlineOffset: 6, borderRadius: 12 }
+            : undefined}>
           <div style={{ margin: "14px 0 6px", fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: sec.label.startsWith("Overdue") ? "var(--warn)" : "var(--muted, #8b9498)" }}>
             {sec.label}{sec.key !== "none" && !["Today", "Tomorrow"].includes(sec.label) ? "" : sec.key !== "none" ? ` \u00b7 ${sec.key}` : ""}
           </div>
           {sec.jobs.map((j) => (
-        <Link className="card" key={j.id} to={`/job/${j.id}`}>
+        <Link className="card" key={j.id} to={`/job/${j.id}`}
+          onPointerDown={(e) => onPointerDown(e, j)}
+          onPointerMove={onPointerMove}
+          onPointerUp={(e) => onPointerUp(e, j)}
+          onPointerCancel={endLift}
+          onContextMenu={(e) => { if (dragId) e.preventDefault(); }}
+          onClick={(e) => { if (dragId || lift.current.active) e.preventDefault(); }}
+          style={dragId === j.id
+            ? { opacity: 0.4, touchAction: "none" }
+            : isOps ? { touchAction: "pan-y" } : undefined}>
           <div className="row">
             <span className="ref">{j.ref}</span>
             <JobStamp status={j.status} lastEvent={j.last_event_label} alert={j.last_event_alert} />
