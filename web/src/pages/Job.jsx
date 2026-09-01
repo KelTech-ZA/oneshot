@@ -39,6 +39,7 @@ export default function Job() {
   const [pickedBulk, setPickedBulk] = useState("");
   const [pickedItem, setPickedItem] = useState("");
   const [pickedJob, setPickedJob] = useState("");
+  const [showLog, setShowLog] = useState(false);
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
@@ -405,6 +406,72 @@ export default function Job() {
       )}
 
       <JobDocuments jobId={id} tenantId={job.tenant_id} canEdit={jobOpen} />
+
+      {/* Who did what, and when. Every custody event on this job, newest first,
+          plus the acknowledgements that are stored on the job rather than as
+          events. Read-only: the log is evidence, not a workspace. */}
+      <h2>History ({events.length + (job.accepted_by ? 1 : 0)})</h2>
+      {events.length + (job.accepted_by ? 1 : 0) === 0 ? (
+        <div className="muted">Nothing logged yet.</div>
+      ) : (<>
+        <button className="btn btn-ghost" style={{ marginTop: 0, marginBottom: 10 }}
+          onClick={() => setShowLog((v) => !v)}>
+          {showLog ? "Hide history" : "Show history"}
+        </button>
+
+        {showLog && (
+          <div className="card">
+            {[
+              ...events.map((e) => ({
+                key: e.id,
+                at: e.taken_at,
+                label: eventTypes.find((t) => t.key === e.type)?.label
+                  ?? e.type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()),
+                who: names[e.user_id] ?? "crew",
+                item: items.find((i) => i.id === e.item_id)?.description ?? null,
+                photo: !!e.photo_path,
+                gps: e.lat != null && e.lng != null,
+                notes: e.notes,
+                edited: e.edited_at
+                  ? `edited ${new Date(e.edited_at).toLocaleDateString("en-ZA")}` : null,
+              })),
+              ...(job.accepted_by ? [{
+                key: "accepted", at: job.accepted_at, label: "Accepted",
+                who: names[job.accepted_by] ?? "crew",
+                item: null, photo: false, gps: false, notes: null, edited: null,
+              }] : []),
+            ]
+              .sort((a, b) => (a.at < b.at ? 1 : -1))
+              .map((row, i, all) => (
+                <div key={row.key} style={{
+                  padding: "10px 0",
+                  borderBottom: i < all.length - 1 ? "1px solid var(--line)" : "none",
+                }}>
+                  <div className="row" style={{ alignItems: "baseline" }}>
+                    <span style={{ fontWeight: 600 }}>{row.label}</span>
+                    <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                      {row.at ? new Date(row.at).toLocaleString("en-ZA", {
+                        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+                      }) : "—"}
+                    </span>
+                  </div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    by {row.who}
+                    {row.item ? ` · ${row.item}` : " · whole job"}
+                    {row.photo && " · photo"}
+                    {row.gps && " · GPS"}
+                    {row.edited && ` · ${row.edited}`}
+                  </div>
+                  {row.notes && (
+                    <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+                      "{row.notes}"
+                    </div>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
+      </>)}
 
       <h2>Items ({items.length})</h2>
       {checkedItems.size > 0 && (
