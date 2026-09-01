@@ -54,6 +54,9 @@ export default function JobList({ jobs, canDelete = false }) {
   const [drop, setDrop] = useState(null);     // { job, date, label }
   const [dropBusy, setDropBusy] = useState(false);
   const lift = useRef({ timer: null, startX: 0, startY: 0, job: null, active: false });
+  // Held in a ref because the drag effect is declared above where sections are
+  // built; referencing them directly threw before initialisation.
+  const sectionsRef = useRef([]);
   const isOps = profile?.role === "ops";
 
   useEffect(() => {
@@ -170,7 +173,7 @@ export default function JobList({ jobs, canDelete = false }) {
       const key = dayKeyAt(e.clientX, e.clientY);
       endLift();
       if (!job || !key || key === "none" || job.scheduled_date === key) return;
-      const section = sections.find((sc) => sc.key === key);
+      const section = sectionsRef.current.find((sc) => sc.key === key);
       setDrop({ job, date: key, label: section?.label ?? key });
     };
 
@@ -191,7 +194,7 @@ export default function JobList({ jobs, canDelete = false }) {
       window.removeEventListener("touchmove", block);
       document.body.style.userSelect = prevSelect;
     };
-  }, [dragId, sections]);
+  }, [dragId]);
 
   const onPointerDown = (e, j) => {
     if (!isOps || e.button === 2) return;
@@ -275,6 +278,7 @@ export default function JobList({ jobs, canDelete = false }) {
   }
   for (const sec of sections)
     sec.label = dayLabel(sec.date, sec.jobs.some((j) => !GROUPS.Done.includes(j.status)));
+  sectionsRef.current = sections;
 
   return (
     <>
