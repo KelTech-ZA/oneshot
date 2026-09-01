@@ -167,7 +167,7 @@ export default function JobList({ jobs, canDelete = false }) {
         <Link className="card" key={j.id} to={`/job/${j.id}`}>
           <div className="row">
             <span className="ref">{j.ref}</span>
-            <JobStamp status={j.status} lastEvent={j.last_event_label} />
+            <JobStamp status={j.status} lastEvent={j.last_event_label} alert={j.last_event_alert} />
           </div>
           <div style={{ margin: "6px 0 4px", fontWeight: 600 }}>
             {j.origin?.label || j.origin?.address || "—"} → {j.destination?.label || j.destination?.address || "—"}

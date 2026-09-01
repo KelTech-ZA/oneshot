@@ -131,6 +131,8 @@ export default function TypeSettings() {
             hint="Moves the job to in progress when first logged." />
           <Check row={t} table="event_types" field="completes_job" label="Completes the job"
             hint="Marks the job complete — e.g. Built, Installed, Delivered." />
+          <Check row={t} table="event_types" field="alerts" label="Reports a problem"
+            hint="Delayed, under clearance, damaged. Shows red on the job and does not move it forward." />
         </Row>
       ))}
       <div className="card">
@@ -140,7 +142,9 @@ export default function TypeSettings() {
         <button className="btn btn-primary" disabled={busy || !newEvent.trim()}
           onClick={() => addType("event_types", newEvent)}>Add event</button>
         <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-          New events record only. Tick "Completes the job" afterwards if it should finish the work.
+          A new event shows on the job card and marks it as underway. Tick
+          "Completes the job" if it should finish the work, or "Reports a problem"
+          if it is a hold like Delayed or Under clearance.
         </p>
       </div>
     </div>

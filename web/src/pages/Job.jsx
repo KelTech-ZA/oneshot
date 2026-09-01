@@ -233,7 +233,7 @@ export default function Job() {
               ✎ Edit
             </button>
           )}
-          <JobStamp status={job.status} lastEvent={job.last_event_label} />
+          <JobStamp status={job.status} lastEvent={job.last_event_label} alert={job.last_event_alert} />
         </div>
       </div>
 

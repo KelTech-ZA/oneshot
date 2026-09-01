@@ -11,7 +11,7 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "", notify: "" });
+  const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "" });
 
   const load = () =>
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
@@ -38,7 +38,6 @@ export default function Dashboard() {
       origin: form.origin ? { address: form.origin } : null,
       destination: form.destination ? { address: form.destination } : null,
       client_ref: form.client_ref || null,
-      notify_emails: form.notify.split(/[,;\s]+/).filter((e) => e.includes("@")).slice(0, 3),
       scheduled_date: form.date || null, time_window: form.time || null,
       status: "confirmed", created_by: profile.id,
     }).select().single();
@@ -124,13 +123,6 @@ export default function Dashboard() {
           <input value={form.time} placeholder="09:00-12:00"
             onChange={(e) => setForm({ ...form, time: e.target.value })} />
           <ClashWarning date={form.date} timeWindow={form.time} />
-          <label>Notify by email (up to 3)</label>
-          <input value={form.notify} placeholder="wendy@stevenson.co.za, ops@gallery.com"
-            onChange={(e) => setForm({ ...form, notify: e.target.value })} />
-          <div className="muted" style={{ fontSize: 12, marginTop: -6, marginBottom: 10 }}>
-            They get two emails: when work starts, and when it's done. Anyone on the
-            original request is included automatically.
-          </div>
           <label>Items — one per line</label>
           <textarea rows={3} value={form.items} onChange={(e) => setForm({ ...form, items: e.target.value })}
             placeholder={"Kentridge charcoal drawing 80×60\nCrated bronze, 40kg"} />
@@ -144,7 +136,7 @@ export default function Dashboard() {
         <div className="card" key={j.id}>
           <div className="row">
             <Link to={`/job/${j.id}`} className="ref" style={{ color: "inherit" }}>{j.ref}</Link>
-            <JobStamp status={j.status} lastEvent={j.last_event_label} />
+            <JobStamp status={j.status} lastEvent={j.last_event_label} alert={j.last_event_alert} />
           </div>
           <div style={{ margin: "6px 0", fontWeight: 600 }}>
             {j.origin?.address || j.origin?.label || "—"} → {j.destination?.address || j.destination?.label || "—"}

@@ -16,10 +16,13 @@ const STAMP = {
 // the work - awaiting confirmation, closed, cancelled - keep their own word.
 const CONTRACT_STATES = ["pending_confirmation", "closed", "cancelled"];
 
-export function JobStamp({ status, lastEvent }) {
+export function JobStamp({ status, lastEvent, alert = false }) {
   const [cls, statusLabel] = STAMP[status] ?? ["pending", status];
-  const label = lastEvent && !CONTRACT_STATES.includes(status) ? lastEvent.toUpperCase() : statusLabel;
-  return <span className={`stamp ${cls}`} title={statusLabel}>{label}</span>;
+  const showEvent = lastEvent && !CONTRACT_STATES.includes(status);
+  const label = showEvent ? lastEvent.toUpperCase() : statusLabel;
+  // A hold - delayed, under clearance - reads red wherever the job has got to.
+  const tone = showEvent && alert ? "bad" : cls;
+  return <span className={`stamp ${tone}`} title={statusLabel}>{label}</span>;
 }
 
 export default function Today() {
