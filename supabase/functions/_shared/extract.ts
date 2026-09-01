@@ -10,14 +10,14 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
  "job": {
    "type": ${jobTypes},
    "client_ref": "the requester's own reference for this job, or null",
-   "origin": {"label":null,"address":null,"contact_name":null,"contact_phone":null} | null,
-   "destination": { same shape } | null,
+   "stops": [{"kind":"collection"|"delivery"|"site","label":null,"address":null,
+              "contact_name":null,"contact_phone":null,"notes":null}],
    "scheduled_date": "YYYY-MM-DD or null (resolve relative dates against message date, timezone Africa/Johannesburg)",
    "time_window": "text or null",
    "hard_deadline": bool,
    "items": [{"description":"","quantity":1,"identity_tier":1|2|3,
               "dimensions":null,"declared_value":null,"special_handling":null,
-              "image_indexes":[]}]
+              "image_indexes":[],"from_stop":null,"to_stop":null}]
  } | null,
  "missing": ["field names required but absent"],
  "amendment_changes": {"field":"new value"} | null
@@ -45,6 +45,22 @@ ITEM FIELDS — keep these strictly separate. This matters more than anything el
   description "Crate", dimensions "138 x 118 x 42 cm". Do not repeat the count in description.
 - A line like "5 crates: 79x62x46 (x2), 73x62x47 (x2), 79x66x54 (x1)" is THREE item entries
   with quantities 2, 2 and 1 — not one item and not five identical ones.
+
+STOPS - a job may have up to 3 collections, 3 deliveries and 3 sites:
+- Each address in the message becomes one entry in "stops", in the order given.
+- kind is "collection" where things are picked up, "delivery" where they are
+  dropped, "site" where work happens and nothing moves (fabrication, install,
+  packing, condition check).
+- PAIRED LEGS ARE ONE JOB. A message reading "Collection 1 ... Delivery ...,
+  Collection 2 ... Delivery ..." on the same date is ONE job with two
+  collections and two deliveries - not one job with the first pair only, and
+  not two jobs. Record every address.
+- "from_stop" and "to_stop" on each item are ZERO-BASED INDEXES into "stops",
+  saying where that item is collected and where it goes. In the example above
+  the first table is from_stop 0 to_stop 1, the second from_stop 2 to_stop 3.
+  This is what keeps each item with the right leg - get it right.
+- For a job that only makes or installs something, give one "site" stop and set
+  each item's to_stop to it, leaving from_stop null.
 
 "type" must be one of the keys listed above, chosen by what the work IS: building or making
 something, installing it, moving it, storing it, collecting it. If none fits, use null.
@@ -196,13 +212,39 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   if (ex.kind !== "request" || !ex.job) return "";
   const j = ex.job as Record<string, unknown>;
   const flags = (ex.missing ?? []).map((m) => `missing_info:${m}`);
+  // Stops are the source of truth for addresses. origin/destination are left
+  // for the sync trigger to fill from the primary stop of each kind - setting
+  // them here would make the seed trigger create a duplicate pair.
+  const parsedStops = (Array.isArray(j.stops) ? j.stops : []) as Record<string, unknown>[];
+  const legacyOrigin = parsedStops.length ? null : (j.origin ?? null);
+  const legacyDest   = parsedStops.length ? null : (j.destination ?? null);
+
   const { data: job } = await sb.from("jobs").insert({
-    tenant_id: tenantId, type: j.type ?? "move", origin: j.origin, destination: j.destination,
+    tenant_id: tenantId, type: j.type ?? "move",
+    origin: legacyOrigin, destination: legacyDest,
     client_ref: j.client_ref ?? null,
     scheduled_date: j.scheduled_date, time_window: j.time_window,
     hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
   }).select().single();
   await sb.from("messages").update({ job_id: job.id }).eq("id", msg.id);
+
+  // Every address the sender gave, in order, capped at 3 of each kind.
+  const stopIds: (string | null)[] = [];
+  const seqOf: Record<string, number> = { collection: 0, delivery: 0, site: 0 };
+  for (const st of parsedStops) {
+    const kind = ["collection", "delivery", "site"].includes(String(st.kind))
+      ? String(st.kind) : "delivery";
+    if (seqOf[kind] >= 3) { stopIds.push(null); continue; }
+    const { data: row, error } = await sb.from("job_stops").insert({
+      tenant_id: tenantId, job_id: job.id, kind, seq: seqOf[kind]++,
+      label: st.label ?? null, address: st.address ?? null,
+      contact_name: st.contact_name ?? null, contact_phone: st.contact_phone ?? null,
+      notes: st.notes ?? null,
+    }).select("id").single();
+    if (error) { console.error("stop insert failed:", error.message); stopIds.push(null); continue; }
+    stopIds.push(row?.id ?? null);
+  }
+  if (parsedStops.length) console.log(`ingest: ${stopIds.filter(Boolean).length} stop(s) created`);
 
   // Keep each row's source item alongside it, so its photographs can be
   // attached after insert. A quantity of 3 makes 3 rows that share the photos.
@@ -212,6 +254,10 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
         tenant_id: tenantId, job_id: job.id, description: it.description ?? "Item",
         identity_tier: it.identity_tier ?? 1,
         attributes: { dimensions: it.dimensions, declared_value: it.declared_value, special_handling: it.special_handling },
+        // Which leg this item belongs to, so a two-pickup job keeps each item
+        // with the right pair of addresses.
+        from_stop_id: typeof it.from_stop === "number" ? stopIds[it.from_stop] ?? null : null,
+        to_stop_id:   typeof it.to_stop   === "number" ? stopIds[it.to_stop]   ?? null : null,
       },
       imageIdx: (Array.isArray(it.image_indexes) ? it.image_indexes as number[] : [])
         .map((n) => Number(n) - 1)               // prompt is 1-based
