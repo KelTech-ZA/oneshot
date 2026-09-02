@@ -44,7 +44,7 @@ Deno.serve(async (req) => {
     return json({ error: "forbidden" }, 403);
 
   const { job_id, kind } = await req.json().catch(() => ({}));
-  if (!job_id || !["opened", "completed"].includes(kind))
+  if (!job_id || !["confirmed", "opened", "completed"].includes(kind))
     return json({ error: "job_id and kind required" }, 400);
 
   const { data: job } = await admin.from("jobs")
@@ -52,7 +52,8 @@ Deno.serve(async (req) => {
   if (!job) return json({ error: "job not found" }, 404);
 
   // Guard again here: the trigger can fire twice on a fast status change.
-  if (kind === "opened"    && job.notified_opened_at) return json({ ok: true, skipped: "already sent" });
+  const isFirstTouch = kind === "confirmed" || kind === "opened";
+  if (isFirstTouch && job.notified_opened_at) return json({ ok: true, skipped: "already sent" });
   if (kind === "completed" && job.notified_done_at)   return json({ ok: true, skipped: "already sent" });
 
   // ---- who hears about it -------------------------------------------------
@@ -110,8 +111,9 @@ Deno.serve(async (req) => {
     if (p?.full_name) who = p.full_name;
   }
 
-  const label = job.last_event_label
-    ?? (kind === "completed" ? "Completed" : "In progress");
+  const label = kind === "confirmed"
+    ? "Confirmed"
+    : (job.last_event_label ?? (kind === "completed" ? "Completed" : "In progress"));
   const when = new Date(ev?.taken_at ?? Date.now()).toLocaleString("en-ZA", {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
     timeZone: "Africa/Johannesburg",
@@ -128,13 +130,19 @@ Deno.serve(async (req) => {
     ? `Re: ${originalSubject}`
     : `${headline}${job.client_ref ? ` · ${job.client_ref}` : ""}`;
 
-  const lead = kind === "completed"
-    ? `${label}. ${when}, by ${who}. ${items}.`
+  const dateLine = job.scheduled_date
+    ? `Booked for ${new Date(job.scheduled_date + "T00:00:00").toLocaleDateString("en-ZA",
+        { weekday: "long", day: "numeric", month: "long" })}`
+      + (job.time_window ? `, ${job.time_window}` : "")
+    : "Not yet scheduled";
+
+  const lead = kind === "confirmed"
+    ? `We have your request and it is confirmed. ${dateLine}. ${items}.`
     : `${label}. ${when}, by ${who}. ${items}.`;
 
   const tail = kind === "completed"
     ? "The full record — every photograph, time and handler — stays available at the link above."
-    : "That link stays live for the rest of the job, so you can follow it without waiting for another email from us.";
+    : "That link stays live for the whole job. Follow it any time; we will only email you again when the work is done.";
 
   const optOutLine = `Don't want these updates? Reply STOP and we'll stop sending them.`;
 
@@ -192,7 +200,7 @@ Deno.serve(async (req) => {
   // Mark it sent even on failure, so a broken mail service cannot spam the
   // client on every subsequent status change. The failure is in the log.
   await admin.from("jobs").update(
-    kind === "opened"
+    isFirstTouch
       ? { notified_opened_at: new Date().toISOString() }
       : { notified_done_at: new Date().toISOString() },
   ).eq("id", job_id);
