@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import ClashWarning from "./ClashWarning";
 import ItemDocuments from "./ItemDocuments";
+import FileDrop from "./FileDrop";
 import JobStops, { KINDS, stopName } from "./JobStops";
 import { Ctx } from "../main";
 
@@ -324,9 +325,19 @@ export default function EditJob() {
               </div>
             )}
             {(photos[it.id]?.length ?? 0) < 3 && (
-              <input type="file" accept="image/*" style={{ marginBottom: 6 }}
-                disabled={uploading === it.id}
-                onChange={(ev) => uploadItemPhoto(it, ev.target.files?.[0])} />
+              <FileDrop accept="image" disabled={uploading === it.id} label="Drop photo"
+                onFiles={async (files) => {
+                  const room = 3 - (photos[it.id]?.length ?? 0);
+                  for (const f of files.slice(0, room)) await uploadItemPhoto(it, f);
+                }}>
+                <input type="file" accept="image/*" multiple style={{ marginBottom: 6 }}
+                  disabled={uploading === it.id}
+                  onChange={(ev) => {
+                    const room = 3 - (photos[it.id]?.length ?? 0);
+                    [...(ev.target.files ?? [])].slice(0, room)
+                      .reduce((chain, f) => chain.then(() => uploadItemPhoto(it, f)), Promise.resolve());
+                  }} />
+              </FileDrop>
             )}
             {uploading === it.id && <div className="muted">Uploading…</div>}
 

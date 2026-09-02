@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
+import FileDrop from "./FileDrop";
 
 // Supporting paperwork for a job: delivery notes, condition reports,
 // insurance certificates, packing lists. Any file type.
@@ -32,6 +33,10 @@ export default function JobDocuments({ jobId, tenantId, canEdit = true }) {
   };
 
   useEffect(() => { load(); }, [jobId]);
+
+  const uploadMany = async (files) => {
+    for (const f of files) await upload(f);
+  };
 
   const upload = async (file) => {
     if (!file) return;
@@ -108,15 +113,18 @@ export default function JobDocuments({ jobId, tenantId, canEdit = true }) {
       })}
 
       {canEdit && (
-        <div className="card">
-          <label>Add document</label>
-          <input ref={fileRef} type="file" disabled={busy}
-            onChange={(e) => upload(e.target.files?.[0])} />
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            PDF, Word, Excel, images — any file up to 25 MB.
+        <FileDrop onFiles={uploadMany} disabled={busy} paste label="Drop files to attach">
+          <div className="card">
+            <label>Add document</label>
+            <input ref={fileRef} type="file" multiple disabled={busy}
+              onChange={(e) => uploadMany([...(e.target.files ?? [])])} />
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Drag files here, paste with Ctrl+V, or browse. PDF, Word, Excel,
+              images — up to 25 MB each.
+            </div>
+            {busy && <div className="muted">Uploading…</div>}
           </div>
-          {busy && <div className="muted">Uploading…</div>}
-        </div>
+        </FileDrop>
       )}
     </>
   );

@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
+import FileDrop from "./FileDrop";
 
 // Up to 5 supporting documents per item - condition reports, certificates,
 // valuations. Job-level paperwork lives on the job page instead.
@@ -20,6 +21,10 @@ export default function ItemDocuments({ item, jobId }) {
   };
 
   useEffect(() => { load(); }, [item.id]);
+
+  const uploadMany = async (files) => {
+    for (const f of files) await upload(f);
+  };
 
   const upload = async (file) => {
     if (!file) return;
@@ -73,8 +78,10 @@ export default function ItemDocuments({ item, jobId }) {
         </div>
       ))}
       {docs.length < MAX && (
-        <input ref={fileRef} type="file" disabled={busy} style={{ marginBottom: 6 }}
-          onChange={(e) => upload(e.target.files?.[0])} />
+        <FileDrop onFiles={uploadMany} disabled={busy} label="Drop to attach">
+          <input ref={fileRef} type="file" multiple disabled={busy} style={{ marginBottom: 6 }}
+            onChange={(e) => uploadMany([...(e.target.files ?? [])])} />
+        </FileDrop>
       )}
       {busy && <div className="muted">Uploading…</div>}
     </>
