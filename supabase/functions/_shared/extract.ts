@@ -12,7 +12,11 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
    "client_ref": "the requester's own reference for this job, or null",
    "stops": [{"kind":"collection"|"delivery"|"site","label":null,"address":null,
               "contact_name":null,"contact_phone":null,"notes":null}],
-   "scheduled_date": "YYYY-MM-DD or null (resolve relative dates against message date, timezone Africa/Johannesburg)",
+   "scheduled_date": "STRICTLY YYYY-MM-DD, or null. Never words. \"Monday 7 September\"
+     must be resolved to 2026-09-07 using the message date and timezone
+     Africa/Johannesburg; if the year is absent assume the NEXT occurrence, never
+     a past one. If you cannot resolve it confidently, use null and list
+     scheduled_date in missing - a wrong date is worse than none.",
    "time_window": "text or null",
    "hard_deadline": bool,
    "items": [{"description":"","quantity":1,"identity_tier":1|2|3,
@@ -138,7 +142,10 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 1500,
+      // A 12-item job needs ~1,200 tokens of JSON and a 20-item job ~1,850.
+      // At 1500 the reply was truncated mid-string and the parse threw, which
+      // is what silently swallowed jobs with long item lists.
+      max_tokens: 8000,
       system: buildSystem(jobTypes),
       messages: [{
         role: "user",
@@ -160,6 +167,12 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
   const data = await res.json();
   const text = (data.content ?? []).filter((c: { type: string }) => c.type === "text")
     .map((c: { text: string }) => c.text).join("");
+
+  // Name a truncation for what it is. "Unterminated string in JSON" tells you
+  // nothing about the cause; running out of room does.
+  if (data.stop_reason === "max_tokens")
+    throw new Error(`reply hit the ${8000}-token limit and was cut off - the item list is longer than the parser can return`);
+
   return JSON.parse(text.replace(/```json|```/g, "").trim());
 }
 
@@ -176,16 +189,36 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
   let ex: Extraction;
-  try { ex = await extract(body, `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`, typeList, images, docs); }
+  const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`;
+  try { ex = await extract(body, meta, typeList, images, docs); }
   catch (e) {
     console.error("ingest: extraction failed:", e instanceof Error ? e.message : String(e));
-    ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+    // Heavily illustrated emails can fail on the attachments alone. A job built
+    // from the text is far better than nothing, so try once more without them.
+    if (images.length || docs.length) {
+      console.warn(`ingest: retrying without ${images.length} image(s) and ${docs.length} document(s)`);
+      try {
+        ex = await extract(body, meta, typeList, [], []);
+        console.log("ingest: text-only retry succeeded");
+      } catch (e2) {
+        console.error("ingest: text-only retry also failed:",
+          e2 instanceof Error ? e2.message : String(e2));
+        ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+      }
+    } else {
+      ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+    }
   }
 
-  const { data: msg } = await sb.from("messages").insert({
+  const { data: msg, error: msgErr } = await sb.from("messages").insert({
     tenant_id: tenantId, channel, kind: ex.kind ?? "unknown",
     sender, subject, body, raw,
   }).select().single();
+
+  if (msgErr || !msg) {
+    console.error("ingest: MESSAGE INSERT FAILED:", msgErr?.message ?? "no row returned");
+    return `could not record the message: ${msgErr?.message ?? "insert returned nothing"}`;
+  }
 
   console.log(`ingest: kind=${ex.kind} confidence=${ex.confidence} items=${(ex.job as { items?: unknown[] } | null)?.items?.length ?? 0} images=${images.length} bodyChars=${body.length}`);
   if (ex.kind === "chatter" || ex.confidence < 0.5) {
@@ -215,17 +248,39 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // Stops are the source of truth for addresses. origin/destination are left
   // for the sync trigger to fill from the primary stop of each kind - setting
   // them here would make the seed trigger create a duplicate pair.
+  // A date the model wrote in words - "Monday 7 September" - is rejected by
+  // Postgres and used to take the entire job down with it. Anything that is not
+  // a plain YYYY-MM-DD is dropped and flagged for ops instead.
+  const rawDate = j.scheduled_date == null ? null : String(j.scheduled_date).trim();
+  const isoDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
+  if (rawDate && !isoDate) {
+    console.warn(`ingest: unusable date from parser: "${rawDate}" - job saved without one`);
+    flags.push("missing_info:scheduled_date");
+  }
+  // Same care for the time window: it is free text in the database, but an
+  // over-long value usually means the model put the whole sentence in it.
+  const timeWindow = typeof j.time_window === "string" && j.time_window.length <= 80
+    ? j.time_window : null;
+
   const parsedStops = (Array.isArray(j.stops) ? j.stops : []) as Record<string, unknown>[];
   const legacyOrigin = parsedStops.length ? null : (j.origin ?? null);
   const legacyDest   = parsedStops.length ? null : (j.destination ?? null);
 
-  const { data: job } = await sb.from("jobs").insert({
+  const { data: job, error: jobErr } = await sb.from("jobs").insert({
     tenant_id: tenantId, type: j.type ?? "move",
     origin: legacyOrigin, destination: legacyDest,
     client_ref: j.client_ref ?? null,
-    scheduled_date: j.scheduled_date, time_window: j.time_window,
+    scheduled_date: isoDate, time_window: timeWindow,
     hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
   }).select().single();
+
+  // Never let this fail silently: the message is already saved, so a failure
+  // here means an email that reached us and produced nothing visible.
+  if (jobErr || !job) {
+    console.error("ingest: JOB INSERT FAILED:", jobErr?.message ?? "no row returned",
+      "| code:", jobErr?.code ?? "-", "| type:", j.type ?? "move");
+    return `could not create the job: ${jobErr?.message ?? "insert returned nothing"}`;
+  }
   await sb.from("messages").update({ job_id: job.id }).eq("id", msg.id);
 
   // Every address the sender gave, in order, capped at 3 of each kind.

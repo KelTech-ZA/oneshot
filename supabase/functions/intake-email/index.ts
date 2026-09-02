@@ -348,9 +348,18 @@ Deno.serve(async (req) => {
     return new Response("ok");
   }
 
-  const reply = await ingest(sb, tenant.id, "email", sender, subject, body,
+  // ingest must never take the function down: an unhandled throw here means an
+  // email that arrived and produced nothing, with no trace of why.
+  let reply = "";
+  try {
+    reply = await ingest(sb, tenant.id, "email", sender, subject, body,
     { subject, sender, email_id: emailId, images: images.length,
       cc, to: toList, message_id: messageId, docs: docs.length }, images, docs);
+  } catch (e) {
+    console.error("intake-email: INGEST THREW:",
+      e instanceof Error ? `${e.message}\n${e.stack}` : String(e));
+    return new Response("ok");
+  }
 
   console.log("intake-email:", reply || "(no action)",
     "| workspace:", workspaceName ?? "Section 9");
