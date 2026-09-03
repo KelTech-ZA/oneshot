@@ -337,7 +337,9 @@ export default function Job() {
           }
 
           return shown.map((st) => {
-            const kind = st.kind === "collection" ? "released" : "received";
+            const kind = st.kind === "collection" ? "released"
+                       : st.kind === "site"       ? "accepted"
+                       : "received";
             const signed = signoffs.find((x) => x.stop_id === st.id && x.kind === kind);
             return (
               <div key={st.id} style={{ marginBottom: 12 }}>

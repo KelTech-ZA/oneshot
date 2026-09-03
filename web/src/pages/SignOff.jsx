@@ -23,7 +23,26 @@ export default function SignOff({ jobId, tenantId, stop, kind, existing, onSaved
   const canvasRef = useRef(null);
   const drawing = useRef(false);
 
-  const verb = kind === "released" ? "Released by" : "Received by";
+  // Site work is accepted, not received - nothing changes hands at an
+  // installation or a measure-up.
+  const VERB = {
+    released: "Released by",
+    received: "Received by",
+    accepted: "Work accepted by",
+  };
+  const verb = VERB[kind] ?? "Signed by";
+
+  const placeholder = kind === "accepted"
+    ? "Who is signing the work off"
+    : "Who is handing over / receiving";
+
+  const notesHint = kind === "accepted"
+    ? "Anything agreed on site (optional)"
+    : "Anything noted at handover (optional)";
+
+  const notesExample = kind === "accepted"
+    ? "Two brackets still to be painted, client aware"
+    : "Two crates already marked, corner scuffed";
 
   // Prefill the contact we already hold for this stop - usually the right person.
   useEffect(() => {
@@ -128,11 +147,12 @@ export default function SignOff({ jobId, tenantId, stop, kind, existing, onSaved
       {msg && <div className="muted" style={{ color: "var(--warn)", fontSize: 13 }}>{msg}</div>}
 
       <label>Name</label>
-      <input value={name} autoFocus placeholder="Who is handing over / receiving"
+      <input value={name} autoFocus placeholder={placeholder}
         onChange={(e) => setName(e.target.value)} />
 
       <label>Their role (optional)</label>
-      <input value={role} placeholder="Registrar, studio manager, security"
+      <input value={role} placeholder={kind === "accepted"
+        ? "Curator, architect, homeowner" : "Registrar, studio manager, security"}
         onChange={(e) => setRole(e.target.value)} />
 
       <label>Signature (optional)</label>
@@ -150,8 +170,8 @@ export default function SignOff({ jobId, tenantId, stop, kind, existing, onSaved
         </button>
       </div>
 
-      <label>Anything noted at handover (optional)</label>
-      <input value={notes} placeholder="Two crates already marked, corner scuffed"
+      <label>{notesHint}</label>
+      <input value={notes} placeholder={notesExample}
         onChange={(e) => setNotes(e.target.value)} />
 
       <button className="btn btn-primary" disabled={busy} onClick={save}>
