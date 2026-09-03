@@ -5,6 +5,7 @@ import { JobStamp } from "./Today";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
 import { stopName } from "./JobStops";
+import SignOff from "./SignOff";
 
 const ITEM_STAMP = {
   expected: ["pending", "EXPECTED"], collected: ["live", "COLLECTED"],
@@ -36,6 +37,7 @@ export default function Job() {
   const [eventTypes, setEventTypes] = useState([]);
   const [typeLabel, setTypeLabel] = useState("");
   const [stops, setStops] = useState([]);
+  const [signoffs, setSignoffs] = useState([]);
   const [pickedBulk, setPickedBulk] = useState("");
   const [pickedItem, setPickedItem] = useState("");
   const [pickedJob, setPickedJob] = useState("");
@@ -60,6 +62,9 @@ export default function Job() {
     const { data: st } = await supabase.from("job_stops")
       .select("*").eq("job_id", id).order("kind").order("seq");
     setStops(st ?? []);
+    const { data: so } = await supabase.from("stop_signoffs")
+      .select("*").eq("job_id", id);
+    setSignoffs(so ?? []);
     const { data: jt } = await supabase.from("job_types")
       .select("key,label").eq("key", j?.type ?? "").maybeSingle();
     setTypeLabel(jt?.label ?? (j?.type ? String(j.type).replace(/_/g, " ") : ""));
@@ -331,14 +336,24 @@ export default function Job() {
             </>);
           }
 
-          return shown.map((st) => (
-            <div className="muted" key={st.id} style={{ marginBottom: 6 }}>
-              <strong>{st.heading}</strong> {st.address || st.label}
-              {st.address && st.label?.trim() && st.label.trim() !== st.address.trim() && ` (${st.label.trim()})`}
-              {st.contact_name && ` · ${st.contact_name}`}
-              {st.contact_phone && <> · <a href={`tel:${st.contact_phone}`}>{st.contact_phone}</a></>}
-            </div>
-          ));
+          return shown.map((st) => {
+            const kind = st.kind === "collection" ? "released" : "received";
+            const signed = signoffs.find((x) => x.stop_id === st.id && x.kind === kind);
+            return (
+              <div key={st.id} style={{ marginBottom: 12 }}>
+                <div className="muted">
+                  <strong>{st.heading}</strong> {st.address || st.label}
+                  {st.address && st.label?.trim() && st.label.trim() !== st.address.trim() && ` (${st.label.trim()})`}
+                  {st.contact_name && ` · ${st.contact_name}`}
+                  {st.contact_phone && <> · <a href={`tel:${st.contact_phone}`}>{st.contact_phone}</a></>}
+                </div>
+                {jobActive || signed ? (
+                  <SignOff jobId={id} tenantId={job.tenant_id} stop={st} kind={kind}
+                    existing={signed} onSaved={load} />
+                ) : null}
+              </div>
+            );
+          });
         })()}
         <div className="muted" style={{ marginTop: 6 }}>
           {job.scheduled_date ?? "unscheduled"}{job.time_window ? ` · ${job.time_window}` : ""}{job.hard_deadline ? " · HARD DEADLINE" : ""}
