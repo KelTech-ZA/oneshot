@@ -142,19 +142,34 @@ export default function EditJob() {
   const loadPhotos = async (list) => {
     const ids = list.map((x) => x.id);
     if (!ids.length) { setPhotos({}); return; }
+
     const { data, error } = await supabase.from("item_photos")
       .select("id,item_id,path").in("item_id", ids).order("created_at");
     if (error) { console.warn("item_photos not available:", error.message); setPhotos({}); return; }
+
     const rows = data ?? [];
+
+    // Build the map from the ROWS first. Signing used to come first, and a
+    // single unsignable path threw the whole load away - so every item read
+    // 0/3 while its photographs sat in the database.
     const map = {};
-    if (rows.length) {
-      const { data: signed } = await supabase.storage.from("photos")
-        .createSignedUrls(rows.map((r) => r.path), 3600);
-      rows.forEach((r, i) => {
-        (map[r.item_id] ||= []).push({ ...r, url: signed?.[i]?.signedUrl });
-      });
-    }
+    for (const r of rows) (map[r.item_id] ||= []).push({ ...r, url: null });
     setPhotos(map);
+    if (!rows.length) return;
+
+    // Thumbnails are a bonus. If signing fails the counts stay correct.
+    try {
+      const { data: signed, error: signErr } = await supabase.storage.from("photos")
+        .createSignedUrls(rows.map((r) => r.path), 3600);
+      if (signErr) { console.warn("could not sign photo urls:", signErr.message); return; }
+      const withUrls = {};
+      rows.forEach((r, i) => {
+        (withUrls[r.item_id] ||= []).push({ ...r, url: signed?.[i]?.signedUrl ?? null });
+      });
+      setPhotos(withUrls);
+    } catch (e) {
+      console.warn("photo signing threw:", e instanceof Error ? e.message : String(e));
+    }
   };
 
   const removeItemPhoto = async (it, photo) => {
@@ -202,18 +217,37 @@ export default function EditJob() {
     }
     if (!window.confirm(`Remove "${it.description}"? This cannot be undone.`)) return;
 
-    // Clear its reference photos first: they hold a foreign key to the item.
-    const mine = photos[it.id] ?? [];
-    if (mine.length) {
-      await supabase.from("item_photos").delete().eq("item_id", it.id);
+    // Read the photos from the database rather than from screen state: if the
+    // thumbnails failed to load, the files would otherwise be left orphaned.
+    const { data: mine } = await supabase.from("item_photos")
+      .select("id,path").eq("item_id", it.id);
+    if (mine?.length) {
+      const { error: pErr } = await supabase.from("item_photos").delete().eq("item_id", it.id);
+      if (pErr) { setMsg("Could not remove this item's photos: " + pErr.message); return; }
       await supabase.storage.from("photos").remove(mine.map((p) => p.path));
     }
-    await supabase.from("job_documents").delete().eq("item_id", it.id);
 
-    const { error } = await supabase.from("line_items").delete().eq("id", it.id);
+    const { data: theirDocs } = await supabase.from("job_documents")
+      .select("id,path").eq("item_id", it.id);
+    if (theirDocs?.length) {
+      const { error: dErr } = await supabase.from("job_documents").delete().eq("item_id", it.id);
+      if (dErr) { setMsg("Could not remove this item's documents: " + dErr.message); return; }
+      await supabase.storage.from("documents").remove(theirDocs.map((d) => d.path));
+    }
+
+    const { data: gone, error } = await supabase.from("line_items")
+      .delete().eq("id", it.id).select("id");
     if (error) { setMsg("Could not remove item: " + error.message); return; }
-    setItems(items.filter((x) => x.id !== it.id));
-    setPhotos((prev) => { const n = { ...prev }; delete n[it.id]; return n; });
+    if (!gone?.length) {
+      setMsg("That item was not removed — the database refused it. It may have custody events attached.");
+      return;
+    }
+    // Re-read rather than filtering local state: with a long item list several
+    // removals in a row would otherwise work from a stale copy.
+    const { data: fresh } = await supabase.from("line_items")
+      .select("*").eq("job_id", id).order("created_at");
+    setItems(fresh ?? []);
+    await loadPhotos(fresh ?? []);
   };
 
   const inp = (k, label, ph = "") => (
