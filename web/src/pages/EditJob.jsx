@@ -71,13 +71,6 @@ export default function EditJob() {
   }, [id]);
 
 
-  if (loadErr) return (
-    <div className="page">
-      <div className="card" style={{ color: "var(--warn)" }}>Could not open this job: {loadErr}</div>
-      <button className="btn btn-ghost" onClick={() => nav(`/job/${id}`)}>← Back to job</button>
-    </div>
-  );
-  if (!f) return <div className="empty">Loading job…</div>;
 
   const save = async () => {
     const patch = {
@@ -256,6 +249,19 @@ export default function EditJob() {
       <input value={f[k]} placeholder={ph} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
     </>
   );
+
+  // These guards must sit BELOW every handler above. When they were higher,
+  // the first render (f is still null) returned before `loadPhotos` and the
+  // other consts were initialised - so the effect threw
+  // "Cannot access 'loadPhotos' before initialization", photos silently never
+  // loaded, and custody counts never ran.
+  if (loadErr) return (
+    <div className="page">
+      <div className="card" style={{ color: "var(--warn)" }}>Could not open this job: {loadErr}</div>
+      <button className="btn btn-ghost" onClick={() => nav(`/job/${id}`)}>← Back to job</button>
+    </div>
+  );
+  if (!f) return <div className="empty">Loading job…</div>;
 
   return (
     <div className="page">
