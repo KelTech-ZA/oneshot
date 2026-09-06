@@ -27,6 +27,15 @@ Deno.serve(async (req) => {
     .select("item_id,type,taken_at,lat,lng,photo_path,notes")
     .eq("job_id", id).order("taken_at", { ascending: false });
 
+  // Who released, received or accepted the work. This is the part a client or
+  // an insurer actually asks for, so it belongs on the public record.
+  const { data: stops } = await sb.from("job_stops")
+    .select("id,kind,seq,label,address,contact_name")
+    .eq("job_id", id).order("kind").order("seq");
+  const { data: signoffs } = await sb.from("stop_signoffs")
+    .select("stop_id,kind,signer_name,signer_role,notes,signed_at,signature_path")
+    .eq("job_id", id).order("signed_at");
+
   const sign = async (p: string | null) =>
     p ? (await sb.storage.from("photos").createSignedUrl(p, 3600)).data?.signedUrl ?? null : null;
 
@@ -34,5 +43,15 @@ Deno.serve(async (req) => {
     ...job,
     items: await Promise.all((items ?? []).map(async (i) => ({ ...i, anchor_image_url: await sign(i.anchor_image_path) }))),
     events: await Promise.all((events ?? []).map(async (e) => ({ ...e, photo_url: await sign(e.photo_path) }))),
+    stops: stops ?? [],
+    signoffs: await Promise.all((signoffs ?? []).map(async (so) => {
+      const stop = (stops ?? []).find((st) => st.id === so.stop_id);
+      return {
+        ...so,
+        signature_url: await sign(so.signature_path),
+        place: stop?.label || stop?.address || null,
+        stop_kind: stop?.kind ?? null,
+      };
+    })),
   }), { headers: cors });
 });

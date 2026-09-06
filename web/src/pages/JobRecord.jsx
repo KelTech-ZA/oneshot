@@ -41,9 +41,56 @@ export default function JobRecord() {
 
       <h2>Route</h2>
       <div className="card">
-        <div style={{ fontSize: 14 }}><b>From:</b> {rec.origin?.label || rec.origin?.address || "—"}</div>
-        <div style={{ fontSize: 14, marginTop: 4 }}><b>To:</b> {rec.destination?.label || rec.destination?.address || "—"}</div>
+        {(rec.stops ?? []).length ? (
+          ["collection", "delivery", "site"].map((k) =>
+            (rec.stops ?? []).filter((st) => st.kind === k).map((st) => (
+              <div key={st.id} style={{ fontSize: 14, marginTop: 4 }}>
+                <b>{k === "collection" ? "From:" : k === "delivery" ? "To:" : "On site:"}</b>{" "}
+                {st.label || st.address || "—"}
+                {st.label && st.address && st.label !== st.address && (
+                  <span className="muted"> · {st.address}</span>
+                )}
+              </div>
+            )))
+        ) : (<>
+          <div style={{ fontSize: 14 }}><b>From:</b> {rec.origin?.label || rec.origin?.address || "—"}</div>
+          <div style={{ fontSize: 14, marginTop: 4 }}><b>To:</b> {rec.destination?.label || rec.destination?.address || "—"}</div>
+        </>)}
       </div>
+
+      {/* Proof of handover. The reason most people open this link. */}
+      {!!(rec.signoffs ?? []).length && (<>
+        <h2>Signed for</h2>
+        {rec.signoffs.map((so) => {
+          const verb = so.kind === "released" ? "Released by"
+                     : so.kind === "accepted" ? "Work accepted by"
+                     : "Received by";
+          return (
+            <div className="card" key={`${so.stop_id}-${so.kind}`}>
+              <div className="row" style={{ alignItems: "baseline" }}>
+                <span style={{ fontWeight: 600 }}>
+                  {verb} {so.signer_name}
+                  {so.signer_role && <span className="muted">, {so.signer_role}</span>}
+                </span>
+                <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                  {new Date(so.signed_at).toLocaleString("en-ZA",
+                    { day: "numeric", month: "short", year: "numeric",
+                      hour: "2-digit", minute: "2-digit" })}
+                </span>
+              </div>
+              {so.place && <div className="muted" style={{ fontSize: 13 }}>at {so.place}</div>}
+              {so.notes && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>"{so.notes}"</div>
+              )}
+              {so.signature_url && (
+                <img src={so.signature_url} alt={`Signature of ${so.signer_name}`}
+                  style={{ marginTop: 8, maxWidth: 260, width: "100%",
+                    background: "#fff", border: "1px solid var(--line)", borderRadius: 8 }} />
+              )}
+            </div>
+          );
+        })}
+      </>)}
 
       <h2>Items ({rec.items.length})</h2>
       {rec.items.map((i) => (
