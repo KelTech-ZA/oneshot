@@ -27,8 +27,8 @@ Deno.serve(async (req) => {
     .select("item_id,type,taken_at,lat,lng,photo_path,notes")
     .eq("job_id", id).order("taken_at", { ascending: false });
 
-  // Who released, received or accepted the work. This is the part a client or
-  // an insurer actually asks for, so it belongs on the public record.
+  // Who released, received or accepted the work - the part a client or an
+  // insurer actually asks for.
   const { data: stops } = await sb.from("job_stops")
     .select("id,kind,seq,label,address,contact_name")
     .eq("job_id", id).order("kind").order("seq");
@@ -36,15 +36,9 @@ Deno.serve(async (req) => {
     .select("stop_id,kind,signer_name,signer_role,notes,signed_at,signature_path")
     .eq("job_id", id).order("signed_at");
 
-  // Paperwork the workspace chose to share. Anything marked internal stays off
-  // the public record entirely - it is never returned, not merely hidden.
+  // Only documents ops deliberately shared: the link is unauthenticated.
   const { data: docs } = await sb.from("job_documents")
-    .select("id,name,path,mime,size_bytes,item_id,created_at")
-    .eq("job_id", id).eq("client_visible", true).order("created_at");
-
-  // Only documents ops has deliberately shared. The link is unauthenticated.
-  const { data: docs } = await sb.from("job_documents")
-    .select("id,name,path,mime,size_bytes,created_at,item_id")
+    .select("id,name,path,size_bytes,item_id,created_at")
     .eq("job_id", id).eq("client_visible", true).order("created_at");
 
   const sign = async (p: string | null) =>
@@ -56,13 +50,8 @@ Deno.serve(async (req) => {
     events: await Promise.all((events ?? []).map(async (e) => ({ ...e, photo_url: await sign(e.photo_path) }))),
     stops: stops ?? [],
     documents: await Promise.all((docs ?? []).map(async (d) => ({
-      ...d,
-      url: d.path
-        ? (await sb.storage.from("documents").createSignedUrl(d.path, 3600)).data?.signedUrl ?? null
-        : null,
-    }))),
-    documents: await Promise.all((docs ?? []).map(async (d) => ({
-      id: d.id, name: d.name, size_bytes: d.size_bytes, item_id: d.item_id,
+      id: d.id, name: d.name, size_bytes: d.size_bytes,
+      item_id: d.item_id, created_at: d.created_at,
       url: d.path
         ? (await sb.storage.from("documents").createSignedUrl(d.path, 3600)).data?.signedUrl ?? null
         : null,
