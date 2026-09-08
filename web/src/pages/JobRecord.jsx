@@ -115,30 +115,29 @@ export default function JobRecord() {
           const item = (rec.items ?? []).find((i) => i.id === d.item_id);
           const kb = d.size_bytes ? Math.max(1, Math.round(d.size_bytes / 1024)) : null;
           return (
-            <a className="card" key={d.id} href={d.url ?? "#"} target="_blank" rel="noopener"
-               style={{ display: "block" }}>
-              <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{d.name}</div>
-              <div className="muted" style={{ fontSize: 13 }}>
-                {kb ? `${kb} KB` : ""}{kb && item ? " · " : ""}
-                {item ? item.description : ""}
+            <div className="card" key={d.id}>
+              <div className="row" style={{ alignItems: "flex-start", gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{d.name}</div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {kb ? `${kb} KB` : ""}{kb && item ? " · " : ""}
+                    {item ? item.description : ""}
+                  </div>
+                </div>
+                {/* An explicit control: a card that merely happens to be a link
+                    reads as decoration, and nobody clicks it. */}
+                {d.url && (
+                  <a href={d.url} target="_blank" rel="noopener" download={d.name}
+                    style={{ flexShrink: 0, background: "var(--accent)", color: "#fff",
+                      textDecoration: "none", padding: "8px 14px", borderRadius: 10,
+                      fontWeight: 600, fontSize: 14 }}>
+                    Open
+                  </a>
+                )}
               </div>
-            </a>
+            </div>
           );
         })}
-      </>)}
-
-      {!!(rec.documents ?? []).length && (<>
-        <h2>Documents</h2>
-        {rec.documents.map((d) => (
-          <a className="card" key={d.id} href={d.url} target="_blank" rel="noopener"
-            style={{ display: "block" }}>
-            <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{d.name}</div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              {d.size_bytes ? `${Math.round(d.size_bytes / 1024)} KB · ` : ""}
-              {new Date(d.created_at).toLocaleDateString("en-ZA")}
-            </div>
-          </a>
-        ))}
       </>)}
 
       <h2>Custody timeline</h2>
