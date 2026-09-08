@@ -36,6 +36,17 @@ Deno.serve(async (req) => {
     .select("stop_id,kind,signer_name,signer_role,notes,signed_at,signature_path")
     .eq("job_id", id).order("signed_at");
 
+  // Paperwork the workspace chose to share. Anything marked internal stays off
+  // the public record entirely - it is never returned, not merely hidden.
+  const { data: docs } = await sb.from("job_documents")
+    .select("id,name,path,mime,size_bytes,item_id,created_at")
+    .eq("job_id", id).eq("client_visible", true).order("created_at");
+
+  // Only documents ops has deliberately shared. The link is unauthenticated.
+  const { data: docs } = await sb.from("job_documents")
+    .select("id,name,path,mime,size_bytes,created_at,item_id")
+    .eq("job_id", id).eq("client_visible", true).order("created_at");
+
   const sign = async (p: string | null) =>
     p ? (await sb.storage.from("photos").createSignedUrl(p, 3600)).data?.signedUrl ?? null : null;
 
@@ -44,6 +55,18 @@ Deno.serve(async (req) => {
     items: await Promise.all((items ?? []).map(async (i) => ({ ...i, anchor_image_url: await sign(i.anchor_image_path) }))),
     events: await Promise.all((events ?? []).map(async (e) => ({ ...e, photo_url: await sign(e.photo_path) }))),
     stops: stops ?? [],
+    documents: await Promise.all((docs ?? []).map(async (d) => ({
+      ...d,
+      url: d.path
+        ? (await sb.storage.from("documents").createSignedUrl(d.path, 3600)).data?.signedUrl ?? null
+        : null,
+    }))),
+    documents: await Promise.all((docs ?? []).map(async (d) => ({
+      id: d.id, name: d.name, size_bytes: d.size_bytes, item_id: d.item_id,
+      url: d.path
+        ? (await sb.storage.from("documents").createSignedUrl(d.path, 3600)).data?.signedUrl ?? null
+        : null,
+    }))),
     signoffs: await Promise.all((signoffs ?? []).map(async (so) => {
       const stop = (stops ?? []).find((st) => st.id === so.stop_id);
       return {

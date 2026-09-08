@@ -68,6 +68,21 @@ export default function JobDocuments({ jobId, tenantId, canEdit = true }) {
     window.open(data.signedUrl, "_blank", "noopener");
   };
 
+  // The read-only link is unauthenticated, so sharing a document is always a
+  // deliberate act rather than a default.
+  const toggleShare = async (doc) => {
+    const next = !doc.client_visible;
+    if (next && !window.confirm(
+      `Show "${doc.name}" to anyone with the read-only job link?\n\n`
+      + "That link can be forwarded. Only share documents meant for the client."))
+      return;
+    const { data, error } = await supabase.from("job_documents")
+      .update({ client_visible: next }).eq("id", doc.id).select("id");
+    if (error) { setMsg("Could not change sharing: " + error.message); return; }
+    if (!data?.length) { setMsg("That change was refused by the database."); return; }
+    await load();
+  };
+
   const remove = async (doc) => {
     if (!window.confirm(`Remove "${doc.name}"?`)) return;
     setBusy(true);
@@ -103,10 +118,37 @@ export default function JobDocuments({ jobId, tenantId, canEdit = true }) {
               </div>
             </div>
             {isOps && (
-              <button className="muted" disabled={busy} onClick={() => remove(d)}
-                style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", font: "inherit" }}>
-                remove
+              <button className="muted" disabled={busy}
+                title={d.client_visible === false
+                  ? "Internal — not on the client's record"
+                  : "Shown on the client's record"}
+                onClick={async () => {
+                  const { error } = await supabase.from("job_documents")
+                    .update({ client_visible: d.client_visible === false })
+                    .eq("id", d.id);
+                  if (error) { setMsg("Could not change sharing: " + error.message); return; }
+                  await load();
+                }}
+                style={{ background: "none", border: "none", cursor: "pointer", font: "inherit",
+                  color: d.client_visible === false ? "var(--ink-soft)" : "var(--accent)" }}>
+                {d.client_visible === false ? "internal" : "shared"}
               </button>
+            )}
+            {isOps && (
+              <div style={{ display: "flex", gap: 12, flexShrink: 0, alignItems: "center" }}>
+                <button className="muted" disabled={busy} onClick={() => toggleShare(d)}
+                  title={d.client_visible
+                    ? "Visible to anyone with the read-only link"
+                    : "Only visible inside OneShot"}
+                  style={{ background: "none", border: "none", cursor: "pointer", font: "inherit",
+                    color: d.client_visible ? "var(--ok)" : "var(--ink-soft)" }}>
+                  {d.client_visible ? "shared ✓" : "share"}
+                </button>
+                <button className="muted" disabled={busy} onClick={() => remove(d)}
+                  style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", font: "inherit" }}>
+                  remove
+                </button>
+              </div>
             )}
           </div>
         );

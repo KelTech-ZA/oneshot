@@ -109,6 +109,38 @@ export default function JobRecord() {
         </Link>
       ))}
 
+      {!!(rec.documents ?? []).length && (<>
+        <h2>Documents ({rec.documents.length})</h2>
+        {rec.documents.map((d) => {
+          const item = (rec.items ?? []).find((i) => i.id === d.item_id);
+          const kb = d.size_bytes ? Math.max(1, Math.round(d.size_bytes / 1024)) : null;
+          return (
+            <a className="card" key={d.id} href={d.url ?? "#"} target="_blank" rel="noopener"
+               style={{ display: "block" }}>
+              <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{d.name}</div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {kb ? `${kb} KB` : ""}{kb && item ? " · " : ""}
+                {item ? item.description : ""}
+              </div>
+            </a>
+          );
+        })}
+      </>)}
+
+      {!!(rec.documents ?? []).length && (<>
+        <h2>Documents</h2>
+        {rec.documents.map((d) => (
+          <a className="card" key={d.id} href={d.url} target="_blank" rel="noopener"
+            style={{ display: "block" }}>
+            <div style={{ fontWeight: 600, wordBreak: "break-word" }}>{d.name}</div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              {d.size_bytes ? `${Math.round(d.size_bytes / 1024)} KB · ` : ""}
+              {new Date(d.created_at).toLocaleDateString("en-ZA")}
+            </div>
+          </a>
+        ))}
+      </>)}
+
       <h2>Custody timeline</h2>
       {rec.events.map((e, ix) => (
         <div className="card" key={ix}>
