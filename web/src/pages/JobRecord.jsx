@@ -177,14 +177,10 @@ export default function JobRecord() {
           the photographs, the timings and who signed, so the pitch is the page
           itself rather than a claim. */}
       <div className="card no-print" style={{ marginTop: 28, borderLeft: "3px solid var(--accent)" }}>
-        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
-          Records like this one, for your own work
+        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 12 }}>
+          Want to keep records like this for your own work? Create your own
+          workspace on OneShot today for free.
         </div>
-        <p className="muted" style={{ fontSize: 14, marginBottom: 12 }}>
-          OneShot turns a photograph into a permanent, shareable record of what
-          moved, when, and who had it — no barcodes or labels on the goods
-          themselves. Email a job in and the record builds itself as your crew work.
-        </p>
         <Link className="btn btn-primary" style={{ textDecoration: "none" }}
           to={`/signup?from=${encodeURIComponent(rec.tenants?.name ?? "")}`}>
           Create your free workspace
