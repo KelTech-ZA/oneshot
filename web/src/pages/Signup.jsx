@@ -1,8 +1,15 @@
 import React, { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { toLoginEmail, isPhone } from "../lib/identity";
 
 export default function Signup({ onBack }) {
+  // Reachable both as a panel inside Login and on its own at /signup, which is
+  // where the invitation on a shared job record leads.
+  const nav = useNavigate();
+  const [params] = useSearchParams();
+  const from = params.get("from");            // the workspace whose record they saw
+  const back = onBack ?? (() => nav("/"));
   const [f, setF] = useState({ company: "", full_name: "", identifier: "", password: "" });
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
@@ -22,13 +29,18 @@ export default function Signup({ onBack }) {
     const { error } = await supabase.auth.signInWithPassword({
       email: toLoginEmail(f.identifier), password: f.password,
     });
-    if (error) { setMsg(`Workspace created — now sign in. (${error.message})`); onBack(); }
+    if (error) { setMsg(`Workspace created — now sign in. (${error.message})`); back(); }
     setBusy(false);
   };
 
   return (
     <div className="page" style={{ maxWidth: 420, paddingTop: "9vh" }}>
       <div className="wordmark" style={{ fontSize: 22, marginBottom: 6 }}>ONE<b>SHOT</b></div>
+      {from && (
+        <p className="muted" style={{ marginBottom: 8 }}>
+          You were looking at a job record from <b>{from}</b>.
+        </p>
+      )}
       <p className="muted" style={{ marginBottom: 20 }}>Create your workspace. You'll be its ops manager — then add your team with their fixed roles.</p>
       <label>Company / workspace name</label>
       <input value={f.company} onChange={(e) => setF({ ...f, company: e.target.value })} placeholder="Gallery Movers CC" />
@@ -43,7 +55,7 @@ export default function Signup({ onBack }) {
       <button className="btn btn-primary" disabled={busy} onClick={create}>
         {busy ? "Creating…" : "Create workspace"}
       </button>
-      <button className="btn btn-ghost" onClick={onBack}>Back to sign in</button>
+      <button className="btn btn-ghost" onClick={back}>Back to sign in</button>
     </div>
   );
 }

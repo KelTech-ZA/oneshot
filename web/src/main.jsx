@@ -15,6 +15,8 @@ import EmailSetup from "./pages/EmailSetup";
 import WhatsAppSetup from "./pages/WhatsAppSetup";
 import EditJob from "./pages/EditJob";
 import TypeSettings from "./pages/TypeSettings";
+import WorkspaceRecord from "./pages/WorkspaceRecord";
+import Signup from "./pages/Signup";
 import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
 
@@ -241,6 +243,7 @@ function Shell() {
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
         <Route path="/settings/types" element={<TypeSettings />} />
+        <Route path="/w/:token" element={<WorkspaceRecord />} />
       </Routes>
 
       {/* Sync badge with error display */}
@@ -279,6 +282,9 @@ createRoot(document.getElementById("root")).render(
       <Route path="/i/:id" element={<Item />} />
       <Route path="/claim/:jobId/:token" element={<ClaimJob />} />
       <Route path="/j/:jobId" element={<JobRecord />} />
+      {/* Public: the invitation on a shared record leads here, and the visitor
+          is by definition not signed in. */}
+      <Route path="/signup" element={<Signup />} />
       <Route path="*" element={<Shell />} />
     </Routes>
   </BrowserRouter>

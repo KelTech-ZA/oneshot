@@ -25,7 +25,10 @@ export default function JobRecord() {
 
   return (
     <div className="page">
-      <div className="wordmark" style={{ marginBottom: 14 }}>ONE<b>SHOT</b> · JOB RECORD</div>
+      <div className="wordmark" style={{ marginBottom: 2 }}>ONE<b>SHOT</b> · JOB RECORD</div>
+      <div className="muted no-print" style={{ fontSize: 12, marginBottom: 14 }}>
+        A live custody record kept by {rec.tenants?.name ?? "this workspace"}.
+      </div>
       <div className="print-only muted" style={{ marginBottom: 12 }}>
         Job record snapshot · generated {new Date().toLocaleString()} · live record: {window.location.href}
       </div>
@@ -169,6 +172,27 @@ export default function JobRecord() {
         else { await navigator.clipboard.writeText(url); window.alert("Link copied"); }
       }}>↗ Share job record</button>
       <button className="btn btn-ghost" onClick={() => window.print()}>⬇ Download record (PDF snapshot)</button>
+
+      {/* The invitation sits at the END on purpose: by here the visitor has seen
+          the photographs, the timings and who signed, so the pitch is the page
+          itself rather than a claim. */}
+      <div className="card no-print" style={{ marginTop: 28, borderLeft: "3px solid var(--accent)" }}>
+        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
+          Records like this one, for your own work
+        </div>
+        <p className="muted" style={{ fontSize: 14, marginBottom: 12 }}>
+          OneShot turns a photograph into a permanent, shareable record of what
+          moved, when, and who had it — no barcodes or labels on the goods
+          themselves. Email a job in and the record builds itself as your crew work.
+        </p>
+        <Link className="btn btn-primary" style={{ textDecoration: "none" }}
+          to={`/signup?from=${encodeURIComponent(rec.tenants?.name ?? "")}`}>
+          Create your free workspace
+        </Link>
+        <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+          Free to start. This record stays exactly as it is either way.
+        </p>
+      </div>
     </div>
   );
 }
