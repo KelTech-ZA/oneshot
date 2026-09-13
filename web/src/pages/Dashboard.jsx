@@ -5,6 +5,7 @@ import { Ctx } from "../main";
 import { JobStamp } from "./Today";
 import JobList from "./JobList";
 import ClashWarning from "./ClashWarning";
+import JobSearch from "./JobSearch";
 
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
@@ -129,6 +130,8 @@ export default function Dashboard() {
           <button className="btn btn-accent" onClick={createJob}>Create job</button>
         </div>
       )}
+
+      <JobSearch />
 
       <h2>Pending confirmation ({pending.length})</h2>
       {pending.length === 0 && <div className="muted">Nothing waiting. Inbound requests land here.</div>}
