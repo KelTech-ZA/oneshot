@@ -17,6 +17,7 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const [lines, setLines] = useState([]);
   const [draft, setDraft] = useState({});
   const [picked, setPicked] = useState("");
+  const [creating, setCreating] = useState(null);   // { label, unit, rate }
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -37,8 +38,8 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
   if (!isOps) return null;
 
-  const addLine = async (typeId) => {
-    const t = rates.find((x) => x.id === typeId);
+  const addLine = async (typeId, known) => {
+    const t = known ?? rates.find((x) => x.id === typeId);
     setBusy(true);
     const { error } = await supabase.from("job_charges").insert({
       tenant_id: tenantId, job_id: jobId,
@@ -54,6 +55,37 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
     setPicked("");
     if (error) { setMsg(error.message); return; }
     await load();
+  };
+
+  // A new kind of charge usually announces itself mid-job - "clearance" on the
+  // first export - so it can be created here and added straight to the sheet.
+  // It joins the rate card, so the next job simply picks it from the list.
+  const createType = async () => {
+    const label = (creating?.label ?? "").trim();
+    if (!label) { setMsg("Give the charge a name."); return; }
+    const key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    if (!key) { setMsg("Use letters or numbers in the name."); return; }
+
+    setBusy(true);
+    const { data, error } = await supabase.from("charge_types").insert({
+      tenant_id: tenantId,
+      key, label,
+      unit: creating.unit || "job",
+      default_rate: Number(creating.rate) || 0,
+      sort: (rates.at(-1)?.sort ?? 0) + 10,
+    }).select().single();
+    setBusy(false);
+
+    if (error) {
+      setMsg(error.code === "23505"
+        ? `"${label}" is already on your rate card.`
+        : "Could not create it: " + error.message);
+      return;
+    }
+    setCreating(null);
+    setMsg("");
+    await load();
+    await addLine(data.id, data);          // straight onto this job
   };
 
   const patch = async (line, field) => {
@@ -129,17 +161,56 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
       <div className="no-print" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
         <select style={{ flex: 1, marginBottom: 0 }} value={picked}
-          onChange={(e) => setPicked(e.target.value)}>
+          onChange={(e) => {
+            if (e.target.value === "__new") {
+              setPicked("");
+              setCreating({ label: "", unit: "job", rate: "" });
+            } else setPicked(e.target.value);
+          }}>
           <option value="">Add from rate card…</option>
           {rates.map((r) => (
             <option key={r.id} value={r.id}>
               {r.label}{Number(r.default_rate) ? ` — R ${money(r.default_rate)}/${r.unit}` : ""}
             </option>
           ))}
+          <option value="__new">＋ New charge type…</option>
         </select>
         <button className="btn btn-ghost" style={{ marginTop: 0 }}
           disabled={busy || !picked} onClick={() => addLine(picked)}>Add</button>
       </div>
+
+      {creating && (
+        <div className="card no-print">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>New charge type</div>
+          <label>Name</label>
+          <input autoFocus value={creating.label}
+            placeholder="Clearance, crane hire, export packing…"
+            onChange={(e) => setCreating({ ...creating, label: e.target.value })} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label>Rate</label>
+              <input type="number" step="0.01" inputMode="decimal" value={creating.rate}
+                placeholder="0.00"
+                onChange={(e) => setCreating({ ...creating, rate: e.target.value })} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>Per</label>
+              <select value={creating.unit}
+                onChange={(e) => setCreating({ ...creating, unit: e.target.value })}>
+                {["job", "hour", "crate", "item", "day", "km"].map((u) => <option key={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+            This is saved to your rate card and available on every job. The price
+            stays editable per job.
+          </div>
+          <button className="btn btn-primary" disabled={busy} onClick={createType}>
+            {busy ? "Saving…" : "Create and add"}
+          </button>
+          <button className="btn btn-ghost" onClick={() => setCreating(null)}>Cancel</button>
+        </div>
+      )}
 
       <div className="card">
         <div className="row"><span className="muted">Subtotal</span>
