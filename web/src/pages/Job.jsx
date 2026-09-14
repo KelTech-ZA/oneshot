@@ -4,6 +4,7 @@ import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
+import JobCharges from "./JobCharges";
 import { stopName } from "./JobStops";
 import SignOff from "./SignOff";
 
@@ -42,6 +43,14 @@ export default function Job() {
   const [pickedItem, setPickedItem] = useState("");
   const [pickedJob, setPickedJob] = useState("");
   const [showLog, setShowLog] = useState(false);
+
+  // Printing is two different documents: the job card a crew member carries,
+  // and the same card with costs for the office. One page, two outputs.
+  const printOut = (withCharges) => {
+    document.body.classList.toggle("print-charges", withCharges);
+    window.print();
+    setTimeout(() => document.body.classList.remove("print-charges"), 500);
+  };
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
   const isOps = profile?.role === "ops";
@@ -242,6 +251,11 @@ export default function Job() {
           <JobStamp status={job.status} lastEvent={job.last_event_label} alert={job.last_event_alert} />
         </div>
       </div>
+
+      {/* Two columns on a desktop: the job on the left, what it costs on the
+          right. Ops only - crew never see charges, here or in the database. */}
+      <div className={isOps ? "job-split" : undefined}>
+        <div className="job-main">
 
       <div className="card">
         <div className="row">
@@ -607,6 +621,24 @@ export default function Job() {
           </p>
         </>
       )}
+        </div>
+
+        {isOps && (
+          <aside className="charges-panel">
+            <JobCharges jobId={id} tenantId={job.tenant_id} job={job} onJobChange={load} />
+
+            <div className="no-print" style={{ marginTop: 16 }}>
+              <button className="btn btn-ghost" style={{ marginTop: 0 }}
+                onClick={() => printOut(false)}>
+                ⬇ Print job card
+              </button>
+              <button className="btn btn-ghost" onClick={() => printOut(true)}>
+                ⬇ Print job card + charges
+              </button>
+            </div>
+          </aside>
+        )}
+      </div>
     </div>
   );
 }

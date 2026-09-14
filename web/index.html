@@ -125,7 +125,28 @@
       .stops > .btn { margin-bottom: 14px; }
     }
 
+    /* ---- Job page: costs beside the job, not buried under it ----
+       Only on a real screen; the phone keeps a single column. */
+    @media (min-width: 1100px) {
+      .page:has(> .job-split) { max-width: 1240px; }
+      .job-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+        gap: 28px;
+        align-items: start;
+      }
+      .charges-panel { position: sticky; top: 18px; }
+    }
+
     @media (prefers-reduced-motion: reduce) { * { transition:none!important; animation:none!important; } }
+    /* Printing offers two documents from one page: the job card a crew member
+       carries, and the same card with costs for the office. */
+    @media print {
+      .charges-panel { display: none; }
+      body.print-charges .charges-panel { display: block; break-before: page; }
+      .job-split { display: block; }
+    }
+
     @media print {
       .topbar, .btn, .quiet-actions, .syncbadge, .no-print { display: none !important; }
       body { background: #fff; }

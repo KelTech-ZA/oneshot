@@ -13,6 +13,8 @@ export default function TypeSettings() {
   const { profile } = useContext(Ctx);
   const [jobTypes, setJobTypes] = useState([]);
   const [eventTypes, setEventTypes] = useState([]);
+  const [chargeTypes, setChargeTypes] = useState([]);
+  const [newCharge, setNewCharge] = useState("");
   const [newJob, setNewJob] = useState("");
   const [newEvent, setNewEvent] = useState("");
   const [msg, setMsg] = useState("");
@@ -21,12 +23,14 @@ export default function TypeSettings() {
   const isOps = profile?.role === "ops";
 
   const load = async () => {
-    const [{ data: jt }, { data: et }] = await Promise.all([
+    const [{ data: jt }, { data: et }, { data: ct }] = await Promise.all([
       supabase.from("job_types").select("*").order("sort"),
       supabase.from("event_types").select("*").order("sort"),
+      supabase.from("charge_types").select("*").order("sort"),
     ]);
     setJobTypes(jt ?? []);
     setEventTypes(et ?? []);
+    setChargeTypes(ct ?? []);
   };
 
   useEffect(() => { load(); }, []);
@@ -49,7 +53,9 @@ export default function TypeSettings() {
       setMsg(error.code === "23505" ? `⚠ "${clean}" already exists.` : "⚠ " + error.message);
       return;
     }
-    if (table === "job_types") setNewJob(""); else setNewEvent("");
+    if (table === "job_types") setNewJob("");
+    else if (table === "charge_types") setNewCharge("");
+    else setNewEvent("");
     await load();
   };
 
@@ -73,6 +79,15 @@ export default function TypeSettings() {
       return;
     const { error } = await supabase.from(table).update({ active: !row.active }).eq("id", row.id);
     if (error) { setMsg("⚠ " + error.message); return; }
+    await load();
+  };
+
+  const patchCharge = async (row, field, value) => {
+    const payload = field === "default_rate" ? { default_rate: Number(value) || 0 } : { [field]: value };
+    const { data, error } = await supabase.from("charge_types")
+      .update(payload).eq("id", row.id).select("id");
+    if (error) { setMsg("⚠ " + error.message); return; }
+    if (!data?.length) { setMsg("⚠ That change was refused by the database."); return; }
     await load();
   };
 
@@ -117,6 +132,43 @@ export default function TypeSettings() {
           onChange={(e) => setNewJob(e.target.value)} />
         <button className="btn btn-primary" disabled={busy || !newJob.trim()}
           onClick={() => addType("job_types", newJob)}>Add job type</button>
+      </div>
+
+      <h2 style={{ marginTop: 24 }}>Charges &amp; rates</h2>
+      <p className="muted" style={{ marginBottom: 10 }}>
+        Your starting prices. Every line stays editable on the job itself — one
+        crate is rarely the same price as another.
+      </p>
+      {chargeTypes.map((t) => (
+        <div className="card" key={t.id} style={{ opacity: t.active ? 1 : 0.5 }}>
+          <input defaultValue={t.label}
+            onBlur={(e) => patchCharge(t, "label", e.target.value)} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span className="muted" style={{ fontSize: 13 }}>R</span>
+            <input type="number" step="0.01" inputMode="decimal" style={{ width: 120, marginBottom: 0 }}
+              defaultValue={t.default_rate}
+              onBlur={(e) => patchCharge(t, "default_rate", e.target.value)} />
+            <span className="muted" style={{ fontSize: 13 }}>per</span>
+            <select style={{ width: 110, marginBottom: 0 }} defaultValue={t.unit}
+              onChange={(e) => patchCharge(t, "unit", e.target.value)}>
+              {["job", "hour", "crate", "item", "day", "km"].map((u) => <option key={u}>{u}</option>)}
+            </select>
+            <button className="muted" onClick={() => retire("charge_types", t)}
+              style={{ marginLeft: "auto", background: "none", border: "none",
+                color: "var(--warn)", cursor: "pointer", font: "inherit" }}>
+              {t.active ? "retire" : "restore"}
+            </button>
+          </div>
+        </div>
+      ))}
+      <div className="card">
+        <label>Add a charge</label>
+        <input value={newCharge} placeholder="Rigging, crane hire, export packing…"
+          onChange={(e) => setNewCharge(e.target.value)} />
+        <button className="btn btn-primary" disabled={busy || !newCharge.trim()}
+          onClick={() => addType("charge_types", newCharge, { unit: "job", default_rate: 0 })}>
+          Add charge
+        </button>
       </div>
 
       <h2 style={{ marginTop: 24 }}>Events</h2>
