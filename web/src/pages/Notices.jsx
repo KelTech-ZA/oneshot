@@ -5,7 +5,14 @@ import { pendingCount } from "../lib/queue";
 
 // iOS PWAs do not support `new Notification()` - they require the service
 // worker's showNotification(). Try that first, fall back for desktop browsers.
+// True once this device is receiving Web Push. The database trigger already
+// raises a system notification for every custody event, so the page must not
+// raise a second one - that was three alerts for a single occurrence: the
+// in-app card, this, and the push.
+let pushActive = false;
+
 async function browserNotify(title, body) {
+  if (pushActive) return;               // the service worker will show it
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
     const reg = await navigator.serviceWorker?.getRegistration();
@@ -49,6 +56,10 @@ async function registerPush(profile) {
       auth: j.keys.auth,
       user_agent: navigator.userAgent.slice(0, 200),
     }, { onConflict: "endpoint" });
+
+    // From here the server raises system notifications for this device, so the
+    // page stops raising its own.
+    pushActive = true;
   } catch (e) {
     console.warn("push registration failed:", e?.message ?? e);
   }
@@ -146,12 +157,23 @@ export default function Notices({ profile }) {
 
     // Open-job reminder
     (async () => {
+      // What counts as finished is the workspace's own decision. This used to be
+      // a hardcoded list - delivered, in_storage, exception - written before job
+      // types became editable, so an item finished with Built, Installed,
+      // Measured or Cleared was counted as outstanding and the job nagged
+      // forever.
+      // Only events the workspace marks as COMPLETING count as finished.
+      // Alerts deliberately do not: a delayed or damaged item is the one that
+      // most needs chasing, so silencing the reminder would be backwards.
+      const { data: doneTypes } = await supabase.from("event_types")
+        .select("key").eq("active", true).eq("completes_job", true);
+      const finished = new Set((doneTypes ?? []).map((t) => t.key));
+
       const { data: openJobs } = await supabase.from("jobs")
         .select("id, ref, line_items(status)").eq("status", "in_progress");
       const unsynced = await pendingCount();
       for (const j of openJobs ?? []) {
-        const unfinished = (j.line_items ?? []).filter(
-          (i) => !["delivered", "in_storage", "exception"].includes(i.status)).length;
+        const unfinished = (j.line_items ?? []).filter((i) => !finished.has(i.status)).length;
         if (unfinished > 0 || unsynced > 0) {
           const parts = [];
           if (unfinished) parts.push(`${unfinished} item(s) not yet shot`);
