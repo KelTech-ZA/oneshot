@@ -20,18 +20,24 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const [picked, setPicked] = useState("");
   const [creating, setCreating] = useState(null);   // { label, unit, rate }
   const [vatHint, setVatHint] = useState(null);
+  // The issuing party. Read from workspace_billing for whoever is signed in -
+  // RLS scopes that row to their own tenant, so each workspace prints its own
+  // details and its own bank account from this same code.
+  const [issuer, setIssuer] = useState(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   const isOps = profile?.role === "ops";
 
   const load = async () => {
-    const [{ data: r }, { data: l }] = await Promise.all([
+    const [{ data: r }, { data: l }, { data: wb }] = await Promise.all([
       supabase.from("charge_types").select("*").eq("active", true).order("sort"),
       supabase.from("job_charges").select("*").eq("job_id", jobId).order("sort").order("created_at"),
+      supabase.from("workspace_billing").select("*").maybeSingle(),
     ]);
     setRates(r ?? []);
     setLines(l ?? []);
+    setIssuer(wb ?? null);
     setDraft(Object.fromEntries((l ?? []).map((x) => [x.id, {
       description: x.description, quantity: x.quantity, unit_price: x.unit_price,
     }])));
@@ -126,6 +132,27 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
   return (
     <>
+      {/* Printed only. Whose invoice this is - never on screen, where it would
+          just repeat what the user already knows about their own company. */}
+      {issuer && (
+        <div className="only-print" style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>
+            {issuer.trading_name || issuer.legal_name}
+          </div>
+          {issuer.legal_name && issuer.trading_name
+            && issuer.legal_name !== issuer.trading_name && <div>{issuer.legal_name}</div>}
+          {issuer.address && <div style={{ whiteSpace: "pre-line" }}>{issuer.address}</div>}
+          <div>
+            {[issuer.vat_number && `VAT ${issuer.vat_number}`,
+              issuer.reg_number && `Reg. ${issuer.reg_number}`,
+              issuer.eori_number && `EORI ${issuer.eori_number}`].filter(Boolean).join(" · ")}
+          </div>
+          {(issuer.billing_email || issuer.phone) && (
+            <div>{[issuer.billing_email, issuer.phone].filter(Boolean).join(" · ")}</div>
+          )}
+        </div>
+      )}
+
       <BillTo jobId={jobId} tenantId={tenantId} onVatHint={setVatHint} />
 
       {/* Offered, never applied silently: the total is the thing nobody wants
@@ -254,6 +281,29 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
           <span style={{ fontWeight: 700, fontSize: 18 }}>R {money(subtotal + vat)}</span>
         </div>
       </div>
+
+      {/* Payment details, printed. Again from this workspace's own row. */}
+      {issuer && (issuer.bank_account_number || issuer.invoice_footer) && (
+        <div className="only-print" style={{ marginTop: 14, paddingTop: 10,
+          borderTop: "1px solid var(--line)", fontSize: 13 }}>
+          {issuer.bank_account_number && (<>
+            <div style={{ fontWeight: 700, marginBottom: 2 }}>Payment</div>
+            {issuer.bank_account_holder && <div>{issuer.bank_account_holder}</div>}
+            <div>
+              {[issuer.bank_name, issuer.bank_branch,
+                issuer.bank_branch_code && `Branch ${issuer.bank_branch_code}`].filter(Boolean).join(" · ")}
+            </div>
+            <div>Account {issuer.bank_account_number}</div>
+            {issuer.bank_swift && <div>SWIFT {issuer.bank_swift}</div>}
+          </>)}
+          {issuer.payment_terms != null && (
+            <div style={{ marginTop: 4 }}>Payment due within {issuer.payment_terms} days.</div>
+          )}
+          {issuer.invoice_footer && (
+            <div style={{ marginTop: 6, whiteSpace: "pre-line" }}>{issuer.invoice_footer}</div>
+          )}
+        </div>
+      )}
     </>
   );
 }
