@@ -37,7 +37,6 @@ export default function BillTo({ jobId, tenantId, onVatHint }) {
     setRow(b ?? null);
     setDraft(b ?? {});
     setClients(cs ?? []);
-    if (b?.bill_to_name) setOpen(true);
   };
   useEffect(() => { if (isOps) load(); }, [jobId, isOps]);
 
@@ -104,6 +103,30 @@ export default function BillTo({ jobId, tenantId, onVatHint }) {
       <h2>Bill to</h2>
       {msg && <div className="muted" style={{ fontSize: 13, color: "var(--warn)" }}>{msg}</div>}
 
+      {/* Filled in and closed: one line, and a way back in. Ops open this page
+          for the charges, not to scroll past a billing form every time. */}
+      {row?.bill_to_name && !open && (
+        <div className="card" style={{ cursor: "pointer" }} onClick={() => setOpen(true)}>
+          <div className="row" style={{ alignItems: "baseline" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis",
+                whiteSpace: "nowrap" }}>{row.bill_to_name}</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {[row.vat_number && `VAT ${row.vat_number}`,
+                  row.eori_number && `EORI ${row.eori_number}`,
+                  row.reference].filter(Boolean).join(" · ") || "tap to edit"}
+              </div>
+            </div>
+            <span className="muted no-print" style={{ fontSize: 13, flexShrink: 0 }}>edit</span>
+          </div>
+          <div className="only-print" style={{ whiteSpace: "pre-line", marginTop: 6 }}>
+            {row.bill_to_address}
+            {row.reg_number && <div>Reg. {row.reg_number}</div>}
+            {row.invoice_number && <div>Invoice {row.invoice_number}</div>}
+          </div>
+        </div>
+      )}
+
       {!open && !row?.bill_to_name ? (
         <div className="card no-print">
           {clients.length > 0 && (
@@ -121,7 +144,7 @@ export default function BillTo({ jobId, tenantId, onVatHint }) {
             ✎ Enter billing details
           </button>
         </div>
-      ) : (
+      ) : open ? (
         <div className="card">
           {/* Printed as the invoice header, so it reads as a block rather than
               a form once filled in. */}
@@ -164,9 +187,10 @@ export default function BillTo({ jobId, tenantId, onVatHint }) {
             <button className="btn btn-ghost" onClick={saveAsClient}>
               ＋ Save these details as a client
             </button>
+            <button className="btn btn-ghost" onClick={() => setOpen(false)}>Done</button>
           </div>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

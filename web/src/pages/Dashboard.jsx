@@ -101,6 +101,12 @@ export default function Dashboard() {
       <Link to="/settings/types" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Edit job types &amp; events
       </Link>
+      <Link to="/settings/clients" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Clients
+      </Link>
+      <Link to="/settings/billing" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Billing details
+      </Link>
 
       <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
         {showNew ? "Cancel" : "+ New job"}
