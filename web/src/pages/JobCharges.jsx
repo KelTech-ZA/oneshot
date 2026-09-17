@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
+import BillTo from "./BillTo";
 
 // What the job costs. Ops only - the database enforces that too, so this is
 // not merely a hidden panel.
@@ -18,6 +19,7 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const [draft, setDraft] = useState({});
   const [picked, setPicked] = useState("");
   const [creating, setCreating] = useState(null);   // { label, unit, rate }
+  const [vatHint, setVatHint] = useState(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -124,6 +126,23 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
   return (
     <>
+      <BillTo jobId={jobId} tenantId={tenantId} onVatHint={setVatHint} />
+
+      {/* Offered, never applied silently: the total is the thing nobody wants
+          changed behind their back. */}
+      {vatHint && job?.vat_applicable && (
+        <div className="card no-print" style={{ borderLeft: "3px solid var(--accent)" }}>
+          <div style={{ fontSize: 14, marginBottom: 8 }}>
+            {vatHint} is marked as billed outside South Africa. Zero-rate this job?
+          </div>
+          <button className="btn btn-ghost" style={{ marginTop: 0 }}
+            onClick={async () => { await setVat(false); setVatHint(null); }}>
+            Turn VAT off
+          </button>
+          <button className="btn btn-ghost" onClick={() => setVatHint(null)}>Leave it on</button>
+        </div>
+      )}
+
       <h2>Charges</h2>
       {msg && <div className="muted" style={{ color: "var(--warn)", fontSize: 13 }}>{msg}</div>}
 

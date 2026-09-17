@@ -141,7 +141,11 @@
     @media (prefers-reduced-motion: reduce) { * { transition:none!important; animation:none!important; } }
     /* Printing offers two documents from one page: the job card a crew member
        carries, and the same card with costs for the office. */
+    /* Blocks that belong only on the printed invoice, never on screen. */
+    .only-print { display: none; }
+
     @media print {
+      .only-print { display: block; }
       .charges-panel { display: none; }
       body.print-charges .charges-panel { display: block; break-before: page; }
       .job-split { display: block; }
