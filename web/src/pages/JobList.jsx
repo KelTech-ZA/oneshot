@@ -57,6 +57,10 @@ export default function JobList({ jobs, canDelete = false }) {
   // Held in a ref because the drag effect is declared above where sections are
   // built; referencing them directly threw before initialisation.
   const sectionsRef = useRef([]);
+  // Opening the board should land on the work ahead, not on January. Tomorrow
+  // is what ops are usually arranging; today is the fallback when there is
+  // nothing booked for tomorrow yet.
+  const landed = useRef(false);
   const isOps = profile?.role === "ops";
 
   useEffect(() => {
@@ -279,6 +283,27 @@ export default function JobList({ jobs, canDelete = false }) {
   for (const sec of sections)
     sec.label = dayLabel(sec.date, sec.jobs.some((j) => !GROUPS.Done.includes(j.status)));
   sectionsRef.current = sections;
+
+  useEffect(() => {
+    if (landed.current || !sections.length) return;
+    landed.current = true;                      // once per mount, never again
+
+    const day = (offset) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return localISO(d);
+    };
+    const target = [day(1), day(0)].find((k) => sections.some((sc) => sc.key === k));
+    if (!target) return;                        // nothing for today or tomorrow
+
+    // Let the cards paint before measuring, or the position is wrong.
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-daykey="${target}"]`);
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY - 12;
+      if (top > window.scrollY + 40) window.scrollTo({ top, behavior: "smooth" });
+    });
+  }, [sections.length]);
 
   return (
     <>

@@ -46,10 +46,16 @@ export default function Job() {
 
   // Printing is two different documents: the job card a crew member carries,
   // and the same card with costs for the office. One page, two outputs.
-  const printOut = (withCharges) => {
-    document.body.classList.toggle("print-charges", withCharges);
+  // Three documents from one page: the job card a crew member carries, the same
+  // card with costs for the office, and the invoice on its own for the client.
+  const printOut = (mode) => {
+    const cls = mode === "charges" ? "print-charges"
+              : mode === "invoice" ? "print-invoice" : null;
+    if (cls) document.body.classList.add(cls);
     window.print();
-    setTimeout(() => document.body.classList.remove("print-charges"), 500);
+    setTimeout(() => {
+      document.body.classList.remove("print-charges", "print-invoice");
+    }, 500);
   };
 
   const photoCount = (itemId) => events.filter((e) => e.item_id === itemId && e.photo_path).length;
@@ -629,11 +635,14 @@ export default function Job() {
 
             <div className="no-print" style={{ marginTop: 16 }}>
               <button className="btn btn-ghost" style={{ marginTop: 0 }}
-                onClick={() => printOut(false)}>
+                onClick={() => printOut("job")}>
                 ⬇ Print job card
               </button>
-              <button className="btn btn-ghost" onClick={() => printOut(true)}>
+              <button className="btn btn-ghost" onClick={() => printOut("charges")}>
                 ⬇ Print job card + charges
+              </button>
+              <button className="btn btn-ghost" onClick={() => printOut("invoice")}>
+                ⬇ Print invoice only
               </button>
             </div>
           </aside>

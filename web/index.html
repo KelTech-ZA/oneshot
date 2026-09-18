@@ -146,9 +146,17 @@
 
     @media print {
       .only-print { display: block; }
-      .charges-panel { display: none; }
-      body.print-charges .charges-panel { display: block; break-before: page; }
       .job-split { display: block; }
+
+      /* the job card alone */
+      .charges-panel { display: none; }
+
+      /* the job card with costs behind it */
+      body.print-charges .charges-panel { display: block; break-before: page; }
+
+      /* the invoice on its own - no job card, no page break before it */
+      body.print-invoice .job-main { display: none; }
+      body.print-invoice .charges-panel { display: block; break-before: auto; }
     }
 
     @media print {
