@@ -160,11 +160,40 @@
     }
 
     @media print {
-      .topbar, .btn, .quiet-actions, .syncbadge, .no-print { display: none !important; }
-      body { background: #fff; }
+      /* A printed job card or invoice is a DOCUMENT, not a screenshot of the
+         app. Everything a person taps belongs on screen and nowhere else. */
+      .topbar, .btn, .quiet-actions, .syncbadge, .no-print,
+      .notices, .stamp-legend, .empty { display: none !important; }
+
+      /* Controls: the VALUE is content, the control is not. */
+      select, button, [role="button"] { display: none !important; }
+      input, textarea {
+        border: none !important; outline: none !important; box-shadow: none !important;
+        background: transparent !important; padding: 0 !important; margin: 0 !important;
+        color: #000 !important; font: inherit !important; resize: none !important;
+        -webkit-appearance: none; appearance: none;
+      }
+      input[type="checkbox"], input[type="file"] { display: none !important; }
+      label { color: #555; font-size: 10pt; }
+
+      body { background: #fff; color: #000; font-size: 11pt; }
       .page { padding: 0; max-width: none; }
-      .card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+      a { color: #000; text-decoration: none; }
+
+      /* Flat on paper: borders and shadows are screen affordances. */
+      .card {
+        box-shadow: none; border: none; border-bottom: 1px solid #ddd;
+        border-radius: 0; padding: 6px 0; margin: 0;
+        break-inside: avoid;
+      }
+      h1 { font-size: 17pt; margin: 0 0 2px; }
+      h2 { font-size: 12pt; margin: 14px 0 4px; border-bottom: 1px solid #000;
+           padding-bottom: 2px; break-after: avoid; }
+      .muted { color: #444; }
+      .ref { font-weight: 700; }
+
       .print-only { display: block !important; }
+      @page { margin: 16mm 14mm; }
     }
     .print-only { display: none; }
   </style>

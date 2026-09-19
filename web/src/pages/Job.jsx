@@ -402,6 +402,8 @@ export default function Job() {
         )}
       </div>
 
+      {/* Controls for running the job. Not part of any printed document. */}
+      <div className="no-print">
       <h2>Job Status</h2>
       {/* Reads the workspace's own event types, so a fabrication job can be
           marked Built here and not just Delivered. */}
@@ -442,12 +444,14 @@ export default function Job() {
         </button>
       )}
 
+      </div>
+
       <JobDocuments jobId={id} tenantId={job.tenant_id} canEdit={jobOpen} />
 
       {/* Who did what, and when. Every custody event on this job, newest first,
           plus the acknowledgements that are stored on the job rather than as
           events. Read-only: the log is evidence, not a workspace. */}
-      <h2>History ({events.length + (job.accepted_by ? 1 : 0)})</h2>
+      <h2 className="no-print">History ({events.length + (job.accepted_by ? 1 : 0)})</h2>
       {events.length + (job.accepted_by ? 1 : 0) === 0 ? (
         <div className="muted">Nothing logged yet.</div>
       ) : (<>

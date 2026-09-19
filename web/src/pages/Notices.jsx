@@ -197,7 +197,7 @@ export default function Notices({ profile }) {
   return (
     // width:100% matters: #root is a flex column, and auto cross-axis margins
     // cancel `stretch`, which collapses this block to its narrowest content.
-    <div style={{ width: "100%", maxWidth: 720, margin: "0 auto", padding: "10px 16px 0" }}>
+    <div className="no-print" style={{ width: "100%", maxWidth: 720, margin: "0 auto", padding: "10px 16px 0" }}>
       {askToEnable && (
         <div className="card">
           <div className="row" style={{ alignItems: "flex-start" }}>
