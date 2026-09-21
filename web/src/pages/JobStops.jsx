@@ -16,6 +16,18 @@ export const KINDS = [
 export const stopName = (s) =>
   s?.label || s?.address || (s ? "Unnamed stop" : "—");
 
+// A collection stop is timed by when the goods leave it, a delivery or site
+// stop by when they arrive. Never both - the database enforces that too.
+export const timeField = (kind) => (kind === "collection" ? "etd" : "eta");
+
+// Free text, shown exactly as the office wrote it. "between 9 and 11" and
+// "08:15, call Bheki first" are as valid as "09:30", so nothing is parsed or
+// reformatted here - a blank-looking value is simply no estimate.
+export function stopTimeLabel(stop) {
+  const raw = stop?.[timeField(stop?.kind)];
+  return raw && String(raw).trim() ? String(raw).trim() : null;
+}
+
 export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
   // Controlled drafts: typing stays put even when the list reloads underneath,
   // and each field reports that it saved instead of committing invisibly.
@@ -28,6 +40,7 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
       for (const s of stops) if (!next[s.id]) next[s.id] = {
         label: s.label ?? "", address: s.address ?? "",
         contact_name: s.contact_name ?? "", contact_phone: s.contact_phone ?? "",
+        etd: s.etd ?? "", eta: s.eta ?? "",
       };
       return next;
     });
@@ -122,6 +135,21 @@ export default function JobStops({ jobId, tenantId, stops, onChange, setMsg }) {
                 <input value={draft[s.id]?.contact_phone ?? ""}
                   onChange={(e) => edit(s.id, "contact_phone", e.target.value)}
                   onBlur={() => patch(s, "contact_phone")} />
+
+                {/* One time per stop: goods leave a collection, they arrive at
+                    a delivery or a site. Free text, because half the real
+                    answers are a range or carry a condition. */}
+                <label style={{ marginTop: 4 }}>
+                  {kind === "collection" ? "ETD — leaving this address"
+                                         : "ETA — arriving at this address"}
+                </label>
+                <input
+                  value={draft[s.id]?.[timeField(kind)] ?? ""}
+                  placeholder={kind === "collection"
+                    ? "08:15, or “between 9 and 11”"
+                    : "11:45, or “after the Stevenson drop”"}
+                  onChange={(e) => edit(s.id, timeField(kind), e.target.value)}
+                  onBlur={() => patch(s, timeField(kind))} />
               </div>
             ))}
             {list.length < 3 && (
