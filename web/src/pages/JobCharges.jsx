@@ -2,15 +2,17 @@ import React, { useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
 import BillTo from "./BillTo";
+import { CURRENCIES, amount, amountWithCode, jobCurrency, money } from "../lib/money";
 
 // What the job costs. Ops only - the database enforces that too, so this is
 // not merely a hidden panel.
 //
 // The rate card fills a line in; it never locks it. One crate is not the same
 // price as another, so description, quantity and price all stay editable.
-
-const money = (n) =>
-  (Number(n) || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+//
+// Currency is chosen per invoice and NOTHING is converted. Switching to USD
+// relabels the sheet; it does not restate a rand rate card in dollars. The
+// warning below exists because that distinction is easy to miss at a glance.
 
 export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const { profile } = useContext(Ctx);
@@ -20,6 +22,7 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const [picked, setPicked] = useState("");
   const [creating, setCreating] = useState(null);   // { label, unit, rate }
   const [vatHint, setVatHint] = useState(null);
+  const [ccyVatOffer, setCcyVatOffer] = useState(null);
   // The issuing party. Read from workspace_billing for whoever is signed in -
   // RLS scopes that row to their own tenant, so each workspace prints its own
   // details and its own bank account from this same code.
@@ -123,6 +126,32 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
     await onJobChange?.();
   };
 
+  // The job's own currency, else what this workspace bills in, else rand.
+  const ccy = jobCurrency(job, issuer);
+  const homeCcy = issuer?.default_currency ?? "ZAR";
+
+  const setCurrency = async (code) => {
+    if (code === ccy) return;
+    // The rate card is priced in the workspace's own currency. Moving a sheet
+    // that already has lines on it leaves those numbers untouched - which is
+    // correct, and worth saying out loud before it goes to a client.
+    if (lines.length && !window.confirm(
+      `Bill this job in ${code}?\n\n`
+      + `The ${lines.length} line${lines.length > 1 ? "s" : ""} already on the sheet keep their `
+      + `numbers exactly as they are — nothing is converted. Re-enter the prices `
+      + `in ${code} yourself.`)) return;
+
+    const { data, error } = await supabase.from("jobs")
+      .update({ currency: code }).eq("id", jobId).select("id");
+    if (error) { setMsg("Could not change currency: " + error.message); return; }
+    if (!data?.length) { setMsg("That change was refused by the database."); return; }
+    setMsg("");
+    // Billing in a foreign currency is nearly always billing outside South
+    // Africa. Offered, never applied - same rule as the Bill-to hint.
+    setCcyVatOffer(code !== "ZAR" && job?.vat_applicable ? code : null);
+    await onJobChange?.();
+  };
+
   const subtotal = lines.reduce((n, l) => n + Number(l.line_total ?? 0), 0);
   const rate = Number(job?.vat_rate ?? 15);
   const vat = job?.vat_applicable ? subtotal * (rate / 100) : 0;
@@ -170,6 +199,20 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
         </div>
       )}
 
+      {ccyVatOffer && job?.vat_applicable && (
+        <div className="card no-print" style={{ borderLeft: "3px solid var(--accent)" }}>
+          <div style={{ fontSize: 14, marginBottom: 8 }}>
+            Billing in {ccyVatOffer} usually means billing outside South Africa.
+            Zero-rate this job?
+          </div>
+          <button className="btn btn-ghost" style={{ marginTop: 0 }}
+            onClick={async () => { await setVat(false); setCcyVatOffer(null); }}>
+            Turn VAT off
+          </button>
+          <button className="btn btn-ghost" onClick={() => setCcyVatOffer(null)}>Leave it on</button>
+        </div>
+      )}
+
       <h2>Charges</h2>
       {msg && <div className="muted" style={{ color: "var(--warn)", fontSize: 13 }}>{msg}</div>}
 
@@ -196,7 +239,7 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
               onChange={(e) => setDraft({ ...draft, [l.id]: { ...draft[l.id], unit_price: e.target.value } })}
               onBlur={() => patch(l, "unit_price")} />
             <span style={{ marginLeft: "auto", fontWeight: 600, whiteSpace: "nowrap" }}>
-              R {money(l.line_total)}
+              {amount(l.line_total, ccy)}
             </span>
             <button onClick={() => removeLine(l)} aria-label="Remove charge" className="no-print"
               style={{ background: "none", border: "none", color: "var(--warn)",
@@ -216,7 +259,7 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
           <option value="">Add from rate card…</option>
           {rates.map((r) => (
             <option key={r.id} value={r.id}>
-              {r.label}{Number(r.default_rate) ? ` — R ${money(r.default_rate)}/${r.unit}` : ""}
+              {r.label}{Number(r.default_rate) ? ` — ${amount(r.default_rate, homeCcy)}/${r.unit}` : ""}
             </option>
           ))}
           <option value="__new">＋ New charge type…</option>
@@ -259,8 +302,27 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
       )}
 
       <div className="card">
+        {/* Chosen per invoice, above the money it applies to. */}
+        <div className="row no-print" style={{ alignItems: "center", marginBottom: 8 }}>
+          <span className="muted">Invoice in</span>
+          <select value={ccy} onChange={(e) => setCurrency(e.target.value)}
+            style={{ width: 210, marginBottom: 0 }}>
+            {CURRENCIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.code} — {c.name}{c.code === homeCcy ? " (your default)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        {ccy !== homeCcy && (
+          <div className="muted no-print" style={{ fontSize: 12, marginBottom: 8 }}>
+            Your rate card is priced in {homeCcy}. Prices pulled from it are not
+            converted — type the {ccy} figure on each line.
+          </div>
+        )}
+
         <div className="row"><span className="muted">Subtotal</span>
-          <span style={{ fontWeight: 600 }}>R {money(subtotal)}</span></div>
+          <span style={{ fontWeight: 600 }}>{amount(subtotal, ccy)}</span></div>
 
         <label className="no-print" style={{ display: "flex", gap: 8, alignItems: "flex-start",
           margin: "8px 0", fontWeight: 400 }}>
@@ -274,11 +336,11 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
         <div className="row">
           <span className="muted">VAT{job?.vat_applicable ? ` (${rate}%)` : " — zero-rated"}</span>
-          <span style={{ fontWeight: 600 }}>R {money(vat)}</span>
+          <span style={{ fontWeight: 600 }}>{amount(vat, ccy)}</span>
         </div>
         <div className="row" style={{ marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
           <span style={{ fontWeight: 700 }}>Total</span>
-          <span style={{ fontWeight: 700, fontSize: 18 }}>R {money(subtotal + vat)}</span>
+          <span style={{ fontWeight: 700, fontSize: 18 }}>{amountWithCode(subtotal + vat, ccy)}</span>
         </div>
       </div>
 
