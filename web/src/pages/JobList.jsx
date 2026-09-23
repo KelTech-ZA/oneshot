@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { JobStamp } from "./Today";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { Ctx } from "../main";
+import JobCalendar from "./JobCalendar";
 
 // Shared chronological job list.
 // Sort: scheduled_date ascending (undated last), tiebreak on creation time —
@@ -19,6 +20,26 @@ function timeRank(tw) {
   if (m[3] === "pm" && h < 12) h += 12;
   if (m[3] === "am" && h === 12) h = 0;
   return h * 60 + min;
+}
+
+// Wide enough for two columns. Below this the calendar and the list take
+// turns: pick a day, then read it.
+const WIDE = "(min-width: 900px)";
+
+function useWide() {
+  const [wide, setWide] = useState(
+    () => typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia(WIDE).matches : true);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(WIDE);
+    const on = (e) => setWide(e.matches);
+    // addListener is the deprecated form, still needed by older iOS Safari.
+    mq.addEventListener ? mq.addEventListener("change", on) : mq.addListener(on);
+    return () => (mq.removeEventListener
+      ? mq.removeEventListener("change", on) : mq.removeListener(on));
+  }, []);
+  return wide;
 }
 
 const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -42,6 +63,13 @@ const GROUPS = {
 
 export default function JobList({ jobs, canDelete = false }) {
   const [filter, setFilter] = useState("All");
+  // The day the calendar last sent us to. It highlights that cell and drives
+  // the scroll - it never filters. The list always holds every job, so you can
+  // keep scrolling up into last week or down into next.
+  const [picked, setPicked] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [scrollTo, setScrollTo] = useState(null);   // key to reveal after paint
+  const wide = useWide();
   const { profile } = useContext(Ctx);
   const [removed, setRemoved] = useState(new Set());
   const [busyId, setBusyId] = useState(null);
@@ -62,6 +90,12 @@ export default function JobList({ jobs, canDelete = false }) {
   // nothing booked for tomorrow yet.
   const landed = useRef(false);
   const isOps = profile?.role === "ops";
+  // Matches the calendar's window: the Monday of last week.
+  const windowStart = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7);
+    return localISO(d);
+  })();
 
   useEffect(() => {
     supabase.from("job_types").select("key,label")
@@ -305,7 +339,82 @@ export default function JobList({ jobs, canDelete = false }) {
     });
   }, [sections.length]);
 
-  return (
+  // Reveal the chosen day once the list has painted. On a phone the list is
+  // not even mounted until a day is picked, so this cannot happen in the
+  // click handler - it has to wait for the render that the click causes.
+  useEffect(() => {
+    if (!scrollTo) return;
+    const id = requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-daykey="${scrollTo}"]`);
+      setScrollTo(null);
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY - 12;
+      window.scrollTo({ top, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [scrollTo]);
+
+  // Where a calendar click should land. A day with no jobs has no section to
+  // scroll to, so it says so rather than jumping somewhere arbitrary.
+  const pickDay = (key) => {
+    setPicked(key);
+    landed.current = true;        // the user has chosen; stop auto-landing
+    if (!key) { setNotice(""); return; }
+
+    let target = key;
+    if (key === "earlier") {
+      const first = sectionsRef.current.find(
+        (sc) => sc.date && sc.date < windowStart && !GROUPS.Done.includes(sc.jobs[0]?.status));
+      target = first?.key ?? null;
+    }
+    if (target && sectionsRef.current.some((sc) => sc.key === target)) {
+      setNotice("");
+      setScrollTo(target);
+    } else {
+      const d = key === "none" ? "Unscheduled" : key === "earlier" ? "Earlier" : dayLabel(key, true);
+      setNotice(key === "none" || key === "earlier"
+        ? `Nothing ${d.toLowerCase()}.`
+        : `No jobs on ${d}.`);
+    }
+  };
+
+  const calendar = (
+    <JobCalendar jobs={shown} selected={picked} onSelect={pickDay} compact={!wide} />
+  );
+
+  const filters = (
+    <div style={{ display: "flex", gap: 8, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
+      {["All", "To do", "In progress", "Done"].map((f) => (
+        <button key={f} onClick={() => setFilter(f)}
+          className={filter === f ? "stamp live" : "stamp pending"}
+          style={{ background: "none", cursor: "pointer", padding: "7px 12px", whiteSpace: "nowrap" }}>
+          {f}
+        </button>
+      ))}
+    </div>
+  );
+
+  const noticeBar = notice
+    ? <div className="muted no-print" style={{ fontSize: 13, marginBottom: 8 }}>{notice}</div>
+    : null;
+
+  // On a phone the calendar IS the screen until a day is picked. After that
+  // the list takes over - the whole list, scrolled to that day, so last week
+  // is still a scroll upwards.
+  if (!wide && !picked) {
+    return (
+      <>
+        {filters}
+        {calendar}
+        {noticeBar}
+        <div className="muted" style={{ fontSize: 13, marginTop: 12, textAlign: "center" }}>
+          Pick a day to open the list there.
+        </div>
+      </>
+    );
+  }
+
+  const list = (
     <>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
         {["All", "To do", "In progress", "Done"].map((f) => (
@@ -413,6 +522,32 @@ export default function JobList({ jobs, canDelete = false }) {
         </div>
       ))}
     </>
+  );
+
+  if (!wide) {
+    return (
+      <>
+        <button onClick={() => { setPicked(null); setNotice(""); }} className="no-print"
+          style={{ background: "none", border: "none", color: "var(--accent)",
+            cursor: "pointer", font: "inherit", padding: 0, marginBottom: 10 }}>
+          ‹ Calendar
+        </button>
+        {noticeBar}
+        {list}
+      </>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(230px, 280px) 1fr",
+      gap: 24, alignItems: "start" }}>
+      {/* Sticky, so the planner stays put while the list scrolls past it. */}
+      <div style={{ position: "sticky", top: 12 }}>{calendar}</div>
+      <div style={{ minWidth: 0 }}>
+        {noticeBar}
+        {list}
+      </div>
+    </div>
   );
 }
 
