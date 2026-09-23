@@ -308,43 +308,85 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
+  // ---- which workspace is this for? ---------------------------------------
+  // In order of how hard it is for a human to get wrong:
+  //
+  //   1. the address it was sent to, matched against intake_routes. A sender
+  //      cannot mistype this - they picked it from a contact or a rule sent it.
+  //      This is also what makes Teams intake work: forward a client's mail to
+  //      the Teams channel AND the workspace's OneShot address, and the team
+  //      sees the thread while OneShot gets the job.
+  //   2. a "Workspace name:" prefix on the subject, kept so anything already
+  //      set up that way keeps working.
+  //   3. the catch-all route, which is the old hardcoded Section 9 fallback
+  //      expressed as a row someone can move.
+  //
+  // Nothing is guessed. An email that matches none of the three is logged and
+  // dropped, because filing a client's job in a stranger's workspace is worse
+  // than not filing it at all.
+  let tenant: { id: string } | null = null;
+  let routedBy = "";
+
+  const recipients = [...toList, ...cc]
+    .map((a) => a.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0]?.toLowerCase())
+    .filter(Boolean) as string[];
+
+  if (recipients.length) {
+    // Matched in here rather than with .in(), because an address stored as
+    // "Jobs@In.Section9.co.za" must still match a mail addressed in lower
+    // case. There are a handful of routes per workspace, so this is cheap.
+    const { data: routes } = await sb.from("intake_routes")
+      .select("tenant_id, address, label")
+      .eq("channel", "email").eq("active", true)
+      .not("address", "is", null);
+    const hit = (routes ?? []).find((r) =>
+      recipients.includes(String(r.address).trim().toLowerCase()));
+    if (hit) {
+      tenant = { id: hit.tenant_id };
+      routedBy = `address ${hit.address}${hit.label ? ` (${hit.label})` : ""}`;
+    }
+  }
+
+  const cleanSubject = subject.replace(/^\s*((RE|FW|FWD)\s*:\s*)+/i, "").trim();
+  const prefixMatch = cleanSubject.match(/^([^:]+):\s*(.+)$/);
+  const workspaceName = prefixMatch ? prefixMatch[1].trim() : null;
+
+  if (!tenant && workspaceName) {
+    const { data } = await sb.from("tenants").select("id")
+      .ilike("name", workspaceName).limit(1).maybeSingle();
+    if (data) { tenant = data; routedBy = `subject prefix "${workspaceName}"`; }
+    else console.warn(`intake-email: no workspace matched "${workspaceName}"`);
+  }
+
+  if (!tenant) {
+    const { data } = await sb.from("intake_routes").select("tenant_id")
+      .eq("channel", "email").eq("active", true).eq("is_default", true)
+      .limit(1).maybeSingle();
+    if (data) { tenant = { id: data.tenant_id }; routedBy = "catch-all route"; }
+  }
+
+  if (!tenant) {
+    console.error("intake-email: ABORT — no route matched and no catch-all is set. "
+      + `to=[${toList.join(", ")}] subject="${subject}"`);
+    return new Response("ok");
+  }
+  console.log(`intake-email: routed by ${routedBy}`);
+
   // ---- STOP replies -------------------------------------------------------
   // Progress emails invite the client to reply STOP. That reply arrives here,
-  // so it is recognised and recorded rather than parsed as a new job.
+  // so it is recognised and recorded rather than parsed as a new job. The
+  // opt-out belongs to the workspace they were hearing from - resolved above,
+  // not assumed - or one client's STOP silences another workspace's emails.
   const firstWords = `${subject} ${body}`.slice(0, 200).toLowerCase();
   if (/\b(stop|unsubscribe|opt[\s-]?out|no more emails)\b/.test(firstWords)
       && !/\b(collect|deliver|pickup|pick up|install|build|fabricat|pack|crate)\b/.test(firstWords)) {
     const from = sender.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0]?.toLowerCase();
     if (from) {
-      const { data: t } = await sb.from("tenants").select("id").eq("name", "Section 9").limit(1).maybeSingle();
-      if (t) {
-        await sb.from("notification_optouts")
-          .upsert({ tenant_id: t.id, email: from, source: "reply" }, { onConflict: "tenant_id,email" });
-        console.log(`intake-email: ${from} opted out of progress emails`);
-      }
+      await sb.from("notification_optouts")
+        .upsert({ tenant_id: tenant.id, email: from, source: "reply" },
+          { onConflict: "tenant_id,email" });
+      console.log(`intake-email: ${from} opted out of progress emails`);
     }
-    return new Response("ok");
-  }
-
-  // ---- workspace from the subject prefix -----------------------------------
-  const cleanSubject = subject.replace(/^\s*((RE|FW|FWD)\s*:\s*)+/i, "").trim();
-  const prefixMatch = cleanSubject.match(/^([^:]+):\s*(.+)$/);
-  const workspaceName = prefixMatch ? prefixMatch[1].trim() : null;
-
-  let tenant = null;
-  if (workspaceName) {
-    const { data } = await sb.from("tenants").select("id")
-      .ilike("name", workspaceName).limit(1).maybeSingle();
-    tenant = data;
-    if (!tenant) console.warn(`intake-email: no workspace matched "${workspaceName}"`);
-  }
-  if (!tenant) {
-    const { data } = await sb.from("tenants").select("id")
-      .eq("name", "Section 9").limit(1).maybeSingle();
-    tenant = data;
-  }
-  if (!tenant) {
-    console.error("intake-email: ABORT — could not resolve any tenant");
     return new Response("ok");
   }
 

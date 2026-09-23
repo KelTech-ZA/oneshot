@@ -222,6 +222,9 @@ export default function Dashboard() {
       <Link className="card" to="/setup/email" style={{ fontWeight: 600 }}>
         ✉ Email intake setup — Outlook, Gmail, Yahoo, iCloud &amp; more
       </Link>
+      <Link className="card" to="/setup/teams" style={{ fontWeight: 600 }}>
+        ⧉ Teams intake setup — channel address &amp; forwarding
+      </Link>
       <Link className="card" to="/setup/whatsapp" style={{ fontWeight: 600 }}>
         💬 WhatsApp intake setup — group routing &amp; codes
       </Link>

@@ -13,6 +13,7 @@ import Dashboard from "./pages/Dashboard";
 import Notices from "./pages/Notices";
 import EmailSetup from "./pages/EmailSetup";
 import WhatsAppSetup from "./pages/WhatsAppSetup";
+import TeamsSetup from "./pages/TeamsSetup";
 import EditJob from "./pages/EditJob";
 import TypeSettings from "./pages/TypeSettings";
 import Clients from "./pages/Clients";
@@ -242,6 +243,7 @@ function Shell() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/setup/email" element={<EmailSetup />} />
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
+        <Route path="/setup/teams" element={<TeamsSetup />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />
