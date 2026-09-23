@@ -109,6 +109,52 @@
       .page > h1, .page > p { max-width: 720px; }
     }
 
+    /* ---- The board: calendar fixed, jobs scrolling beside it ----
+       A real split, not two things stacked in one scrolling page. The board
+       is given an explicit pixel height in JS (it depends on the top bar, the
+       notices and whatever heading sits above it), and each pane scrolls
+       inside that height - so the calendar is still there at job two hundred.
+
+       The card-column grid is repeated here because the rule above reaches
+       cards through `.page > div`, and inside the board they are three levels
+       deeper. Same layout, different ancestor. */
+    @media (min-width: 960px) {
+      .page:has(> .board) { max-width: none; }
+
+      .board {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr);
+        gap: 22px;
+        align-items: stretch;
+      }
+      .board-cal {
+        overflow-y: auto;
+        padding-right: 4px;
+        border-right: 1px solid var(--line);
+      }
+      .board-main { display: flex; flex-direction: column; min-width: 0; }
+      /* position: relative so a day section's offsetTop is measured against
+         this pane - that is what the scroll-to-day uses. */
+      .board-list { flex: 1; overflow-y: auto; position: relative; min-width: 0;
+        padding-right: 4px; }
+
+      .board-list > div:has(> a.card) {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 12px;
+        align-items: start;
+      }
+      .board-list > div:has(> a.card) > div:first-child { grid-column: 1 / -1; }
+      .board-list > div:has(> a.card) > a.card { margin-bottom: 0; }
+    }
+
+    /* Printing wants the whole list, not one pane's worth of it. */
+    @media print {
+      .board { display: block !important; height: auto !important; }
+      .board-cal { display: none !important; }
+      .board-list { overflow: visible !important; }
+    }
+
     /* ---- Edit job: stop cards side by side ----
        Collections, deliveries and sites read better as a row than a stack -
        the whole shape of a job is visible at once. Scoped to the stops region

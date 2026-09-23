@@ -22,9 +22,9 @@ function timeRank(tw) {
   return h * 60 + min;
 }
 
-// Wide enough for two columns. Below this the calendar and the list take
+// Wide enough for a true split. Below this the calendar and the list take
 // turns: pick a day, then read it.
-const WIDE = "(min-width: 900px)";
+const WIDE = "(min-width: 960px)";
 
 function useWide() {
   const [wide, setWide] = useState(
@@ -64,12 +64,16 @@ const GROUPS = {
 export default function JobList({ jobs, canDelete = false }) {
   const [filter, setFilter] = useState("All");
   // The day the calendar last sent us to. It highlights that cell and drives
-  // the scroll - it never filters. The list always holds every job, so you can
-  // keep scrolling up into last week or down into next.
+  // the scroll; it never filters. The list always holds every job.
   const [picked, setPicked] = useState(null);
   const [notice, setNotice] = useState("");
-  const [scrollTo, setScrollTo] = useState(null);   // key to reveal after paint
+  const [scrollTo, setScrollTo] = useState(null);
   const wide = useWide();
+  // On a wide screen the list scrolls INSIDE its own pane, so the calendar
+  // stays put however far down the list you are. That means scrolling to a day
+  // moves the pane, not the window.
+  const boardRef = useRef(null);
+  const listRef = useRef(null);
   const { profile } = useContext(Ctx);
   const [removed, setRemoved] = useState(new Set());
   const [busyId, setBusyId] = useState(null);
@@ -330,51 +334,60 @@ export default function JobList({ jobs, canDelete = false }) {
     const target = [day(1), day(0)].find((k) => sections.some((sc) => sc.key === k));
     if (!target) return;                        // nothing for today or tomorrow
 
-    // Let the cards paint before measuring, or the position is wrong.
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-daykey="${target}"]`);
-      if (!el) return;
-      const top = el.getBoundingClientRect().top + window.scrollY - 12;
-      if (top > window.scrollY + 40) window.scrollTo({ top, behavior: "smooth" });
-    });
+    setScrollTo(target);
   }, [sections.length]);
 
+  // The board fills what is left of the window, so the two panes scroll
+  // independently instead of the whole page scrolling as one. Measured rather
+  // than hardcoded: the top bar, the notices stack and the Office heading all
+  // change how much room is left.
+  useEffect(() => {
+    if (!wide) { if (boardRef.current) boardRef.current.style.height = ""; return; }
+    const fit = () => {
+      const el = boardRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      el.style.height = `${Math.max(320, window.innerHeight - top - 18)}px`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [wide, sections.length]);
+
   // Reveal the chosen day once the list has painted. On a phone the list is
-  // not even mounted until a day is picked, so this cannot happen in the
-  // click handler - it has to wait for the render that the click causes.
+  // not mounted until a day is picked, so this cannot live in the click
+  // handler - it has to wait for the render the click causes.
   useEffect(() => {
     if (!scrollTo) return;
     const id = requestAnimationFrame(() => {
       const el = document.querySelector(`[data-daykey="${scrollTo}"]`);
       setScrollTo(null);
       if (!el) return;
-      const top = el.getBoundingClientRect().top + window.scrollY - 12;
-      window.scrollTo({ top, behavior: "smooth" });
+      const pane = listRef.current;
+      if (pane && wide) pane.scrollTo({ top: Math.max(0, el.offsetTop - 10), behavior: "smooth" });
+      else window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
     });
     return () => cancelAnimationFrame(id);
-  }, [scrollTo]);
+  }, [scrollTo, wide]);
 
-  // Where a calendar click should land. A day with no jobs has no section to
-  // scroll to, so it says so rather than jumping somewhere arbitrary.
+  // Where a calendar click lands. A day with no jobs has nothing to scroll to,
+  // so it says so rather than jumping somewhere arbitrary.
   const pickDay = (key) => {
     setPicked(key);
-    landed.current = true;        // the user has chosen; stop auto-landing
+    landed.current = true;          // the user has chosen; stop auto-landing
     if (!key) { setNotice(""); return; }
-
     let target = key;
     if (key === "earlier") {
-      const first = sectionsRef.current.find(
-        (sc) => sc.date && sc.date < windowStart && !GROUPS.Done.includes(sc.jobs[0]?.status));
+      const first = sectionsRef.current.find((sc) => sc.date && sc.date < windowStart);
       target = first?.key ?? null;
     }
     if (target && sectionsRef.current.some((sc) => sc.key === target)) {
       setNotice("");
       setScrollTo(target);
     } else {
-      const d = key === "none" ? "Unscheduled" : key === "earlier" ? "Earlier" : dayLabel(key, true);
-      setNotice(key === "none" || key === "earlier"
-        ? `Nothing ${d.toLowerCase()}.`
-        : `No jobs on ${d}.`);
+      setNotice(key === "none" ? "Nothing unscheduled."
+        : key === "earlier" ? "Nothing earlier."
+        : `No jobs on ${dayLabel(key, true)}.`);
     }
   };
 
@@ -398,9 +411,7 @@ export default function JobList({ jobs, canDelete = false }) {
     ? <div className="muted no-print" style={{ fontSize: 13, marginBottom: 8 }}>{notice}</div>
     : null;
 
-  // On a phone the calendar IS the screen until a day is picked. After that
-  // the list takes over - the whole list, scrolled to that day, so last week
-  // is still a scroll upwards.
+  // Phone: the calendar IS the screen until a day is picked.
   if (!wide && !picked) {
     return (
       <>
@@ -414,17 +425,10 @@ export default function JobList({ jobs, canDelete = false }) {
     );
   }
 
+  // Everything that scrolls. The filter chips stay outside it, so they are
+  // still reachable at the bottom of a long list.
   const list = (
     <>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
-        {["All", "To do", "In progress", "Done"].map((f) => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={filter === f ? "stamp live" : "stamp pending"}
-            style={{ background: "none", cursor: "pointer", padding: "7px 12px", whiteSpace: "nowrap" }}>
-            {f}
-          </button>
-        ))}
-      </div>
       {shown.length === 0 && <div className="empty">Nothing here.</div>}
       {isOps && shown.length > 1 && (
         <div className="muted no-print" style={{ fontSize: 12, marginTop: 4 }}>
@@ -532,20 +536,24 @@ export default function JobList({ jobs, canDelete = false }) {
             cursor: "pointer", font: "inherit", padding: 0, marginBottom: 10 }}>
           ‹ Calendar
         </button>
+        {filters}
         {noticeBar}
         {list}
       </>
     );
   }
 
+  // Wide: two panes that scroll independently. The class names carry the
+  // layout - see the .board rules in index.html - so the card-column grid can
+  // be re-scoped to .board-list, which the old `.page > div` selector no
+  // longer reaches now that the list sits two levels deeper.
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(230px, 280px) 1fr",
-      gap: 24, alignItems: "start" }}>
-      {/* Sticky, so the planner stays put while the list scrolls past it. */}
-      <div style={{ position: "sticky", top: 12 }}>{calendar}</div>
-      <div style={{ minWidth: 0 }}>
+    <div className="board" ref={boardRef}>
+      <div className="board-cal">{calendar}</div>
+      <div className="board-main">
+        {filters}
         {noticeBar}
-        {list}
+        <div className="board-list" ref={listRef}>{list}</div>
       </div>
     </div>
   );
