@@ -48,6 +48,8 @@
 
     .ref { font-family: var(--mono); font-weight: 600; letter-spacing: .07em; }
     .muted { color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+    /* Day headings clear the sticky top bar when scrolled to. */
+    [data-daykey] { scroll-margin-top: 70px; }
     .row { display:flex; align-items:center; justify-content:space-between; gap: 12px; }
 
     /* stamp chips — the signature element */
@@ -126,7 +128,17 @@
         grid-template-columns: 250px minmax(0, 1fr);
         gap: 22px;
         align-items: stretch;
+        /* Contain the panes. Without this the board's height is a suggestion
+           the content is free to ignore. */
+        overflow: hidden;
       }
+      /* THE line that makes a split screen a split screen. Grid and flex
+         items default to min-height:auto, which means "never shrink below my
+         content" - so a pane grows to fit every job, overflow-y has nothing
+         to clip against, and the whole PAGE scrolls instead of the pane.
+         Every box between the fixed height and the scrolling one needs it. */
+      .board > *, .board-main > * { min-height: 0; }
+
       .board-cal {
         overflow-y: auto;
         padding-right: 4px;
@@ -135,8 +147,11 @@
       .board-main { display: flex; flex-direction: column; min-width: 0; }
       /* position: relative so a day section's offsetTop is measured against
          this pane - that is what the scroll-to-day uses. */
-      .board-list { flex: 1; overflow-y: auto; position: relative; min-width: 0;
-        padding-right: 4px; }
+      .board-list { flex: 1 1 0; overflow-y: auto; position: relative;
+        min-width: 0; padding-right: 4px; }
+
+      /* The landing gap for scrollIntoView, which takes no offset of its own. */
+      .board-list > [data-daykey] { scroll-margin-top: 8px; }
 
       .board-list > div:has(> a.card) {
         display: grid;

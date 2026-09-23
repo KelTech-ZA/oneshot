@@ -346,12 +346,49 @@ export default function JobList({ jobs, canDelete = false }) {
     const fit = () => {
       const el = boardRef.current;
       if (!el) return;
-      const top = el.getBoundingClientRect().top + window.scrollY;
-      el.style.height = `${Math.max(320, window.innerHeight - top - 18)}px`;
+      // Measured from the top of the window, so the board must be measured
+      // while the window is at the top - otherwise rect.top is negative and
+      // the board is sized taller than the space it has.
+      if (window.scrollY) window.scrollTo({ top: 0 });
+      const page = el.parentElement;
+      const padBottom = page
+        ? parseFloat(getComputedStyle(page).paddingBottom) || 0 : 0;
+      // Leave exactly the page's own bottom padding below the board. Guess
+      // low and the window keeps a sliver of scroll, which is how the
+      // calendar creeps off the top of the screen.
+      const room = window.innerHeight - el.getBoundingClientRect().top - padBottom;
+      // Use the room there is. The fallback below is only for a board sitting
+      // so low on a long page (Office, under the pending list and the team)
+      // that the remaining window is unusable - and it must stay well clear
+      // of ordinary cases, because a board taller than its room is precisely
+      // the page-scroll this whole effect exists to prevent.
+      el.style.height = room >= 300
+        ? `${Math.floor(room)}px`
+        : `${Math.floor(window.innerHeight * 0.75)}px`;
     };
     fit();
+    // Measuring once is not enough. The notices stack above this loads after
+    // its own query returns, and when it appears it pushes the board down by
+    // its height - leaving the board sized for a page that no longer exists,
+    // and the window scrolling by exactly that much. Scroll down to read the
+    // list and the calendar goes with it. So: re-measure whenever anything
+    // above changes size, not only on a window resize.
     window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
+    let ro;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(fit);
+      ro.observe(document.body);
+      if (boardRef.current?.parentElement) ro.observe(boardRef.current.parentElement);
+    }
+    // Belt and braces for late layout that resizes nothing observable
+    // (web fonts, a slow image in a notice).
+    const t1 = setTimeout(fit, 250);
+    const t2 = setTimeout(fit, 1200);
+    return () => {
+      window.removeEventListener("resize", fit);
+      ro?.disconnect();
+      clearTimeout(t1); clearTimeout(t2);
+    };
   }, [wide, sections.length]);
 
   // Reveal the chosen day once the list has painted. On a phone the list is
@@ -363,9 +400,13 @@ export default function JobList({ jobs, canDelete = false }) {
       const el = document.querySelector(`[data-daykey="${scrollTo}"]`);
       setScrollTo(null);
       if (!el) return;
-      const pane = listRef.current;
-      if (pane && wide) pane.scrollTo({ top: Math.max(0, el.offsetTop - 10), behavior: "smooth" });
-      else window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
+      // scrollIntoView rather than working out a scrollTop ourselves: it
+      // scrolls whichever ancestors actually scroll, so the same call works
+      // in the desktop pane and in the window on a phone. Doing the maths by
+      // hand meant guessing which of the two was the scroller, and guessing
+      // wrong meant the click silently did nothing at all.
+      // The gap above the heading comes from scroll-margin-top in the CSS.
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     return () => cancelAnimationFrame(id);
   }, [scrollTo, wide]);
