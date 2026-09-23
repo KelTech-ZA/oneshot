@@ -1,11 +1,13 @@
 import React from "react";
 
-// Nine weeks of days, stacked as rows - the shape of a wall planner, which is
-// how ops already think about a fortnight of work.
+// Two whole months of days, stacked as week rows - the shape of a wall
+// planner, which is how ops already think about the month ahead.
 //
-// The window starts on the Monday of LAST week rather than this one, because
-// overdue jobs are the ones that most need finding and a calendar that begins
-// today hides them.
+// Whole months, not a rolling window: it begins on the Monday of the week
+// holding the 1st of this month and ends with the last day of next month. A
+// grid that starts mid-week mid-month reads as a stub row of the previous
+// month sitting above the real one. Anything outstanding before the 1st is
+// still reachable through the "earlier" chip below the grid.
 //
 // It reads jobs; it does not fetch them. The list already has the array, and
 // two components fetching the same rows drift apart the moment one of them
@@ -18,7 +20,6 @@ import React from "react";
 export const localISO = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-const WEEKS = 9;
 const DONE = ["completed", "closed", "cancelled"];
 
 const mondayOf = (d) => {
@@ -43,19 +44,31 @@ export default function JobCalendar({ jobs, selected, onSelect, compact = false 
     if (!DONE.includes(j.status)) cell.outstanding = true;
   }
 
-  const start = mondayOf(new Date());
-  start.setDate(start.getDate() - 7);          // include last week's overdue
+  const now = new Date();
+  const start = mondayOf(new Date(now.getFullYear(), now.getMonth(), 1));
+  // Day 0 of the month after next is the last day of next month.
+  const end = new Date(now.getFullYear(), now.getMonth() + 2, 0);
 
   const weeks = [];
-  for (let w = 0; w < WEEKS; w++) {
+  for (let cursor = new Date(start); cursor <= end; ) {
     const days = [];
     for (let i = 0; i < 7; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + w * 7 + i);
-      days.push(d);
+      days.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + 1);
     }
     weeks.push(days);
   }
+
+  // Which month owns each row - the one with the most days in it. Ties are
+  // impossible: seven days cannot split evenly between two months.
+  const majority = weeks.map((days) => {
+    const tally = {};
+    for (const d of days) {
+      const k = `${d.getFullYear()}-${d.getMonth()}`;
+      tally[k] = (tally[k] ?? 0) + 1;
+    }
+    return Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0];
+  });
 
   // Anything outstanding before the window still has to be reachable.
   const earlier = jobs.filter((j) =>
@@ -81,9 +94,13 @@ export default function JobCalendar({ jobs, selected, onSelect, compact = false 
       </div>
 
       {weeks.map((days, wi) => {
-        // The month is named on the row where it starts, so the column stays
-        // readable without a heading between every four rows.
-        const firstOfMonth = days.find((d) => d.getDate() <= 7);
+        // Head a row with the month that owns most of it, and only when that
+        // differs from the row above. Naming the month on whichever row holds
+        // the 1st goes wrong at both ends: a 1st falling on a Sunday would
+        // label a row of six days from the previous month, and skipping such
+        // rows loses the month's heading altogether.
+        const firstOfMonth = majority[wi] !== majority[wi - 1] ? days.find(
+          (d) => `${d.getFullYear()}-${d.getMonth()}` === majority[wi]) : null;
         return (
           <React.Fragment key={wi}>
             {firstOfMonth && (

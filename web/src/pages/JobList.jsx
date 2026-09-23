@@ -94,10 +94,13 @@ export default function JobList({ jobs, canDelete = false }) {
   // nothing booked for tomorrow yet.
   const landed = useRef(false);
   const isOps = profile?.role === "ops";
-  // Matches the calendar's window: the Monday of last week.
+  // Must match the calendar's window exactly, or the "earlier" chip counts a
+  // different set of jobs from the ones it can reach: the Monday of the week
+  // holding the 1st of this month.
   const windowStart = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7);
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth(), 1);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
     return localISO(d);
   })();
 
