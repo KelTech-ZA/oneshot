@@ -7,7 +7,7 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
  "kind": "request" | "amendment" | "status_query" | "chatter",
  "confidence": 0.0-1.0,
  "existing_job_ref": "JOB-YYYY-NNNN or null",
- "job": {
+ "jobs": [{
    "type": ${jobTypes},
    "client_ref": "the requester's own reference for this job, or null",
    "stops": [{"kind":"collection"|"delivery"|"site","label":null,"address":null,
@@ -21,11 +21,33 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
    "hard_deadline": bool,
    "items": [{"description":"","quantity":1,"identity_tier":1|2|3,
               "dimensions":null,"declared_value":null,"special_handling":null,
-              "image_indexes":[],"from_stop":null,"to_stop":null}]
- } | null,
- "missing": ["field names required but absent"],
+              "image_indexes":[],"from_stop":null,"to_stop":null}],
+   "missing": ["field names required but absent, for THIS job"]
+ }],
+ "missing": ["field names absent across the whole message"],
  "amendment_changes": {"field":"new value"} | null
 }
+
+ONE JOB OR SEVERAL — decide this first:
+- "jobs" is a LIST. Most messages hold a single job, and the list has one entry.
+- A SCHEDULE holds many. A message laying out a day or a week — times down the
+  page, each with its own activity — is ONE JOB PER ACTIVITY. "Fri 25 Sept:
+  08:15 collect materials from the timber yard … 08:30 build crates at the
+  workshop … 12:30 deliver a case to the auction house" is THREE jobs, each
+  with its own date, time_window, type, stops and items.
+- Split when activities differ in DATE, TIME, JOB TYPE or CLIENT. Building
+  crates for one client and delivering another client's case are separate jobs
+  even at the same hour of the same day.
+- A heading like "Friday, 25 Sept 2026:" sets the date for every activity
+  beneath it until the next date heading. Each job carries its own
+  scheduled_date — never two dates in one job.
+- Techs or staff named against an activity ("Techs assigned: Daveson + casual")
+  are not items and not addresses. Put them in that job's special_handling or
+  ignore them; never invent an item from a person's name.
+- Lunch breaks, "end of day", travel between stops and similar are NOT jobs.
+  Skip them entirely.
+- At most 40 jobs from one message. If there are more, return the first 40 and
+  add "further jobs beyond the first 40" to the top-level "missing".
 
 ITEM FIELDS — keep these strictly separate. This matters more than anything else:
 - "description" is WHAT THE OBJECT IS, as a short noun phrase: "Crate", "Framed painting",
@@ -56,9 +78,12 @@ STOPS - a job may have up to 3 collections, 3 deliveries and 3 sites:
   dropped, "site" where work happens and nothing moves (fabrication, install,
   packing, condition check).
 - PAIRED LEGS ARE ONE JOB. A message reading "Collection 1 ... Delivery ...,
-  Collection 2 ... Delivery ..." on the same date is ONE job with two
-  collections and two deliveries - not one job with the first pair only, and
-  not two jobs. Record every address.
+  Collection 2 ... Delivery ..." on the same date, for ONE consignment, is ONE
+  job with two collections and two deliveries - not one job with the first pair
+  only, and not two jobs. Record every address.
+  This is about a single consignment moving through several addresses. It does
+  NOT override "ONE JOB OR SEVERAL" above: distinct activities, with their own
+  times and their own work, are separate jobs however many addresses each has.
 - "from_stop" and "to_stop" on each item are ZERO-BASED INDEXES into "stops",
   saying where that item is collected and where it goes. In the example above
   the first table is from_stop 0 to_stop 1, the second from_stop 2 to_stop 3.
@@ -128,8 +153,21 @@ export interface InboundImage {
 
 export interface Extraction {
   kind: string; confidence: number; existing_job_ref: string | null;
-  job: Record<string, unknown> | null; missing: string[];
+  // A message may describe a whole schedule, so this is a list. `job` is the
+  // old single-job shape, still accepted so a model reply in the previous
+  // format - or a replayed old message - keeps working.
+  jobs?: Record<string, unknown>[] | null;
+  job?: Record<string, unknown> | null;
+  missing: string[];
   amendment_changes: Record<string, unknown> | null;
+}
+
+export const MAX_JOBS = 40;
+
+// One shape for the rest of the code to read, whichever the model returned.
+export function jobsOf(ex: Extraction): Record<string, unknown>[] {
+  const list = Array.isArray(ex.jobs) ? ex.jobs : (ex.job ? [ex.job] : []);
+  return list.filter((j) => j && typeof j === "object").slice(0, MAX_JOBS);
 }
 
 export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<Extraction> {
@@ -144,8 +182,11 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
       model: "claude-sonnet-4-6",
       // A 12-item job needs ~1,200 tokens of JSON and a 20-item job ~1,850.
       // At 1500 the reply was truncated mid-string and the parse threw, which
-      // is what silently swallowed jobs with long item lists.
-      max_tokens: 8000,
+      // is what silently swallowed jobs with long item lists. A week's
+      // schedule is fifteen or twenty such jobs in one reply, so the ceiling
+      // has to hold all of them - a truncated schedule is the same silent
+      // swallow, just harder to notice.
+      max_tokens: 32000,
       system: buildSystem(jobTypes),
       messages: [{
         role: "user",
@@ -171,7 +212,8 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
   // Name a truncation for what it is. "Unterminated string in JSON" tells you
   // nothing about the cause; running out of room does.
   if (data.stop_reason === "max_tokens")
-    throw new Error(`reply hit the ${8000}-token limit and was cut off - the item list is longer than the parser can return`);
+    throw new Error("reply hit the 32000-token limit and was cut off - the schedule "
+      + "holds more jobs or items than the parser can return in one reply");
 
   return JSON.parse(text.replace(/```json|```/g, "").trim());
 }
@@ -189,20 +231,25 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
   let ex: Extraction;
+  // Kept so the failure can be written onto the message. An email that arrived
+  // and produced nothing must be visible in the app, not only in the logs.
+  let parseError: string | null = null;
   const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`;
   try { ex = await extract(body, meta, typeList, images, docs); }
   catch (e) {
-    console.error("ingest: extraction failed:", e instanceof Error ? e.message : String(e));
+    parseError = e instanceof Error ? e.message : String(e);
+    console.error("ingest: extraction failed:", parseError);
     // Heavily illustrated emails can fail on the attachments alone. A job built
     // from the text is far better than nothing, so try once more without them.
     if (images.length || docs.length) {
       console.warn(`ingest: retrying without ${images.length} image(s) and ${docs.length} document(s)`);
       try {
         ex = await extract(body, meta, typeList, [], []);
+        parseError = null;                      // the retry got there
         console.log("ingest: text-only retry succeeded");
       } catch (e2) {
-        console.error("ingest: text-only retry also failed:",
-          e2 instanceof Error ? e2.message : String(e2));
+        parseError = e2 instanceof Error ? e2.message : String(e2);
+        console.error("ingest: text-only retry also failed:", parseError);
         ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
       }
     } else {
@@ -210,17 +257,32 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     }
   }
 
-  const { data: msg, error: msgErr } = await sb.from("messages").insert({
+  const msgRow = {
     tenant_id: tenantId, channel, kind: ex.kind ?? "unknown",
     sender, subject, body, raw,
-  }).select().single();
+  };
+  let { data: msg, error: msgErr } = await sb.from("messages")
+    .insert({ ...msgRow, parse_error: parseError }).select().single();
+
+  // If step 38 has not been run yet, parse_error does not exist and the insert
+  // above fails - which would lose EVERY inbound message, not just the ones
+  // that failed to parse. Recording the message matters more than recording
+  // why it failed, so fall back to the old shape rather than drop the mail.
+  if (msgErr && /parse_error/.test(msgErr.message ?? "")) {
+    console.warn("ingest: messages.parse_error missing - run step 38. Saving without it.");
+    ({ data: msg, error: msgErr } = await sb.from("messages").insert(msgRow).select().single());
+  }
 
   if (msgErr || !msg) {
     console.error("ingest: MESSAGE INSERT FAILED:", msgErr?.message ?? "no row returned");
     return `could not record the message: ${msgErr?.message ?? "insert returned nothing"}`;
   }
 
-  console.log(`ingest: kind=${ex.kind} confidence=${ex.confidence} items=${(ex.job as { items?: unknown[] } | null)?.items?.length ?? 0} images=${images.length} bodyChars=${body.length}`);
+  {
+    const js = jobsOf(ex);
+    const itemCount = js.reduce((n, j) => n + (Array.isArray(j.items) ? j.items.length : 0), 0);
+    console.log(`ingest: kind=${ex.kind} confidence=${ex.confidence} jobs=${js.length} items=${itemCount} images=${images.length} bodyChars=${body.length}`);
+  }
   if (ex.kind === "chatter" || ex.confidence < 0.5) {
     console.log("ingest: not treated as a job. Body began:", body.slice(0, 400).replace(/\s+/g, " "));
     return "";
@@ -242,143 +304,183 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     return `${job.ref} updated: ${Object.entries(ch).map(([k, v]) => `${k} → ${JSON.stringify(v)}`).join(", ")} ✓`;
   }
 
-  if (ex.kind !== "request" || !ex.job) return "";
-  const j = ex.job as Record<string, unknown>;
-  const flags = (ex.missing ?? []).map((m) => `missing_info:${m}`);
-  // Stops are the source of truth for addresses. origin/destination are left
-  // for the sync trigger to fill from the primary stop of each kind - setting
-  // them here would make the seed trigger create a duplicate pair.
-  // A date the model wrote in words - "Monday 7 September" - is rejected by
-  // Postgres and used to take the entire job down with it. Anything that is not
-  // a plain YYYY-MM-DD is dropped and flagged for ops instead.
-  const rawDate = j.scheduled_date == null ? null : String(j.scheduled_date).trim();
-  const isoDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
-  if (rawDate && !isoDate) {
-    console.warn(`ingest: unusable date from parser: "${rawDate}" - job saved without one`);
-    flags.push("missing_info:scheduled_date");
-  }
-  // Same care for the time window: it is free text in the database, but an
-  // over-long value usually means the model put the whole sentence in it.
-  const timeWindow = typeof j.time_window === "string" && j.time_window.length <= 80
-    ? j.time_window : null;
+  const jobList = jobsOf(ex);
+  if (ex.kind !== "request" || !jobList.length) return "";
 
-  const parsedStops = (Array.isArray(j.stops) ? j.stops : []) as Record<string, unknown>[];
-  const legacyOrigin = parsedStops.length ? null : (j.origin ?? null);
-  const legacyDest   = parsedStops.length ? null : (j.destination ?? null);
-
-  const { data: job, error: jobErr } = await sb.from("jobs").insert({
-    tenant_id: tenantId, type: j.type ?? "move",
-    origin: legacyOrigin, destination: legacyDest,
-    client_ref: j.client_ref ?? null,
-    scheduled_date: isoDate, time_window: timeWindow,
-    hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
-  }).select().single();
-
-  // Never let this fail silently: the message is already saved, so a failure
-  // here means an email that reached us and produced nothing visible.
-  if (jobErr || !job) {
-    console.error("ingest: JOB INSERT FAILED:", jobErr?.message ?? "no row returned",
-      "| code:", jobErr?.code ?? "-", "| type:", j.type ?? "move");
-    return `could not create the job: ${jobErr?.message ?? "insert returned nothing"}`;
-  }
-  await sb.from("messages").update({ job_id: job.id }).eq("id", msg.id);
-
-  // Every address the sender gave, in order, capped at 3 of each kind.
-  const stopIds: (string | null)[] = [];
-  const seqOf: Record<string, number> = { collection: 0, delivery: 0, site: 0 };
-  for (const st of parsedStops) {
-    const kind = ["collection", "delivery", "site"].includes(String(st.kind))
-      ? String(st.kind) : "delivery";
-    if (seqOf[kind] >= 3) { stopIds.push(null); continue; }
-    const { data: row, error } = await sb.from("job_stops").insert({
-      tenant_id: tenantId, job_id: job.id, kind, seq: seqOf[kind]++,
-      label: st.label ?? null, address: st.address ?? null,
-      contact_name: st.contact_name ?? null, contact_phone: st.contact_phone ?? null,
-      notes: st.notes ?? null,
-    }).select("id").single();
-    if (error) { console.error("stop insert failed:", error.message); stopIds.push(null); continue; }
-    stopIds.push(row?.id ?? null);
-  }
-  if (parsedStops.length) console.log(`ingest: ${stopIds.filter(Boolean).length} stop(s) created`);
-
-  // Keep each row's source item alongside it, so its photographs can be
-  // attached after insert. A quantity of 3 makes 3 rows that share the photos.
-  const rows = ((j.items ?? []) as Record<string, unknown>[]).flatMap((it) =>
-    Array.from({ length: Number(it.quantity ?? 1) }, () => ({
-      row: {
-        tenant_id: tenantId, job_id: job.id, description: it.description ?? "Item",
-        identity_tier: it.identity_tier ?? 1,
-        attributes: { dimensions: it.dimensions, declared_value: it.declared_value, special_handling: it.special_handling },
-        // Which leg this item belongs to, so a two-pickup job keeps each item
-        // with the right pair of addresses.
-        from_stop_id: typeof it.from_stop === "number" ? stopIds[it.from_stop] ?? null : null,
-        to_stop_id:   typeof it.to_stop   === "number" ? stopIds[it.to_stop]   ?? null : null,
-      },
-      imageIdx: (Array.isArray(it.image_indexes) ? it.image_indexes as number[] : [])
-        .map((n) => Number(n) - 1)               // prompt is 1-based
-        .filter((n) => n >= 0 && n < images.length),
-    })));
-
-  const items = rows.map((r) => r.row);
-  let inserted: { id: string }[] = [];
-  if (items.length) {
-    const { data } = await sb.from("line_items").insert(items).select("id");
-    inserted = data ?? [];
-  }
-
-  // Store the photographs against the item each one shows.
-  // Uploaded in parallel - each item's photos are independent, and doing these
-  // one at a time was adding seconds to every intake.
-  let photosSaved = 0;
-  const uploads: Promise<void>[] = [];
-  for (let i = 0; i < inserted.length && i < rows.length; i++) {
-    const idxs = rows[i].imageIdx.slice(0, 3);     // db caps at 3 per item
-    for (const idx of idxs) {
-      const im = images[idx];
-      if (!im) continue;
-      uploads.push((async () => {
-      try {
-        const ext = im.media_type === "image/png" ? "png" : "jpg";
-        const path = `${tenantId}/${job.id}/${inserted[i].id}/intake-${idx + 1}.${ext}`;
-        const bytes = Uint8Array.from(atob(im.data), (c) => c.charCodeAt(0));
-        const { error: upErr } = await sb.storage.from("photos")
-          .upload(path, bytes, { contentType: im.media_type, upsert: true });
-        if (upErr) { console.error("intake photo upload failed:", upErr.message); return; }
-        const { error: dbErr } = await sb.from("item_photos").insert({
-          tenant_id: tenantId, job_id: job.id, item_id: inserted[i].id, path,
-        });
-        if (dbErr) { console.error("intake photo record failed:", dbErr.message); return; }
-        photosSaved++;
-      } catch (e) {
-        console.error("intake photo error:", e instanceof Error ? e.message : String(e));
-      }
-      })());
-    }
-  }
-  await Promise.all(uploads);
-
-  // Keep the source paperwork on the job: ops can check the parse against the
-  // PDF the client actually sent.
-  let docsSaved = 0;
+  // The source paperwork is uploaded ONCE and linked to every job the message
+  // produced. A schedule attached as a PDF is the provenance for all sixteen
+  // jobs in it, and re-uploading the same file per job would be pure waste.
+  const storedDocs: { name: string; path: string; mime: string; size: number }[] = [];
   for (const d of docs) {
     try {
       const safe = d.filename.replace(/[^\w.\-]+/g, "_").slice(-80);
-      const path = `${tenantId}/${job.id}/intake-${Date.now()}-${safe}`;
+      const path = `${tenantId}/intake/${msg.id}-${safe}`;
       const bytes = Uint8Array.from(atob(d.data), (c) => c.charCodeAt(0));
       const { error: upErr } = await sb.storage.from("documents")
         .upload(path, bytes, { contentType: d.media_type, upsert: true });
       if (upErr) { console.error("intake doc upload failed:", upErr.message); continue; }
-      const { error: dbErr } = await sb.from("job_documents").insert({
-        tenant_id: tenantId, job_id: job.id, name: d.filename, path,
-        mime: d.media_type, size_bytes: bytes.length,
-      });
-      if (dbErr) { console.error("intake doc record failed:", dbErr.message); continue; }
-      docsSaved++;
+      storedDocs.push({ name: d.filename, path, mime: d.media_type, size: bytes.length });
     } catch (e) {
       console.error("intake doc error:", e instanceof Error ? e.message : String(e));
     }
   }
 
-  const miss = ex.missing?.length ? ` Missing: ${ex.missing.join(", ")}.` : "";
-  return `${job.ref} created — ${items.length} item(s)${photosSaved ? `, ${photosSaved} photo(s)` : ""}${docsSaved ? `, ${docsSaved} document(s)` : ""}, pending confirmation.${miss}`;
+  // Builds one job, its stops and its items. Returns the reply line, or an
+  // error line - one bad job in a schedule must not take the other fifteen
+  // down with it.
+  const makeJob = async (j: Record<string, unknown>): Promise<{ ok: boolean; line: string }> => {
+    const perJobMissing = Array.isArray(j.missing) ? j.missing as string[] : [];
+    const flags = [...(ex.missing ?? []), ...perJobMissing].map((m) => `missing_info:${m}`);
+
+    // A date the model wrote in words - "Monday 7 September" - is rejected by
+    // Postgres and used to take the entire job down with it. Anything that is
+    // not a plain YYYY-MM-DD is dropped and flagged for ops instead.
+    const rawDate = j.scheduled_date == null ? null : String(j.scheduled_date).trim();
+    const isoDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
+    if (rawDate && !isoDate) {
+      console.warn(`ingest: unusable date from parser: "${rawDate}" - job saved without one`);
+      flags.push("missing_info:scheduled_date");
+    }
+    // Same care for the time window: free text in the database, but an
+    // over-long value usually means the model put the whole sentence in it.
+    const timeWindow = typeof j.time_window === "string" && j.time_window.length <= 80
+      ? j.time_window : null;
+
+    // Stops are the source of truth for addresses. origin/destination are left
+    // for the sync trigger to fill from the primary stop of each kind - setting
+    // them here would make the seed trigger create a duplicate pair.
+    const parsedStops = (Array.isArray(j.stops) ? j.stops : []) as Record<string, unknown>[];
+    const legacyOrigin = parsedStops.length ? null : (j.origin ?? null);
+    const legacyDest   = parsedStops.length ? null : (j.destination ?? null);
+
+    const { data: job, error: jobErr } = await sb.from("jobs").insert({
+      tenant_id: tenantId, type: j.type ?? "move",
+      origin: legacyOrigin, destination: legacyDest,
+      client_ref: j.client_ref ?? null,
+      scheduled_date: isoDate, time_window: timeWindow,
+      hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
+    }).select().single();
+
+    // Never let this fail silently: the message is already saved, so a failure
+    // here means part of an email that reached us and produced nothing visible.
+    if (jobErr || !job) {
+      console.error("ingest: JOB INSERT FAILED:", jobErr?.message ?? "no row returned",
+        "| code:", jobErr?.code ?? "-", "| type:", j.type ?? "move",
+        "| ref:", j.client_ref ?? "-");
+      return { ok: false, line: `could not create "${j.client_ref ?? j.type ?? "a job"}": ${jobErr?.message ?? "insert returned nothing"}` };
+    }
+
+    // Every address the sender gave, in order, capped at 3 of each kind.
+    const stopIds: (string | null)[] = [];
+    const seqOf: Record<string, number> = { collection: 0, delivery: 0, site: 0 };
+    for (const st of parsedStops) {
+      const kind = ["collection", "delivery", "site"].includes(String(st.kind))
+        ? String(st.kind) : "delivery";
+      if (seqOf[kind] >= 3) { stopIds.push(null); continue; }
+      const { data: row, error } = await sb.from("job_stops").insert({
+        tenant_id: tenantId, job_id: job.id, kind, seq: seqOf[kind]++,
+        label: st.label ?? null, address: st.address ?? null,
+        contact_name: st.contact_name ?? null, contact_phone: st.contact_phone ?? null,
+        notes: st.notes ?? null,
+      }).select("id").single();
+      if (error) { console.error("stop insert failed:", error.message); stopIds.push(null); continue; }
+      stopIds.push(row?.id ?? null);
+    }
+
+    // Keep each row's source item alongside it, so its photographs can be
+    // attached after insert. A quantity of 3 makes 3 rows that share the photos.
+    const rows = ((j.items ?? []) as Record<string, unknown>[]).flatMap((it) =>
+      Array.from({ length: Number(it.quantity ?? 1) }, () => ({
+        row: {
+          tenant_id: tenantId, job_id: job.id, description: it.description ?? "Item",
+          identity_tier: it.identity_tier ?? 1,
+          attributes: { dimensions: it.dimensions, declared_value: it.declared_value, special_handling: it.special_handling },
+          // Which leg this item belongs to, so a two-pickup job keeps each item
+          // with the right pair of addresses.
+          from_stop_id: typeof it.from_stop === "number" ? stopIds[it.from_stop] ?? null : null,
+          to_stop_id:   typeof it.to_stop   === "number" ? stopIds[it.to_stop]   ?? null : null,
+        },
+        imageIdx: (Array.isArray(it.image_indexes) ? it.image_indexes as number[] : [])
+          .map((n) => Number(n) - 1)               // prompt is 1-based
+          .filter((n) => n >= 0 && n < images.length),
+      })));
+
+    const items = rows.map((r) => r.row);
+    let inserted: { id: string }[] = [];
+    if (items.length) {
+      const { data } = await sb.from("line_items").insert(items).select("id");
+      inserted = data ?? [];
+    }
+
+    // Store the photographs against the item each one shows. Uploaded in
+    // parallel - each item's photos are independent, and doing these one at a
+    // time was adding seconds to every intake.
+    let photosSaved = 0;
+    const uploads: Promise<void>[] = [];
+    for (let i = 0; i < inserted.length && i < rows.length; i++) {
+      for (const idx of rows[i].imageIdx.slice(0, 3)) {     // db caps at 3 per item
+        const im = images[idx];
+        if (!im) continue;
+        uploads.push((async () => {
+          try {
+            const ext = im.media_type === "image/png" ? "png" : "jpg";
+            const path = `${tenantId}/${job.id}/${inserted[i].id}/intake-${idx + 1}.${ext}`;
+            const bytes = Uint8Array.from(atob(im.data), (c) => c.charCodeAt(0));
+            const { error: upErr } = await sb.storage.from("photos")
+              .upload(path, bytes, { contentType: im.media_type, upsert: true });
+            if (upErr) { console.error("intake photo upload failed:", upErr.message); return; }
+            const { error: dbErr } = await sb.from("item_photos").insert({
+              tenant_id: tenantId, job_id: job.id, item_id: inserted[i].id, path,
+            });
+            if (dbErr) { console.error("intake photo record failed:", dbErr.message); return; }
+            photosSaved++;
+          } catch (e) {
+            console.error("intake photo error:", e instanceof Error ? e.message : String(e));
+          }
+        })());
+      }
+    }
+    await Promise.all(uploads);
+
+    // Link the already-uploaded source paperwork to this job.
+    for (const d of storedDocs) {
+      const { error } = await sb.from("job_documents").insert({
+        tenant_id: tenantId, job_id: job.id, name: d.name, path: d.path,
+        mime: d.mime, size_bytes: d.size,
+      });
+      if (error) console.error("intake doc record failed:", error.message);
+    }
+
+    const miss = perJobMissing.length ? ` (missing: ${perJobMissing.join(", ")})` : "";
+    const when = [isoDate, timeWindow].filter(Boolean).join(" ");
+    console.log(`ingest: ${job.ref} created - ${j.client_ref ?? "-"} - ${when || "no date"} - ${items.length} item(s)`);
+    return { ok: true,
+      line: `${job.ref}${when ? ` · ${when}` : ""}${j.client_ref ? ` · ${j.client_ref}` : ""} — ${items.length} item(s)${miss}` };
+  };
+
+  // Sequential on purpose: job refs are allocated by the database and reading
+  // them back in order makes the reply match the order of the schedule.
+  const lines: string[] = [];
+  let madeCount = 0, failedCount = 0;
+  for (const j of jobList) {
+    const r = await makeJob(j);
+    lines.push(r.line);
+    r.ok ? madeCount++ : failedCount++;
+  }
+
+  // The message points at the first job for the existing job_id link; every
+  // job carries source_message_id, which is the real association.
+  const { data: firstJob } = await sb.from("jobs")
+    .select("id").eq("source_message_id", msg.id).order("created_at").limit(1).maybeSingle();
+  if (firstJob) await sb.from("messages").update({ job_id: firstJob.id }).eq("id", msg.id);
+
+  const docNote = storedDocs.length ? `, ${storedDocs.length} document(s) attached to each` : "";
+  const failNote = failedCount ? ` ${failedCount} could not be created.` : "";
+  const topMiss = ex.missing?.length ? ` Missing: ${ex.missing.join(", ")}.` : "";
+
+  if (madeCount === 1 && !failedCount)
+    return `${lines[0]}${docNote}, pending confirmation.${topMiss}`;
+
+  return `${madeCount} job(s) created from this message${docNote}, pending confirmation:\n`
+    + lines.map((l) => `  • ${l}`).join("\n") + `${failNote}${topMiss}`;
 }

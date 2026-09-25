@@ -11,6 +11,7 @@ export default function Dashboard() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
+  const [unread, setUnread] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "" });
 
@@ -22,7 +23,26 @@ export default function Dashboard() {
     load();
     supabase.from("job_types").select("key,label").eq("active", true).order("sort")
       .then(({ data }) => setJobTypes(data ?? []));
+    loadUnread();
   }, []);
+
+  // Mail that arrived and produced nothing. Until now this was invisible:
+  // the message was saved, no job was made, and the only trace was a line in
+  // the edge function log. An intake pipeline that loses work silently is
+  // worse than one that has no pipeline, because you stop checking.
+  const loadUnread = async () => {
+    const since = new Date(Date.now() - 14 * 864e5).toISOString();
+    const { data } = await supabase.from("messages")
+      .select("id,sender,subject,body,created_at,parse_error,kind")
+      .is("job_id", null).gte("created_at", since)
+      .order("created_at", { ascending: false }).limit(10);
+    setUnread((data ?? []).filter((m) => m.parse_error || m.kind === "unknown"));
+  };
+
+  // Dismissing is per-browser and deliberately not a database write: the
+  // message is evidence, and ops clearing their own view should not erase it
+  // for a colleague.
+  const dismissUnread = (id) => setUnread((cur) => cur.filter((m) => m.id !== id));
 
   const confirm = async (job) => {
     await supabase.from("jobs").update({ status: "confirmed", updated_at: new Date().toISOString() }).eq("id", job.id);
@@ -216,6 +236,37 @@ export default function Dashboard() {
             {teamMsg && <p className="muted" style={{ marginTop: 8 }}>{teamMsg}</p>}
           </div>
         </div>
+      )}
+
+      {unread.length > 0 && (
+        <>
+          <h2>Couldn't be read</h2>
+          <p className="muted" style={{ marginBottom: 10 }}>
+            {unread.length === 1 ? "An email" : `${unread.length} emails`} reached intake in
+            the last two weeks and produced no job. Create {unread.length === 1 ? "it" : "them"} by
+            hand, or forward again once the sender has been asked for what is missing.
+          </p>
+          {unread.map((m) => (
+            <div className="card" key={m.id} style={{ borderLeft: "3px solid var(--warn)" }}>
+              <div className="row">
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {m.sender} · {new Date(m.created_at).toLocaleString()}
+                </span>
+                <button onClick={() => dismissUnread(m.id)} aria-label="Dismiss"
+                  style={{ background: "none", border: "none", color: "var(--muted, #8b9498)",
+                    cursor: "pointer", font: "inherit" }}>×</button>
+              </div>
+              {m.subject && <div style={{ fontWeight: 600, marginTop: 4 }}>{m.subject}</div>}
+              {m.parse_error && (
+                <div className="muted" style={{ fontSize: 12, color: "var(--warn)", marginTop: 4 }}>
+                  {m.parse_error}
+                </div>
+              )}
+              <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap",
+                maxHeight: 140, overflow: "auto" }}>{m.body}</div>
+            </div>
+          ))}
+        </>
       )}
 
       <h2>Intake</h2>
