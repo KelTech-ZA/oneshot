@@ -4,6 +4,7 @@ import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { Ctx } from "../main";
 import { JobStamp } from "./Today";
 import JobList from "./JobList";
+import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
 import ClashWarning from "./ClashWarning";
 import JobSearch from "./JobSearch";
 
@@ -36,13 +37,25 @@ export default function Dashboard() {
       .select("id,sender,subject,body,created_at,parse_error,kind")
       .is("job_id", null).gte("created_at", since)
       .order("created_at", { ascending: false }).limit(10);
-    setUnread((data ?? []).filter((m) => m.parse_error || m.kind === "unknown"));
+    // Same rule as the banners: once you have dealt with an unreadable email,
+    // it does not reappear every time you come back to this screen. A NEW
+    // failure has a new message id, so it still shows.
+    const failures = (data ?? []).filter((m) => m.parse_error || m.kind === "unknown");
+    setUnread(keepUndismissed(failures, (m) => `msg-${m.id}`));
   };
 
   // Dismissing is per-browser and deliberately not a database write: the
   // message is evidence, and ops clearing their own view should not erase it
   // for a colleague.
-  const dismissUnread = (id) => setUnread((cur) => cur.filter((m) => m.id !== id));
+  const dismissUnread = (id) => {
+    remember(`msg-${id}`);
+    setUnread((cur) => cur.filter((m) => m.id !== id));
+  };
+
+  const dismissAllUnread = () => {
+    remember(unread.map((m) => `msg-${m.id}`));
+    setUnread([]);
+  };
 
   const confirm = async (job) => {
     await supabase.from("jobs").update({ status: "confirmed", updated_at: new Date().toISOString() }).eq("id", job.id);
@@ -240,7 +253,16 @@ export default function Dashboard() {
 
       {unread.length > 0 && (
         <>
-          <h2>Couldn't be read</h2>
+          <div className="row" style={{ alignItems: "baseline" }}>
+            <h2 style={{ marginBottom: 0 }}>Couldn't be read</h2>
+            {unread.length > 1 && (
+              <button onClick={dismissAllUnread}
+                style={{ background: "none", border: "none", color: "var(--accent)",
+                  cursor: "pointer", font: "inherit", fontSize: 13, padding: 0 }}>
+                Dismiss all
+              </button>
+            )}
+          </div>
           <p className="muted" style={{ marginBottom: 10 }}>
             {unread.length === 1 ? "An email" : `${unread.length} emails`} reached intake in
             the last two weeks and produced no job. Create {unread.length === 1 ? "it" : "them"} by

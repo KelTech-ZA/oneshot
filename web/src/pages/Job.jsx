@@ -393,11 +393,17 @@ export default function Job() {
           onClick={shareRecord}>
           👁 Share read-only record
         </button>
+        {/* A real button, not a bare word. This has been here all along and
+            nobody could see it: no border, no background, sitting in a row of
+            text links under the job. Duplicating is how a job that runs over
+            several days gets made, so it has to look like something you press. */}
         {isOps && (
-          <button disabled={busy}
-            style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
-            onClick={duplicateJob}>
-            ⧉ Duplicate job
+          <button disabled={busy} onClick={duplicateJob}
+            style={{ marginTop: 0, padding: "6px 12px", borderRadius: 8,
+              cursor: busy ? "default" : "pointer", fontSize: 13, fontWeight: 600,
+              background: "transparent", border: "1px solid var(--accent)",
+              color: "var(--accent)", opacity: busy ? 0.5 : 1 }}>
+            {busy ? "Working…" : "⧉ Duplicate job"}
           </button>
         )}
       </div>

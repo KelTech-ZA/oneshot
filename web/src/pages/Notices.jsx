@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { pendingCount } from "../lib/queue";
+import { dismiss as remember, isDismissed } from "../lib/dismissed";
 
 // iOS PWAs do not support `new Notification()` - they require the service
 // worker's showNotification(). Try that first, fall back for desktop browsers.
@@ -107,9 +108,21 @@ export default function Notices({ profile }) {
     }
   };
 
+  // A notice you have already dismissed never comes back, on this device.
+  // Without the check the open-job reminder is rebuilt from the database on
+  // every mount, so leaving the board and returning brought all of them back.
   const push = (n) => setNotices((cur) =>
-    cur.some((x) => x.key === n.key) ? cur : [...cur, n]);
-  const dismiss = (key) => setNotices((cur) => cur.filter((x) => x.key !== key));
+    cur.some((x) => x.key === n.key) || isDismissed(n.key) ? cur : [...cur, n]);
+
+  const dismiss = (key) => {
+    remember(key);
+    setNotices((cur) => cur.filter((x) => x.key !== key));
+  };
+
+  const dismissAll = () => {
+    remember(notices.map((x) => x.key));
+    setNotices([]);
+  };
 
   useEffect(() => {
     if (typeof Notification !== "undefined" && Notification.permission === "granted")
@@ -230,6 +243,18 @@ export default function Notices({ profile }) {
         </div>
       )}
 
+      {notices.length > 1 && (
+        <div className="row" style={{ marginBottom: 6 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {notices.length} notices
+          </span>
+          <button onClick={dismissAll}
+            style={{ background: "none", border: "none", color: "var(--accent)",
+              cursor: "pointer", font: "inherit", fontSize: 13, padding: 0 }}>
+            Dismiss all
+          </button>
+        </div>
+      )}
       {notices.map((n) => (
         <div key={n.key} className="card" style={{
           background: "var(--ink)", color: "#fff", border: "none",
