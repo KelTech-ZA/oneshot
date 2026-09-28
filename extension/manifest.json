@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "OneShot for Outlook",
+  "version": "0.1.0",
+  "description": "Watches your inbox for mail that needs a job, and asks.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://outlook.office.com/*",
+    "https://outlook.office365.com/*",
+    "https://outlook.cloud.microsoft/*",
+    "https://outlook.live.com/*",
+    "https://ntcvwosypcnwedxefwcr.supabase.co/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.cloud.microsoft/*",
+        "https://outlook.live.com/*"
+      ],
+      "js": [
+        "reader.js",
+        "reader-dom.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://outlook.office.com/*",
+        "https://outlook.office365.com/*",
+        "https://outlook.cloud.microsoft/*",
+        "https://outlook.live.com/*"
+      ],
+      "js": [
+        "gate.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
