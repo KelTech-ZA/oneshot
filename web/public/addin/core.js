@@ -58,6 +58,52 @@ const DATE_RE = new RegExp(
   "|today|tomorrow|next week|this week" +
   ")\\b", "i");
 const DIMS_RE = /\d+(\.\d+)?\s*[x×]\s*\d+(\.\d+)?/i;
+
+// Sea and air freight, split by how much the word can mean something else.
+//
+// STRONG terms have no innocent reading in a mailbox: nobody writes "stack
+// dates" or "bill of lading" about anything but cargo. One of these in a
+// SUBJECT is a deadline announcing itself, and is enough on its own.
+//
+// WEAK terms are real freight vocabulary that also lives ordinary lives -
+// "export your report", "terminal", "customs" in a holiday story. They count,
+// but they need company.
+//
+// Both match on word boundaries: "port" inside "report", "important" and
+// "support" is exactly the bug that once made "satisfied" read as Saturday.
+const FREIGHT_STRONG = [
+  "stack date", "stack dates", "stacking", "stack opens", "stack closes",
+  "cut off", "cut-off", "cutoff", "doc cut", "cargo cut", "cy cut",
+  "bill of lading", "waybill", "airway bill", "airwaybill", "awb", "mawb", "hawb",
+  "vessel", "voyage", "transhipment", "tranship",
+  "port of loading", "port of discharge", "consignee", "consignor",
+  "freight forwarder", "incoterm", "berth", "quay",
+];
+const FREIGHT_WEAK = [
+  "sailing", "container", "reefer", "groupage", "consolidation",
+  "terminal", "wharf", "depot", "closing date",
+  "customs", "clearing", "clearance", "sars", "bonded",
+  "shipper", "forwarder", "export", "import",
+  "packing list", "commercial invoice", "certificate of origin",
+  "exw", "fob", "cif", "ddp", "dap",
+];
+const reOf = (list) => new RegExp(
+  "\\b(" + list.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\b", "gi");
+const STRONG_RE = reOf(FREIGHT_STRONG);
+const WEAK_RE = reOf(FREIGHT_WEAK);
+const hitsOf = (re, text) => [...new Set((String(text).match(re) || []).map((m) => m.toLowerCase()))];
+
+// What a message mentions, in the reader's own words. Used when the parser
+// cannot build a job: "nothing job-shaped" is a dead end, whereas "mentions
+// stack dates and a vessel" is something a person can act on.
+export function signals(text) {
+  const hay = String(text || "").slice(0, 8000);
+  return {
+    freight: [...hitsOf(STRONG_RE, hay), ...hitsOf(WEAK_RE, hay)].slice(0, 6),
+    work: WORK_WORDS.filter((w) => hay.toLowerCase().includes(w)).slice(0, 6),
+  };
+}
+
 const ADDRESS_RE = /\b(street|st\b|road|rd\b|avenue|ave\b|lane|drive|way|suburb|cape town|johannesburg|durban|gallery|studio|warehouse|unit \d)/i;
 
 const domainOf = (addr) =>
@@ -97,11 +143,22 @@ export function gate(thread, opts = {}) {
 
   if (DIMS_RE.test(hay)) { score += 2; why.push("has dimensions"); }
 
-  // A date or a day name IN THE SUBJECT is a real signal on its own: people
-  // title logistics mail by when it happens. "Thursday" or "2 Oct" in a
-  // subject line means something is being scheduled. The same date buried in
-  // a body is much weaker - it might be a signature or a quoted reply.
-  if (DATE_RE.test(subjectLower)) { score += 2; why.push("subject names a day or date"); }
+  // Freight terms are strong evidence on their own. A forwarder writing about
+  // a stack date is describing a deadline to deliver to a terminal, whether or
+  // not the mail troubles itself to list what is in the crate.
+  const strongSubj = hitsOf(STRONG_RE, subjectLower);
+  const weakSubj = hitsOf(WEAK_RE, subjectLower);
+  const strongBody = hitsOf(STRONG_RE, hay);
+  const weakBody = hitsOf(WEAK_RE, hay);
+  // Same principle as work words: the subject is the strongest signal. An
+  // unambiguous freight term up there clears the bar by itself, because a
+  // missed stack date means a missed sailing.
+  if (strongSubj.length) { score += 4; why.push(`subject mentions ${strongSubj[0]}`); }
+  else if (weakSubj.length) { score += 3; why.push(`subject mentions ${weakSubj[0]}`); }
+  else if (strongBody.length) { score += 3; why.push(`freight terms (${strongBody.slice(0, 2).join(", ")})`); }
+  else if (weakBody.length >= 2) { score += 2; why.push(`freight terms (${weakBody.slice(0, 2).join(", ")})`); }
+
+if (DATE_RE.test(subjectLower)) { score += 2; why.push("subject names a day or date"); }
   else if (DATE_RE.test(hay)) { score += 1; why.push("has a date"); }
   if (ADDRESS_RE.test(hay)) { score += 1; why.push("has an address"); }
 

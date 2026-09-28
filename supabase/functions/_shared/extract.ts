@@ -102,6 +102,31 @@ Rules: identity_tier 1 = visually unique (artworks, antiques, custom furniture);
 2 = has serial/label/barcode; 3 = commodity/identical units.
 kind=chatter for greetings, logistics banter, anything that is not a work request.
 
+SEA AND AIR FREIGHT - a whole class of job this parser used to miss:
+- A forwarder's mail often names no items at all. It names a VESSEL, a
+  TERMINAL and a WINDOW. That is still a job: something has to be at the port
+  by a deadline, and the deadline is the whole point of the message.
+- STACK DATES are the window in which cargo may be delivered to the terminal
+  for a sailing. "Stack opens Wed 1 Oct 07:00, closes Fri 3 Oct 16:00" is a
+  DELIVERY to that terminal with hard_deadline true, scheduled_date the
+  CLOSING date (the last moment it can arrive), and time_window carrying the
+  window verbatim. A missed stack means the cargo misses the vessel.
+- CUT-OFF times work the same way: doc cut-off, cargo cut-off, CY cut-off.
+  Each is a deadline. Record it in time_window and set hard_deadline.
+- The terminal, quay, depot or airport IS the delivery stop. "Cape Town
+  Container Terminal" is an address, not chatter.
+- Vessel name, voyage number, booking reference, container number, B/L or
+  airway bill number go in client_ref, verbatim, preferring the booking or
+  reference number if several are given.
+- If no item is named, do NOT call it chatter. Record one item with
+  description "Consignment", quantity 1, and put "items" in that job's
+  "missing" - the reader knows what is in the crate and can say so. An unasked
+  question is better than a missed sailing.
+- Import mail is the mirror image: a vessel ARRIVING, cargo available for
+  collection from a terminal once cleared. Collection stop, not delivery.
+- Customs, clearing and documentation chasing with no cargo movement is
+  chatter. A deadline to MOVE something is not.
+
 DECIDING request vs chatter - read the WHOLE message before deciding:
 - If the message contains a collection, delivery or site address AND any items
   (named, listed, or shown by [IMAGE n] markers), it IS a request. It stays a
@@ -130,6 +155,8 @@ ORIGINAL message and treat the original sender as the requester (note them in or
 fields where relevant). Provider verification emails (e.g. a Gmail forwarding confirmation
 code) are kind=chatter — never a job.
 A job requires a type, at least one item, and somewhere for the work to happen.
+The freight exception above stands: a stack date or cut-off with a terminal is
+a job even when the message never says what is being shipped.
 WHERE depends on the kind of job:
 - Moving work (collection, delivery, transport) needs an origin AND a destination.
 - Work done in one place - fabrication, building, installation, packing,
