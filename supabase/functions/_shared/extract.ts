@@ -304,8 +304,23 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     return `${job.ref} updated: ${Object.entries(ch).map(([k, v]) => `${k} → ${JSON.stringify(v)}`).join(", ")} ✓`;
   }
 
+  if (ex.kind !== "request" || !jobsOf(ex).length) return "";
+  return await materialise(sb, tenantId, msg, ex, images, docs);
+}
+
+// Turns an extraction into jobs, stops, items, photographs and documents.
+//
+// Split out of ingest() so that a suggestion a human has reviewed and edited
+// can be created from the extraction THEY approved. Re-parsing at confirm time
+// would risk building something subtly different from what was on screen.
+//
+// deno-lint-ignore no-explicit-any
+export async function materialise(
+  sb: any, tenantId: string, msg: { id: string }, ex: Extraction,
+  images: InboundImage[] = [], docs: InboundDoc[] = [],
+): Promise<string> {
   const jobList = jobsOf(ex);
-  if (ex.kind !== "request" || !jobList.length) return "";
+  if (!jobList.length) return "";
 
   // The source paperwork is uploaded ONCE and linked to every job the message
   // produced. A schedule attached as a PDF is the provenance for all sixteen

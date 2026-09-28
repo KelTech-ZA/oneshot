@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OneShot</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root {
+    --ink: #101314; --ink-soft: #6b7478; --line: #e3e6e7;
+    --bg: #ffffff; --card: #fafbfb; --accent: #1f6feb; --warn: #b3541e; --ok: #1a7f52;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#eef1f2; --ink-soft:#9aa3a7; --line:#2b3033; --bg:#15181a; --card:#1c2022; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+         color:var(--ink); background:var(--bg); }
+  .pad { padding: 14px; }
+  h1 { font-size:15px; margin:0 0 2px; }
+  .muted { color:var(--ink-soft); font-size:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:12px; margin-bottom:10px; }
+  label { display:block; font-size:12px; color:var(--ink-soft); margin:8px 0 3px; }
+  input, select, textarea { width:100%; padding:7px 9px; border:1px solid var(--line);
+    border-radius:7px; font:inherit; background:var(--bg); color:var(--ink); }
+  button { font:inherit; border-radius:7px; padding:8px 12px; cursor:pointer;
+    border:1px solid var(--line); background:transparent; color:var(--ink); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.warnish { color:var(--warn); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row.wrap { flex-wrap:wrap; }
+  .spacer { flex:1; }
+  .hide { display:none !important; }
+  .chip { font-size:11px; border:1px solid var(--line); border-radius:999px; padding:2px 8px;
+          color:var(--ink-soft); }
+  .ask { border-left:3px solid var(--accent); }
+  .err { color:var(--warn); font-size:12px; }
+  .jobline { border-top:1px solid var(--line); padding-top:8px; margin-top:8px; }
+  .jobline:first-child { border-top:none; padding-top:0; margin-top:0; }
+  .tiny { font-size:11px; }
+</style>
+</head>
+<body>
+<div class="pad">
+
+  <!-- Signed out ---------------------------------------------------------- -->
+  <section id="signin" class="hide">
+    <h1>OneShot</h1>
+    <p class="muted">Sign in with the account you use in OneShot.</p>
+    <div class="card">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password">
+      <div class="row" style="margin-top:10px">
+        <button id="doSignin" class="primary">Sign in</button>
+        <span id="signinMsg" class="err"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Working ------------------------------------------------------------- -->
+  <section id="main" class="hide">
+    <div class="row">
+      <h1>OneShot</h1>
+      <div class="spacer"></div>
+      <span id="who" class="chip"></span>
+    </div>
+
+    <!-- Idle: nothing to say about this message -->
+    <div id="idle" class="card">
+      <div class="muted" id="idleText">Reading…</div>
+      <div class="row wrap" style="margin-top:8px">
+        <button id="manual">Make a job from this mail</button>
+      </div>
+    </div>
+
+    <!-- The prompt: appears on dwell, never creates anything -->
+    <div id="prompt" class="card ask hide">
+      <div style="font-weight:600" id="promptTitle">This looks like a job.</div>
+      <div class="muted" id="promptWhy"></div>
+      <div class="row wrap" style="margin-top:10px">
+        <button id="yes" class="primary">Yes, set it up</button>
+        <button id="no">No</button>
+        <button id="later">Later</button>
+        <button id="quiet" class="warnish">Not now</button>
+      </div>
+      <div class="tiny muted" style="margin-top:6px">
+        “Not now” stays quiet for three hours. “Later” comes back when there’s a new reply.
+      </div>
+    </div>
+
+    <!-- Review: the only place a job is ever created -->
+    <div id="review" class="hide">
+      <div class="card">
+        <div style="font-weight:600" id="reviewSummary"></div>
+        <div id="questions"></div>
+        <div class="row" style="margin-top:12px">
+          <button id="create" class="primary">Create in OneShot</button>
+          <button id="cancel">Cancel</button>
+        </div>
+        <div id="reviewMsg" class="err" style="margin-top:6px"></div>
+      </div>
+      <div class="card tiny muted" id="proposal"></div>
+    </div>
+
+    <!-- Done -->
+    <div id="done" class="card hide">
+      <div style="font-weight:600; color:var(--ok)" id="doneText"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="openBoard">Open the board</button>
+      </div>
+    </div>
+
+    <!-- Inbox scan (only if configured and consented) -->
+    <div id="scan" class="card hide">
+      <div class="row">
+        <div style="font-weight:600">Might need a job</div>
+        <div class="spacer"></div>
+        <button id="rescan" class="tiny">Refresh</button>
+      </div>
+      <div class="muted tiny" style="margin-bottom:6px">
+        Subjects and senders only — the scan never reads message contents.
+      </div>
+      <div id="scanList"></div>
+    </div>
+
+    <details style="margin-top:6px">
+      <summary class="muted tiny" style="cursor:pointer">Settings</summary>
+      <div class="card" style="margin-top:8px">
+        <label for="sens">How often should it ask?</label>
+        <select id="sens">
+          <option value="-1">Only when it’s sure</option>
+          <option value="0" selected>Balanced</option>
+          <option value="1">Ask more often</option>
+        </select>
+        <div class="row wrap" style="margin-top:10px">
+          <button id="enableScan">Turn on inbox scanning</button>
+          <button id="signout">Sign out</button>
+        </div>
+        <div id="scanMsg" class="muted tiny" style="margin-top:6px"></div>
+      </div>
+    </details>
+  </section>
+</div>
+
+<script src="./config.js"></script>
+<script type="module" src="./taskpane.js"></script>
+</body>
+</html>

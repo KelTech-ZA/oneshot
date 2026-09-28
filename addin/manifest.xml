@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OneShot mail assistant — Outlook add-in manifest.
+
+  Served from the existing OneShot site, so there is no new infrastructure:
+  the files live in web/public/addin/ and Vite copies them verbatim into the
+  Netlify deploy.
+
+  Permission is ReadItem: the add-in can read the message the user currently
+  has open, and nothing else. Reading the inbox for the scan is a SEPARATE
+  Microsoft Graph consent (Mail.ReadBasic — subjects and senders, never
+  bodies), asked for only if the user turns that feature on. Declining it
+  leaves everything else working.
+
+  Requirement set 1.5 is what allows the pane to be pinned, which is what
+  makes the assistant ambient rather than something you re-open per message.
+-->
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+  xsi:type="MailApp">
+
+  <!-- Replace with your own GUID before sideloading: New-Guid in PowerShell. -->
+  <Id>0f50d8e9-0072-4c29-a991-bd6cba0149cf</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Section Nine</ProviderName>
+  <DefaultLocale>en-ZA</DefaultLocale>
+  <DisplayName DefaultValue="OneShot"/>
+  <Description DefaultValue="Spots jobs in your mail and creates them in OneShot, only when you say so."/>
+  <IconUrl DefaultValue="https://1oneshot.netlify.app/icon-192.png"/>
+  <HighResolutionIconUrl DefaultValue="https://1oneshot.netlify.app/icon-192.png"/>
+  <SupportUrl DefaultValue="https://1oneshot.netlify.app/"/>
+
+  <AppDomains>
+    <AppDomain>https://1oneshot.netlify.app</AppDomain>
+  </AppDomains>
+
+  <Hosts><Host Name="Mailbox"/></Hosts>
+
+  <Requirements>
+    <Sets>
+      <Set Name="Mailbox" MinVersion="1.5"/>
+    </Sets>
+  </Requirements>
+
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://1oneshot.netlify.app/addin/taskpane.html"/>
+        <RequestedHeight>420</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+
+  <!-- Read the open message. Nothing more. -->
+  <Permissions>ReadItem</Permissions>
+
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides"
+                    xsi:type="VersionOverridesV1_0">
+    <Requirements>
+      <bt:Sets DefaultMinVersion="1.5">
+        <bt:Set Name="Mailbox"/>
+      </bt:Sets>
+    </Requirements>
+
+    <Hosts>
+      <Host xsi:type="MailHost">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="MessageReadCommandSurface">
+            <OfficeTab id="TabDefault">
+              <Group id="oneshotGroup">
+                <Label resid="groupLabel"/>
+                <Control xsi:type="Button" id="oneshotOpen">
+                  <Label resid="btnLabel"/>
+                  <Supertip>
+                    <Title resid="btnLabel"/>
+                    <Description resid="btnTip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="icon16"/>
+                    <bt:Image size="32" resid="icon32"/>
+                    <bt:Image size="80" resid="icon80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="taskpaneUrl"/>
+                    <!-- The whole point: the pane survives moving between
+                         messages, so ItemChanged can drive the dwell timer
+                         instead of the user re-opening it every time. -->
+                    <SupportsPinning>true</SupportsPinning>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+
+    <Resources>
+      <bt:Images>
+        <bt:Image id="icon16" DefaultValue="https://1oneshot.netlify.app/icon-192.png"/>
+        <bt:Image id="icon32" DefaultValue="https://1oneshot.netlify.app/icon-192.png"/>
+        <bt:Image id="icon80" DefaultValue="https://1oneshot.netlify.app/icon-192.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="taskpaneUrl" DefaultValue="https://1oneshot.netlify.app/addin/taskpane.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="groupLabel" DefaultValue="OneShot"/>
+        <bt:String id="btnLabel" DefaultValue="Job from this mail"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="btnTip" DefaultValue="Read this thread and propose a OneShot job. Nothing is created until you confirm."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>
