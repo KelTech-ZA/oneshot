@@ -11,7 +11,13 @@ self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
-registerRoute(new NavigationRoute(createHandlerBoundToURL("/index.html")));
+// The add-in is not part of the single-page app. Without this denylist the
+// navigation fallback answers /addin/taskpane.html with the React shell, and
+// Outlook loads the OneShot app instead of the task pane. HEAD and fetch skip
+// this route, so it looks fine until something actually navigates.
+registerRoute(new NavigationRoute(createHandlerBoundToURL("/index.html"), {
+  denylist: [/^\/addin\//],
+}));
 
 // ---------------------------------------------------------------------------
 // Push

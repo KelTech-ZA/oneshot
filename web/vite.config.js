@@ -11,7 +11,7 @@ export default defineConfig({
       strategies: "injectManifest",
       srcDir: "src",
       filename: "sw.js",
-      injectManifest: { globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"] },
+      injectManifest: { globIgnores: ["addin/**"], globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"] },
       manifest: {
         name: "OneShot",
         short_name: "OneShot",
