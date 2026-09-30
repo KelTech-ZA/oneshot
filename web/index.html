@@ -220,11 +220,37 @@
       body.print-invoice .charges-panel { display: block; break-before: auto; }
     }
 
+    /* ---- Letterhead -------------------------------------------------------
+       Printed only, at the top of every document the app produces. The name
+       block sits left, the document title and its date and reference right -
+       the shape every invoice and delivery note in the world already has, so
+       nobody has to learn to read it. */
+    .letterhead { display: none; }
+
+    @media print {
+      .letterhead { display: block !important; margin: 0 0 14px; padding-bottom: 8px;
+                    border-bottom: 1.5px solid #000; break-inside: avoid; break-after: avoid; }
+      .letterhead-body { display: flex; align-items: flex-start; gap: 14px; }
+      .letterhead-logo { max-height: 64px; max-width: 190px; object-fit: contain;
+                         flex: none; }
+      .letterhead-who { flex: 1; font-size: 9.5pt; line-height: 1.35; color: #222; }
+      .letterhead-name { font-size: 13pt; font-weight: 700; color: #000; }
+      .letterhead-doc { flex: none; text-align: right; font-size: 9.5pt; min-width: 150px; }
+      .letterhead-title { font-size: 13pt; font-weight: 700; letter-spacing: .06em;
+                          text-transform: uppercase; color: #000; margin-bottom: 4px; }
+      .letterhead-metarow { display: flex; justify-content: flex-end; gap: 10px; }
+      .letterhead-metalabel { color: #555; }
+      .letterhead-metavalue { font-weight: 600; color: #000; }
+    }
+
     @media print {
       /* A printed job card or invoice is a DOCUMENT, not a screenshot of the
          app. Everything a person taps belongs on screen and nowhere else. */
       .topbar, .btn, .quiet-actions, .syncbadge, .no-print,
-      .notices, .stamp-legend, .empty { display: none !important; }
+      .notices, .stamp-legend, .empty,
+      /* Navigation is not part of a document. "<- Today" was printing above
+         the job reference on every card. */
+      .page > a[href="/"], .page > a[href="/dashboard"] { display: none !important; }
 
       /* Controls: the VALUE is content, the control is not. */
       select, button, [role="button"] { display: none !important; }

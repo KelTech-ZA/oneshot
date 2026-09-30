@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
 import BillTo from "./BillTo";
+import Letterhead from "./Letterhead";
 import { CURRENCIES, amount, amountWithCode, jobCurrency, money } from "../lib/money";
 
 // What the job costs. Ops only - the database enforces that too, so this is
@@ -161,26 +162,24 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
 
   return (
     <>
-      {/* Printed only. Whose invoice this is - never on screen, where it would
-          just repeat what the user already knows about their own company. */}
-      {issuer && (
-        <div className="only-print" style={{ marginBottom: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>
-            {issuer.trading_name || issuer.legal_name}
-          </div>
-          {issuer.legal_name && issuer.trading_name
-            && issuer.legal_name !== issuer.trading_name && <div>{issuer.legal_name}</div>}
-          {issuer.address && <div style={{ whiteSpace: "pre-line" }}>{issuer.address}</div>}
-          <div>
-            {[issuer.vat_number && `VAT ${issuer.vat_number}`,
-              issuer.reg_number && `Reg. ${issuer.reg_number}`,
-              issuer.eori_number && `EORI ${issuer.eori_number}`].filter(Boolean).join(" · ")}
-          </div>
-          {(issuer.billing_email || issuer.phone) && (
-            <div>{[issuer.billing_email, issuer.phone].filter(Boolean).join(" · ")}</div>
-          )}
-        </div>
-      )}
+      {/* The invoice's own letterhead. Printed on its own page when the
+          invoice goes out alone, and at the top of the costs page when it
+          follows a job card - so whichever half of the print a person is
+          holding, it says who issued it.
+
+          The date matters more than it looks: an invoice without one is not
+          a document, and the job's scheduled date is the date the work was
+          done, which is the date the client will recognise. */}
+      <Letterhead
+        title="Invoice"
+        meta={[
+          ["Date", job?.scheduled_date
+            ? new Date(job.scheduled_date).toLocaleDateString("en-ZA")
+            : new Date().toLocaleDateString("en-ZA")],
+          ["Job", job?.ref],
+          ["Reference", job?.client_ref],
+        ]}
+      />
 
       <BillTo jobId={jobId} tenantId={tenantId} onVatHint={setVatHint} />
 

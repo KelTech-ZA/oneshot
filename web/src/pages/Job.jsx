@@ -5,6 +5,7 @@ import { JobStamp } from "./Today";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
 import JobCharges from "./JobCharges";
+import Letterhead from "./Letterhead";
 import { stopName } from "./JobStops";
 import SignOff from "./SignOff";
 
@@ -262,6 +263,21 @@ export default function Job() {
           right. Ops only - crew never see charges, here or in the database. */}
       <div className={isOps ? "job-split" : undefined}>
         <div className="job-main">
+
+      {/* Printed only. A job card that leaves the building is a document from
+          a company, not a screenshot - so it carries the same letterhead the
+          invoice does. Crew can read this without being able to read the
+          workspace's bank details; the view sees to that. */}
+      <Letterhead
+        title="Job card"
+        meta={[
+          ["Job", job.ref],
+          ["Date", job.scheduled_date
+            ? new Date(job.scheduled_date).toLocaleDateString("en-ZA")
+            : "unscheduled"],
+          ["Reference", job.client_ref],
+        ]}
+      />
 
       <div className="card">
         <div className="row">
