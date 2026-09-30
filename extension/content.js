@@ -40,6 +40,7 @@
   const laterThisLoad = new Set();   // "Later" = out of the way until reload or next cycle
   const justDone = new Map();        // id -> what was created, kept visible until the panel closes
   let manual = null;                 // the "this mail" flow, when it is running
+  let amend = null;                  // the "change a job" flow, when it is running
 
   // -------------------------------------------------------------------------
   // Storage
@@ -103,6 +104,28 @@
   .oneshot-f.oneshot-hard input { width: auto; }
   .oneshot-formrow { align-items: stretch; }
   .oneshot-empty { padding: 14px 12px; color: #8d979b; }
+  /* An amendment is read by comparing two values, so the old one stays on
+     screen beside the new rather than being replaced by it. */
+  .oneshot-diff { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .oneshot-chg { display: flex; gap: 8px; align-items: baseline; }
+  .oneshot-chg input[type=checkbox] { margin: 3px 0 0; flex: none; }
+  .oneshot-chg .k {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: #8d979b; flex: none; min-width: 104px;
+  }
+  .oneshot-chg .v { min-width: 0; }
+  .oneshot-was { color: #8d979b; text-decoration: line-through; }
+  .oneshot-now { color: #eef1f2; font-weight: 600; }
+  .oneshot-arrow { color: #8d979b; margin: 0 5px; }
+  .oneshot-job { margin-top: 10px; padding-left: 10px; border-left: 2px solid #2b3033; }
+  .oneshot-jobname { font-weight: 600; color: #cdd5d8; font-size: 12px; }
+  .oneshot-cands { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; align-items: flex-start; }
+  .oneshot-refrow { display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .oneshot-refrow input {
+    background: #1c2123; border: 1px solid #343a3d; color: #eef1f2;
+    border-radius: 6px; padding: 5px 8px; font: inherit; min-width: 210px;
+  }
+  .oneshot-warn { color: #e0a33e; }
   #oneshot-auth { padding: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   #oneshot-auth input {
     background: #1c2123; border: 1px solid #343a3d; color: #eef1f2;
@@ -126,15 +149,20 @@
   const mkBtn = el("button", { id: "oneshot-make",
     className: CHAT ? "primary" : "",
     textContent: CHAT ? "Create job from this chat" : "Create job from this mail" });
+  // Changing an existing job is a different intent from creating one, so it is
+  // its own button. WhatsApp does not get it: that reader deliberately runs a
+  // capability behind, and an amendment needs a job reference a chat rarely
+  // states.
+  const amBtn = el("button", { id: "oneshot-amend", textContent: "Amend job" });
   const btn = el("button", { className: "primary", textContent: "Suggestions" });
   const bar = el("div", { id: "oneshot-bar" },
-    CHAT ? [dot, status, mkBtn] : [dot, status, mkBtn, btn]);
+    CHAT ? [dot, status, mkBtn] : [dot, status, mkBtn, amBtn, btn]);
   const panel = el("div", { id: "oneshot-panel" });
   strip.append(bar, panel);
 
   btn.onclick = () => {
     openPanel = !openPanel;
-    if (!openPanel) { justDone.clear(); manual = null; scan(); }
+    if (!openPanel) { justDone.clear(); manual = null; amend = null; scan(); }
     render();
   };
 
@@ -166,6 +194,39 @@
     manual = { msg, thread, out: out.error ? null : out, state: "proposed" };
     render();
   };
+
+  // Re-reads the open thread and asks which job it changes. Like the create
+  // button, the click is the decision: it always opens, and a parser that
+  // cannot find a reference asks for one rather than giving up.
+  amBtn.onclick = async () => {
+    if (!session) { openPanel = true; render(); return; }
+    amBtn.disabled = true;
+    const was = amBtn.textContent;
+    amBtn.textContent = "Reading this mail...";
+    const msg = await askReader();
+    amBtn.disabled = false; amBtn.textContent = was;
+    if (!msg || !msg.body || msg.body.length < 40) {
+      openPanel = true;
+      amend = { error: "Open the mail that asks for the change first - there is nothing in the reading pane to read." };
+      render();
+      return;
+    }
+    amend = { msg, stage: "reading" };
+    openPanel = true;
+    render();
+    await proposeAmendment(msg, {});
+  };
+
+  // One round trip, used by the button and again whenever the reader pins down
+  // a reference the parser could not. `hints` maps how the parser read a
+  // reference to the job the reader chose instead.
+  async function proposeAmendment(msg, hints) {
+    const thread = { subject: msg.subject, from: msg.from, body: msg.body, received_at: msg.received };
+    const out = await api("suggest-job", { action: "amend", thread, hints: hints || {} });
+    if (out.error) { amend = { msg, thread, hints, outcomes: [], reason: out.error }; render(); return; }
+    amend = { msg, thread, hints: hints || {}, ...out };
+    render();
+  }
 
   function askReader() {
     return new Promise((res) => {
@@ -275,8 +336,9 @@
 
     panel.textContent = "";
     if (!session) { panel.append(authRow()); return; }
+    if (amend) panel.append(amendRow());
     if (manual) panel.append(manualRow());
-    if (!flagged.length && !manual) {
+    if (!flagged.length && !manual && !amend) {
       panel.append(el("div", { className: "oneshot-empty",
         textContent: messages.length
           ? "Nothing here needs a job. Next look in 3 hours, or reload to look now."
@@ -483,6 +545,214 @@
       ]);
     }
     return manualForm();
+  }
+
+  // The amendment card.
+  //
+  // A thread may change several jobs at once, so this renders a block per job
+  // rather than a single form. That is not a nicety: the mail that prompted it
+  // named three jobs, the old card showed one, and the other two were lost
+  // without anybody being told.
+  //
+  // Every line carries a checkbox, because a parser that got one field wrong
+  // should not cost the reader the other three.
+  function amendRow() {
+    const close = () => { amend = null; render(); };
+    const head = (t) => el("div", { className: "oneshot-subj", textContent: t });
+    const note = (t, cls) => el("div", { className: "oneshot-meta" + (cls ? " " + cls : ""), textContent: t });
+    const wrap = (kids) => el("div", { className: "oneshot-row" }, [
+      el("div", { className: "oneshot-main" }, kids),
+    ]);
+
+    // Re-ask with an extra hint pinned down by the reader.
+    const again = async (askedFor, ref) => {
+      const hints = Object.assign({}, amend.hints || {});
+      hints[askedFor || ""] = ref;
+      const m = amend.msg;
+      amend = { msg: m, stage: "reading" };
+      render();
+      await proposeAmendment(m, hints);
+    };
+
+    if (amend.error) {
+      const x = el("button", { className: "ghost", textContent: "Close" });
+      x.onclick = close;
+      return el("div", { className: "oneshot-row" }, [
+        el("div", { className: "oneshot-main" }, [head("Amend a job"), note(amend.error)]),
+        el("div", { className: "oneshot-acts" }, [x]),
+      ]);
+    }
+
+    if (amend.stage === "reading") {
+      return wrap([
+        head(amend.msg.subject || "(no subject)"),
+        note("Reading this thread for changes..."),
+      ]);
+    }
+
+    if (amend.done) {
+      const open = el("button", { textContent: "Open the board" });
+      open.onclick = () => window.open(APP + "/dashboard", "_blank");
+      const x = el("button", { className: "ghost", textContent: "Close" });
+      x.onclick = close;
+      return el("div", { className: "oneshot-row" }, [
+        el("div", { className: "oneshot-main" }, [
+          head(amend.done.title),
+          ...amend.done.lines.map((l) => note(l)),
+        ]),
+        el("div", { className: "oneshot-acts" }, [open, x]),
+      ]);
+    }
+
+    const outcomes = amend.outcomes || [];
+
+    // Nothing to work with: no job named anywhere in the thread.
+    if (!outcomes.length) {
+      const ref = el("input", { type: "text", placeholder: "Job number or their reference, e.g. 0142" });
+      const look = el("button", { className: "primary", textContent: "Look again" });
+      const x = el("button", { className: "ghost", textContent: "Cancel" });
+      x.onclick = close;
+      look.onclick = () => { const v = ref.value.trim(); if (v) again("", v); };
+      ref.onkeydown = (e) => { if (e.key === "Enter") look.click(); };
+      return wrap([
+        head("Which job is this change for?"),
+        note(amend.reason || "This thread doesn't name a job."),
+        el("div", { className: "oneshot-refrow" }, [ref, look, x]),
+      ]);
+    }
+
+    const show = (v) =>
+      v === null || v === undefined || v === "" ? "(blank)"
+        : v === true ? "yes" : v === false ? "no" : String(v);
+
+    const boxes = [];          // { box, change, job_id }
+    const blocks = [];
+    const questions = [];
+    let planned = 0;
+
+    for (const o of outcomes) {
+      for (const r of (o.refused || [])) questions.push(`${o.job ? o.job.ref : o.asked}: ${r}`);
+      for (const u of (o.unassigned || [])) questions.push(u);
+
+      if (o.status === "planned" && o.job) {
+        planned++;
+        const lines = (o.changes || []).map((c) => {
+          const box = el("input", { type: "checkbox" });
+          box.checked = true;
+          boxes.push({ box, change: c, job_id: o.job.id });
+          // An addition has no "before" and a removal has no "after", so
+          // neither gets an arrow - "(blank) -> 4 x Crate" reads like a fault.
+          const isAdd = c.field === "item:add";
+          const isDrop = c.field === "item:remove";
+          return el("label", { className: "oneshot-chg" }, [
+            box,
+            el("span", { className: "k", textContent: c.label }),
+            el("span", { className: "v" }, isAdd ? [
+              el("span", { className: "oneshot-now", textContent: show(c.to) }),
+            ] : isDrop ? [
+              el("span", { className: "oneshot-was", textContent: show(c.from) }),
+            ] : [
+              el("span", { className: "oneshot-was", textContent: show(c.from) }),
+              el("span", { className: "oneshot-arrow", textContent: "\u2192" }),
+              el("span", { className: "oneshot-now", textContent: show(c.to) }),
+            ]),
+          ]);
+        });
+        blocks.push(el("div", { className: "oneshot-job" }, [
+          el("div", { className: "oneshot-jobname", textContent: o.job.name }),
+          el("div", { className: "oneshot-diff" }, lines),
+        ]));
+        continue;
+      }
+
+      if (o.status === "ambiguous") {
+        const cands = (o.candidates || []).map((m) => {
+          const b = el("button", { textContent: m.name + (m.status ? `  -  ${m.status}` : "") });
+          b.onclick = () => again(o.asked, m.ref);
+          return b;
+        });
+        blocks.push(el("div", { className: "oneshot-job" }, [
+          el("div", { className: "oneshot-jobname oneshot-warn", textContent: `"${o.asked}" matches ${cands.length} jobs` }),
+          note("Nothing will change until you pick one."),
+          el("div", { className: "oneshot-cands" }, cands),
+        ]));
+        continue;
+      }
+
+      if (o.status === "not-found") {
+        const ref = el("input", { type: "text", placeholder: "The right job number" });
+        const look = el("button", { textContent: "Find it" });
+        look.onclick = () => { const v = ref.value.trim(); if (v) again(o.asked, v); };
+        ref.onkeydown = (e) => { if (e.key === "Enter") look.click(); };
+        blocks.push(el("div", { className: "oneshot-job" }, [
+          el("div", { className: "oneshot-jobname oneshot-warn", textContent: `${o.asked} - not found` }),
+          el("div", { className: "oneshot-refrow" }, [ref, look]),
+        ]));
+        continue;
+      }
+
+      // no-change
+      blocks.push(el("div", { className: "oneshot-job" }, [
+        el("div", { className: "oneshot-jobname", textContent: o.job ? o.job.name : o.asked }),
+        note("Nothing to change - it already matches the thread."),
+      ]));
+    }
+
+    const go = el("button", { className: "primary",
+      textContent: planned > 1 ? `Apply to ${planned} jobs` : "Apply changes" });
+    const x = el("button", { className: "ghost", textContent: "Cancel" });
+    const msgEl = el("div", { className: "oneshot-meta" });
+    x.onclick = close;
+    if (!planned) go.disabled = true;
+
+    go.onclick = async () => {
+      const byJob = new Map();
+      for (const b of boxes) {
+        if (!b.box.checked) continue;
+        if (!byJob.has(b.job_id)) byJob.set(b.job_id, []);
+        byJob.get(b.job_id).push(b.change);
+      }
+      const jobs = [...byJob.entries()].map(([job_id, changes]) => ({ job_id, changes }));
+      if (!jobs.length) { msgEl.textContent = "Tick at least one change."; return; }
+
+      go.disabled = true; go.textContent = "Applying...";
+      const out = await api("suggest-job", { action: "apply-amendment", thread: amend.thread, jobs });
+      if (out.error) {
+        msgEl.textContent = out.error;
+        go.disabled = false; go.textContent = "Apply changes";
+        return;
+      }
+      // Say what happened to every job, not only the ones that worked.
+      const lines = (out.outcomes || []).map((o) => {
+        const name = o.job ? o.job.ref : o.asked;
+        if (o.status === "applied") {
+          const bad = (o.failed || []).length ? `  (not changed: ${o.failed.map((f) => f.label).join(", ")})` : "";
+          return `${name}: ${o.summary || "updated"}${bad}`;
+        }
+        return `${name}: nothing changed`;
+      });
+      const okCount = (out.outcomes || []).filter((o) => o.status === "applied").length;
+      amend = { done: {
+        title: okCount > 1 ? `${okCount} jobs updated` : `${okCount} job updated`,
+        lines,
+      } };
+      render();
+    };
+
+    const asked = outcomes.length;
+    return wrap([
+      head(asked > 1 ? `Change ${asked} jobs` : `Change ${outcomes[0].job ? outcomes[0].job.name : outcomes[0].asked}`),
+      note("Untick anything that is wrong. Nothing is written until you apply."),
+      ...blocks,
+      questions.length
+        ? el("div", { className: "oneshot-meta oneshot-warn" }, [
+            el("div", { textContent: "I could not place these - handle them in the app:" }),
+            ...questions.map((q) => el("div", { textContent: "  - " + q })),
+          ])
+        : el("span"),
+      el("div", { className: "oneshot-acts", style: "margin-top:10px" }, [go, x]),
+      msgEl,
+    ]);
   }
 
   function authRow() {

@@ -283,7 +283,25 @@
       @page { margin: 16mm 14mm; }
     }
     .print-only { display: none; }
-  </style>
+  
+    /* ---- statements -------------------------------------------------- */
+    /* A money table is read by scanning one column, so the figures are
+       right-aligned and tabular: 1,250.00 must line up under 14,200.00. */
+    .statement-table, .aging { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    .statement-table th, .aging th {
+      text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+      color: var(--muted); font-weight: 600; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line);
+    }
+    .statement-table td, .aging td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+    .statement-table .num, .aging .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .aging td { font-variant-numeric: tabular-nums; }
+    .statement-table tr:last-child td, .aging tr:last-child td { border-bottom: none; }
+    @media print {
+      .statement .card { border: none; padding: 0; box-shadow: none; }
+      .statement-table { page-break-inside: auto; }
+      .statement-table tr { page-break-inside: avoid; }
+    }
+</style>
 </head>
 <body>
   <div id="root"></div>

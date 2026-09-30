@@ -30,18 +30,32 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const [issuer, setIssuer] = useState(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  // Once issued, the invoice - not this sheet - is what was sent. The sheet
+  // stays editable for the next one, but the numbers below stop being the
+  // invoice and start being a draft of the next one.
+  const [invoice, setInvoice] = useState(null);
+  const [payments, setPayments] = useState([]);
+  const [pay, setPay] = useState(null);
 
   const isOps = profile?.role === "ops";
 
   const load = async () => {
-    const [{ data: r }, { data: l }, { data: wb }] = await Promise.all([
+    const [{ data: r }, { data: l }, { data: wb }, { data: inv }] = await Promise.all([
       supabase.from("charge_types").select("*").eq("active", true).order("sort"),
       supabase.from("job_charges").select("*").eq("job_id", jobId).order("sort").order("created_at"),
       supabase.from("workspace_billing").select("*").maybeSingle(),
+      supabase.from("invoice_ledger").select("*").eq("job_id", jobId)
+        .eq("status", "issued").maybeSingle(),
     ]);
     setRates(r ?? []);
     setLines(l ?? []);
     setIssuer(wb ?? null);
+    setInvoice(inv ?? null);
+    if (inv) {
+      const { data: p } = await supabase.from("invoice_payments")
+        .select("*").eq("invoice_id", inv.id).order("paid_on");
+      setPayments(p ?? []);
+    } else setPayments([]);
     setDraft(Object.fromEntries((l ?? []).map((x) => [x.id, {
       description: x.description, quantity: x.quantity, unit_price: x.unit_price,
     }])));
@@ -151,6 +165,54 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
     // Africa. Offered, never applied - same rule as the Bill-to hint.
     setCcyVatOffer(code !== "ZAR" && job?.vat_applicable ? code : null);
     await onJobChange?.();
+  };
+
+  // Issuing freezes these lines onto a numbered invoice and stamps the number
+  // back onto the job, so every printout that already reads it keeps working.
+  const issue = async () => {
+    setBusy(true); setMsg("");
+    const { data, error } = await supabase.rpc("issue_invoice", { p_job_id: jobId });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    await load();
+    onJobChange?.();
+    setMsg(`Invoice ${data?.number ?? ""} issued.`);
+  };
+
+  // Voiding, never deleting: a number that has gone to a customer is not reused.
+  const voidInvoice = async () => {
+    const reason = window.prompt("Why is this invoice being voided?\n(It keeps its number and stays on record.)");
+    if (reason === null) return;
+    setBusy(true); setMsg("");
+    const { error } = await supabase.rpc("void_invoice", { p_invoice_id: invoice.id, p_reason: reason });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    await load();
+    onJobChange?.();
+  };
+
+  const addPayment = async () => {
+    const amt = Number(pay?.amount);
+    if (!amt) { setMsg("Enter an amount."); return; }
+    setBusy(true); setMsg("");
+    const { error } = await supabase.from("invoice_payments").insert({
+      tenant_id: tenantId, invoice_id: invoice.id,
+      paid_on: pay.paid_on || new Date().toISOString().slice(0, 10),
+      amount: amt, method: pay.method || null, reference: pay.reference || null,
+      created_by: profile?.id ?? null,
+    });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    setPay(null);
+    await load();
+  };
+
+  const removePayment = async (id) => {
+    setBusy(true);
+    const { error } = await supabase.from("invoice_payments").delete().eq("id", id);
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    await load();
   };
 
   const subtotal = lines.reduce((n, l) => n + Number(l.line_total ?? 0), 0);
@@ -342,6 +404,128 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
           <span style={{ fontWeight: 700, fontSize: 18 }}>{amountWithCode(subtotal + vat, ccy)}</span>
         </div>
       </div>
+
+      {/* ---- issuing, and what has been paid ---------------------------- */}
+      {!invoice && (
+        <div className="card no-print">
+          <div className="row" style={{ alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>Not invoiced yet</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Issuing gives this a number and freezes these lines. Change a charge
+                afterwards and the invoice keeps what was sent.
+              </div>
+            </div>
+            <button className="btn btn-primary" disabled={busy || !lines.length}
+              onClick={issue} style={{ marginTop: 0 }}>
+              {busy ? "Issuing…" : "Issue invoice"}
+            </button>
+          </div>
+          {!lines.length && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              Add a charge first — there is nothing to invoice.
+            </div>
+          )}
+        </div>
+      )}
+
+      {invoice && (
+        <div className="card no-print">
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>Invoice {invoice.number}</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                Issued {invoice.invoice_date}
+                {invoice.due_date ? ` · due ${invoice.due_date}` : ""}
+                {invoice.days_overdue > 0 ? ` · ${invoice.days_overdue} days late` : ""}
+              </div>
+            </div>
+            <button className="btn btn-ghost" disabled={busy} onClick={voidInvoice}
+              style={{ marginTop: 0 }}>Void</button>
+          </div>
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="muted">Invoiced</span>
+            <span style={{ fontWeight: 600 }}>{amount(invoice.total, invoice.currency)}</span>
+          </div>
+          <div className="row"><span className="muted">Received</span>
+            <span style={{ fontWeight: 600 }}>{amount(invoice.paid, invoice.currency)}</span></div>
+          <div className="row" style={{ marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
+            <span style={{ fontWeight: 700 }}>Outstanding</span>
+            <span style={{ fontWeight: 700, fontSize: 18 }}>
+              {amountWithCode(invoice.balance, invoice.currency)}
+            </span>
+          </div>
+
+          {Number(invoice.subtotal) !== subtotal && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 8, color: "var(--warn)" }}>
+              The charges above have changed since this was invoiced. The invoice still
+              says {amount(invoice.subtotal, invoice.currency)} net, which is what was sent.
+              Void and re-issue if the customer should get the new figure.
+            </div>
+          )}
+
+          {payments.length > 0 && (
+            <table className="statement-table" style={{ marginTop: 10 }}>
+              <thead><tr><th>Paid on</th><th>Method</th><th>Reference</th><th className="num">Amount</th><th /></tr></thead>
+              <tbody>
+                {payments.map((p) => (
+                  <tr key={p.id}>
+                    <td>{p.paid_on}</td>
+                    <td>{p.method || "—"}</td>
+                    <td>{p.reference || p.notes || "—"}</td>
+                    <td className="num">{amount(p.amount, invoice.currency)}</td>
+                    <td><button className="btn btn-ghost" style={{ marginTop: 0, padding: "2px 6px" }}
+                      disabled={busy} onClick={() => removePayment(p.id)}>Remove</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {!pay ? (
+            <button className="btn btn-ghost" style={{ marginTop: 10 }}
+              onClick={() => setPay({ paid_on: new Date().toISOString().slice(0, 10) })}>
+              Record a payment
+            </button>
+          ) : (
+            <div style={{ marginTop: 10 }}>
+              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: "1 1 130px" }}>
+                  <label className="muted" style={{ fontSize: 12 }}>Date</label>
+                  <input type="date" value={pay.paid_on}
+                    onChange={(e) => setPay({ ...pay, paid_on: e.target.value })} />
+                </div>
+                <div style={{ flex: "1 1 120px" }}>
+                  <label className="muted" style={{ fontSize: 12 }}>Amount</label>
+                  <input type="number" step="0.01" value={pay.amount ?? ""}
+                    placeholder={String(invoice.balance)}
+                    onChange={(e) => setPay({ ...pay, amount: e.target.value })} />
+                </div>
+                <div style={{ flex: "1 1 120px" }}>
+                  <label className="muted" style={{ fontSize: 12 }}>Method</label>
+                  <input type="text" value={pay.method ?? ""} placeholder="EFT"
+                    onChange={(e) => setPay({ ...pay, method: e.target.value })} />
+                </div>
+                <div style={{ flex: "1 1 150px" }}>
+                  <label className="muted" style={{ fontSize: 12 }}>Reference</label>
+                  <input type="text" value={pay.reference ?? ""}
+                    onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
+                </div>
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                A returned payment is recorded as a negative amount, not deleted.
+              </div>
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <button className="btn btn-primary" disabled={busy} onClick={addPayment}
+                  style={{ marginTop: 0 }}>Save payment</button>
+                <button className="btn btn-ghost" onClick={() => setPay(null)}
+                  style={{ marginTop: 0 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Payment details, printed. Again from this workspace's own row. */}
       {issuer && (issuer.bank_account_number || issuer.invoice_footer) && (

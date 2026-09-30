@@ -93,6 +93,66 @@
   // substantial block of text. The list, the nav and the ribbon are excluded
   // by construction, which leaves the pane.
   // -------------------------------------------------------------------------
+  // Outlook shows the latest message and hides everything it replies to behind
+  // a "..." button. That hidden chain is where the facts usually live: "amend
+  // these jobs based on the details received" is the instruction, and the
+  // details are three replies down. Reading only what is on screen sends the
+  // parser the instruction with none of the information.
+  //
+  // So the quoted history is opened before the pane is read. Clicking the
+  // expander is tried first because it is what a person does; anything still
+  // hidden afterwards is unhidden directly and put back immediately.
+  const EXPANDERS = [
+    '[aria-label*="trimmed" i]',
+    '[aria-label*="see more" i]',
+    '[aria-label*="show more" i]',
+    '[title*="trimmed" i]',
+    '[aria-expanded="false"]',
+    'button[aria-label*="expand" i]',
+  ].join(",");
+
+  function openQuoted(root) {
+    let clicked = 0;
+    for (const el of root.querySelectorAll(EXPANDERS)) {
+      const strip = document.getElementById("oneshot-strip");
+      if (strip && strip.contains(el)) continue;
+      // An expander is small. Anything large matching these selectors is a
+      // container, and clicking it could navigate.
+      if ((el.innerText || "").trim().length > 40) continue;
+      try { el.click(); clicked++; } catch { /* not clickable, never mind */ }
+      if (clicked > 8) break;
+    }
+    return clicked;
+  }
+
+  /**
+   * Read innerText with every hidden descendant temporarily shown. Styles are
+   * restored in a finally block, so the page is left exactly as it was even if
+   * reading throws.
+   */
+  function textWithHidden(root) {
+    const undo = [];
+    try {
+      for (const el of root.querySelectorAll("*")) {
+        const cs = getComputedStyle(el);
+        if (cs.display === "none") {
+          undo.push([el, el.style.display]);
+          el.style.setProperty("display", "block", "important");
+        } else if (cs.visibility === "hidden") {
+          undo.push([el, null]);
+          el.style.setProperty("visibility", "visible", "important");
+        }
+      }
+      return root.innerText || "";
+    } finally {
+      for (const [el, was] of undo) {
+        if (was === null) el.style.removeProperty("visibility");
+        else if (was) el.style.display = was;
+        else el.style.removeProperty("display");
+      }
+    }
+  }
+
   function readOpenMessage() {
     const rows = rowsNow();
     const selected = document.querySelector('div[role="option"][aria-selected="true"]')
@@ -113,7 +173,30 @@
     }
     if (!pane) return null;
 
-    const text = pane.innerText.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+    // The tightest block over 200 characters is often just the newest message,
+    // or - once the history is open - just the quoted part. Climb until the
+    // parent stops being the message and starts being the application: no list
+    // rows, not the strip, and not suddenly several times larger.
+    for (let up = 0; up < 6; up++) {
+      const parent = pane.parentElement;
+      if (!parent) break;
+      if (listHost && (listHost.contains(parent) || parent.contains(listHost))) break;
+      if (strip && parent.contains(strip)) break;
+      if (parent.querySelector('div[role="option"]')) break;
+      const mine = (pane.innerText || "").length;
+      const theirs = (parent.innerText || "").length;
+      if (theirs > Math.max(mine * 4, mine + 20000)) break;
+      if (theirs <= mine) break;
+      pane = parent;
+    }
+
+    openQuoted(pane);
+
+    // Whatever is still hidden after that is read anyway. A quoted chain that
+    // did not open is not a reason to send the parser half a request.
+    let text = (pane.innerText || "").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+    const full = textWithHidden(pane).replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim();
+    if (full.length > text.length + 40) text = full;
 
     // A real address if the pane shows one; Outlook puts it in a title or a
     // mailto link. Falls back to the display name from the selected row.

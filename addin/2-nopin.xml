@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="MailApp">
+  <Id>b1a70d6e-3f2c-45a8-9d11-0c7e2a5f4402</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Section Nine</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="OneShot (nopin)"/>
+  <Description DefaultValue="Spots jobs in your mail and creates them in OneShot, only when you say so."/>
+  <IconUrl DefaultValue="https://1oneshot.netlify.app/icon-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://1oneshot.netlify.app/icon-128.png"/>
+  <SupportUrl DefaultValue="https://1oneshot.netlify.app/"/>
+  <AppDomains>
+    <AppDomain>https://1oneshot.netlify.app</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets DefaultMinVersion="1.1">
+      <Set Name="Mailbox"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://1oneshot.netlify.app/addin/taskpane.html"/>
+        <RequestedHeight>420</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadItem</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Requirements>
+      <bt:Sets DefaultMinVersion="1.1">
+        <bt:Set Name="Mailbox"/>
+      </bt:Sets>
+    </Requirements>
+    <Hosts>
+      <Host xsi:type="MailHost">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="MessageReadCommandSurface">
+            <OfficeTab id="TabDefault">
+              <Group id="osGroup">
+                <Label resid="groupLabel"/>
+                <Control xsi:type="Button" id="osOpenBtn">
+                  <Label resid="btnLabel"/>
+                  <Supertip>
+                    <Title resid="btnLabel"/>
+                    <Description resid="btnTip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon16x16"/>
+                    <bt:Image size="32" resid="Icon32x32"/>
+                    <bt:Image size="80" resid="Icon80x80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="taskpaneUrl"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon16x16" DefaultValue="https://1oneshot.netlify.app/icon-16.png"/>
+        <bt:Image id="Icon32x32" DefaultValue="https://1oneshot.netlify.app/icon-32.png"/>
+        <bt:Image id="Icon80x80" DefaultValue="https://1oneshot.netlify.app/icon-80.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="taskpaneUrl" DefaultValue="https://1oneshot.netlify.app/addin/taskpane.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="groupLabel" DefaultValue="OneShot"/>
+        <bt:String id="btnLabel" DefaultValue="Job from this mail"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="btnTip" DefaultValue="Read this thread and propose a OneShot job. Nothing is created until you confirm."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

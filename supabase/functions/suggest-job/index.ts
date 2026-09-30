@@ -24,8 +24,10 @@
 //    need to return readable errors to a task pane rather than a bare 401.)
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { extract, materialise, jobsOf } from "../_shared/extract.ts";
+import { extract, materialise, jobsOf, refineAmendments } from "../_shared/extract.ts";
 import type { Extraction } from "../_shared/extract.ts";
+import { applyPlanned, describe, nameJob, planAmendments } from "../_shared/amend.ts";
+import type { Change, JobMatch, JobOutcome } from "../_shared/amend.ts";
 
 const cors = {
   "access-control-allow-origin": "*",
@@ -70,7 +72,16 @@ Deno.serve(async (req) => {
   const tenantId = profile?.active_tenant_id;
   if (!tenantId) return json({ error: "No workspace is active for this account." }, 403);
 
-  let payload: { action?: string; thread?: ThreadIn; extraction?: Extraction };
+  let payload: {
+    action?: string; thread?: ThreadIn; extraction?: Extraction;
+    // Amendments. `hints` re-points a reference the reader disambiguated -
+    // keyed by how the parser read it, valued with the job they chose.
+    // `jobs` is what they approved, one entry per job.
+    hints?: Record<string, string>;
+    jobs?: { job_id: string; changes: Change[] }[];
+    // The single-job shape, still accepted.
+    hint?: string; job_id?: string; changes?: Change[];
+  };
   try { payload = await req.json(); }
   catch { return json({ error: "Malformed request." }, 400); }
 
@@ -155,6 +166,109 @@ Deno.serve(async (req) => {
     }
   }
 
+  // ---- amend --------------------------------------------------------------
+  //
+  // Same two-step shape as create, for the same reason: the thread is read and
+  // the reader is shown what WOULD change before anything is written. A thread
+  // naming three jobs produces three blocks, because a card that quietly shows
+  // one of them is how two jobs get forgotten.
+  if (payload.action === "amend") {
+    let ex: Extraction;
+    try { ex = await extract(body, meta, typeList); }
+    catch (e) {
+      console.warn("suggest-job: amend parse failed:", e instanceof Error ? e.message : String(e));
+      return json({ ok: true, outcomes: [], reason: "I couldn't read this thread." });
+    }
+
+    // Two passes: the second one gets to see what the named jobs actually
+    // hold, which is the only way "change that item" can mean anything.
+    let asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList);
+
+    // The reader typed a reference, or picked from candidates. Their answer
+    // replaces what the parser read; with nothing parsed at all it becomes the
+    // whole request, so a thread that names no job can still be amended.
+    const hints = payload.hints ?? (payload.hint ? { "": payload.hint } : {});
+    if (Object.keys(hints).length) {
+      if (!asks.length) {
+        asks = Object.values(hints).map((ref) => ({
+          existing_job_ref: ref, changes: ex.amendment_changes ?? {}, unassigned: [],
+        }));
+      } else {
+        asks = asks.map((a) => {
+          const key = String(a.existing_job_ref ?? "");
+          const to = hints[key] ?? hints[""];
+          return to ? { ...a, existing_job_ref: to } : a;
+        });
+      }
+    }
+
+    if (!asks.length) {
+      return json({
+        ok: true, outcomes: [],
+        reason: "This thread doesn't name a job. Type the job number or the client's reference.",
+      });
+    }
+
+    const legalTypes = ((types ?? []) as { key: string }[]).map((t) => t.key);
+    const outcomes = await planAmendments(sb, tenantId, asks, legalTypes);
+    return json({ ok: true, outcomes: outcomes.map(decorate) });
+  }
+
+  // ---- apply-amendment ----------------------------------------------------
+  //
+  // Only what came back from the review is written, and each job is re-read
+  // first: the reader may have sat on the card while somebody else moved the
+  // date, and a stale "from" is how an amendment quietly undoes a colleague.
+  if (payload.action === "apply-amendment") {
+    const asked = payload.jobs
+      ?? (payload.job_id && payload.changes ? [{ job_id: payload.job_id, changes: payload.changes }] : []);
+    const wanted = asked.filter((a) => a?.job_id && Array.isArray(a.changes) && a.changes.length);
+    if (!wanted.length)
+      return json({ error: "Nothing to change - the proposal was empty." }, 400);
+
+    // Provenance: the amendment traces back to the thread that asked for it,
+    // the same way a created job does.
+    const { data: msg } = await sb.from("messages").insert({
+      tenant_id: tenantId, channel: "email", kind: "amendment",
+      sender, subject, body,
+      raw: { source: "mail add-in", received_at: thread.received_at ?? null,
+             approved_by: user.id, approved_at: new Date().toISOString() },
+    }).select("id").maybeSingle();
+
+    const outcomes: JobOutcome[] = [];
+    for (const a of wanted) {
+      const { data: fresh } = await sb.from("jobs")
+        .select("id,ref,client_ref,type,status,scheduled_date,time_window,hard_deadline,created_at")
+        .eq("id", a.job_id).eq("tenant_id", tenantId).maybeSingle();
+      if (!fresh) {
+        outcomes.push({ asked: a.job_id, status: "not-found", changes: [], failed: [], refused: [], unassigned: [] });
+        continue;
+      }
+      const job: JobMatch = { ...(fresh as Omit<JobMatch, "why">), why: "chosen by the reader" };
+      outcomes.push({
+        asked: job.ref, status: "planned", job, changes: a.changes,
+        failed: [], refused: [], unassigned: [],
+      });
+    }
+
+    await applyPlanned(sb, tenantId, outcomes, {
+      channel: "chrome extension", by: sender,
+      source_message: msg?.id ?? null, approved_by: user.id,
+    });
+
+    const done = outcomes.filter((o) => o.status === "applied");
+    if (!done.length) {
+      const why = outcomes.flatMap((o) => o.failed.map((f) => f.reason));
+      return json({ error: why.length ? `Nothing was changed: ${why.join("; ")}` : "Nothing was changed." }, 400);
+    }
+
+    return json({
+      ok: true,
+      outcomes: outcomes.map(decorate),
+      reply: done.map((o) => `${o.job!.ref}: ${describe(o.changes)}`).join("  |  "),
+    });
+  }
+
   return json({ error: `Unknown action "${payload.action}".` }, 400);
 });
 
@@ -192,4 +306,15 @@ function summarise(jobs: Record<string, unknown>[]): string {
   const span = dates.length > 1 ? `${dates[0]} to ${dates[dates.length - 1]}`
     : (dates[0] ?? "no dates");
   return `${jobs.length} jobs · ${span}`;
+}
+
+// Names a job the way a reader recognises it, so the strip never has to build
+// that string itself and the two surfaces always agree.
+function decorate(o: JobOutcome) {
+  return {
+    ...o,
+    job: o.job ? { ...o.job, name: nameJob(o.job) } : undefined,
+    candidates: o.candidates?.map((c) => ({ ...c, name: nameJob(c) })),
+    summary: o.changes.length ? describe(o.changes) : null,
+  };
 }

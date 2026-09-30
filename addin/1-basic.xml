@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="MailApp">
+  <Id>b1a70d6e-3f2c-45a8-9d11-0c7e2a5f4401</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Section Nine</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="OneShot (basic)"/>
+  <Description DefaultValue="Spots jobs in your mail and creates them in OneShot, only when you say so."/>
+  <IconUrl DefaultValue="https://1oneshot.netlify.app/icon-64.png"/>
+  <HighResolutionIconUrl DefaultValue="https://1oneshot.netlify.app/icon-128.png"/>
+  <SupportUrl DefaultValue="https://1oneshot.netlify.app/"/>
+  <AppDomains>
+    <AppDomain>https://1oneshot.netlify.app</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Mailbox"/>
+  </Hosts>
+  <Requirements>
+    <Sets DefaultMinVersion="1.1">
+      <Set Name="Mailbox"/>
+    </Sets>
+  </Requirements>
+  <FormSettings>
+    <Form xsi:type="ItemRead">
+      <DesktopSettings>
+        <SourceLocation DefaultValue="https://1oneshot.netlify.app/addin/taskpane.html"/>
+        <RequestedHeight>420</RequestedHeight>
+      </DesktopSettings>
+    </Form>
+  </FormSettings>
+  <Permissions>ReadItem</Permissions>
+  <Rule xsi:type="RuleCollection" Mode="Or">
+    <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/>
+  </Rule>
+  <DisableEntityHighlighting>false</DisableEntityHighlighting>
+</OfficeApp>

@@ -1,6 +1,12 @@
 // Shared LLM extraction — classifies an inbound message and extracts job fields.
 // Used by intake-email and intake-whatsapp.
 
+import {
+  applyPlanned, composeReply, mentionedRefs, planAmendments,
+  readJobStates, renderJobStates, resolveJob,
+} from "./amend.ts";
+import type { JobMatch } from "./amend.ts";
+
 const buildSystem = (jobTypes: string) => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
 {
@@ -25,7 +31,10 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
    "missing": ["field names required but absent, for THIS job"]
  }],
  "missing": ["field names absent across the whole message"],
- "amendment_changes": {"field":"new value"} | null
+ "amendment_changes": {"field":"new value"} | null,
+ "amendments": [{"existing_job_ref":"as the sender named it",
+                 "changes":{"field":"new value"},
+                 "unassigned":["a detail that belongs to no job you can identify"]}] | null
 }
 
 ONE JOB OR SEVERAL — decide this first:
@@ -101,6 +110,74 @@ verbatim. Do not invent one.
 Rules: identity_tier 1 = visually unique (artworks, antiques, custom furniture);
 2 = has serial/label/barcode; 3 = commodity/identical units.
 kind=chatter for greetings, logistics banter, anything that is not a work request.
+
+AMENDMENTS - changing jobs that already exist:
+- kind=amendment when the sender is altering work already in hand rather than
+  asking for new work: "please move Friday's collection to Monday", "the
+  delivery address has changed", "make it 4 crates", "amend the following jobs".
+  The giveaway is that the message refers to something already agreed.
+
+- ONE AMENDMENT PER JOB. "amendments" is a LIST. A message naming three jobs
+  produces THREE entries, even when the same change applies to all of them:
+      "Please amend Job-2026-0142, Job-2026-0143 and Job-2026-0146 and change
+       the reference to MSFA/Mawande"
+  is three entries, each with its own existing_job_ref and the same change.
+  NEVER collapse several jobs into one entry, and never pick one and drop the
+  rest - a job you leave out is a job nobody amends.
+
+- "existing_job_ref": copy HOW THE SENDER NAMED IT, verbatim, and do not tidy
+  it. All of these are valid and each is looked up differently downstream:
+      "JOB-2026-0142"     the full job number
+      "0142" / "142"      the job number as people actually say it
+      "Stevenson/Anele"   the sender's own reference for the job
+  If a single job is named more than one way ("reference Moshekwa/Melly or job
+  number 0161"), use the JOB NUMBER - it is the less ambiguous of the two.
+
+- THE DETAILS ARE OFTEN BELOW, NOT ABOVE. "amend these jobs based on the new
+  details received", "as per the mail below", "with the dimensions attached"
+  all point DOWNWARD into the quoted thread. READ THE WHOLE MESSAGE INCLUDING
+  EVERY QUOTED REPLY, find the details being referred to, and use them. The
+  instruction at the top and the facts at the bottom are one request.
+
+- "changes" holds ONLY what is changing for THAT job, with these field names:
+    "scheduled_date"  STRICTLY YYYY-MM-DD, resolved the same careful way as for
+                      a new job. If you cannot resolve it, omit it and say so in
+                      "missing" - a wrong date on an existing job is worse than
+                      on a new one, because nobody re-reads it.
+    "time_window"     text, e.g. "stack closes Fri 16:00"
+    "type"            one of the workspace's job types
+    "client_ref"      their reference, if THAT is what changed
+    "hard_deadline"   true or false
+    "stops"           the SAME shape as a new job's stops. Include a stop only
+                      if it is being added or its address is changing. To add a
+                      second collection alongside the existing one, give both
+                      stops in order - the first is the one already there.
+    "items"           see below.
+
+- CHANGING AN ITEM, not adding one. Each entry in "items" may carry "match":
+      {"match":"Travel frame", "dimensions":"367 x 16 x 176cm(h)"}
+  "match" names the item ALREADY on the job that is changing - by its
+  description, or by its position as a number ("1" for the first). Give only
+  the fields that change. WITHOUT "match" the entry is a NEW item being added
+  and needs a description. Use "match" whenever the message revises details of
+  something the job already has: new dimensions, a corrected size, a different
+  special-handling note. Adding a duplicate item is not the same as correcting
+  one, and is much harder to undo.
+
+- DETAILS YOU CANNOT PLACE. When the message carries details that clearly
+  belong to one of these jobs but NOTHING says which - four sets of dimensions
+  listed against three job numbers, a measurement labelled only with a person's
+  name - do NOT distribute them by guessing and do NOT silently drop them. Put
+  each one, verbatim, in that amendment's "unassigned" list, or in the first
+  amendment's if it belongs to no particular job. A question asked is recovered
+  in a minute; a dimension quietly assigned to the wrong crate is found at the
+  gallery door.
+
+- Leave out anything that is NOT changing. Do not echo the job back. An empty
+  "changes" is a legitimate answer for a message that mentions a job without
+  altering it - that is a status_query.
+- Removing an item is NOT an amendment you can express. Say so in "missing".
+
 
 SEA AND AIR FREIGHT - a whole class of job this parser used to miss:
 - A forwarder's mail often names no items at all. It names a VESSEL, a
@@ -186,15 +263,204 @@ export interface Extraction {
   jobs?: Record<string, unknown>[] | null;
   job?: Record<string, unknown> | null;
   missing: string[];
+  // The old single-amendment shape, still accepted so a replayed message or a
+  // model reply in the previous format keeps working.
   amendment_changes: Record<string, unknown> | null;
+  // One entry per job being changed. A mail naming three jobs has three.
+  amendments?: AmendmentIn[] | null;
+}
+
+export interface AmendmentIn {
+  existing_job_ref: string | null;
+  changes: Record<string, unknown> | null;
+  /** Details that plainly belong to this request but not to any job it names. */
+  unassigned?: string[] | null;
 }
 
 export const MAX_JOBS = 40;
 
 // One shape for the rest of the code to read, whichever the model returned.
+/**
+ * One shape for amendments, whichever the model returned. The singular fields
+ * become a one-entry list, so callers never branch on which format arrived.
+ *
+ * Entries naming no job are dropped rather than applied to a guess, but their
+ * unassigned details are kept and carried onto the first real entry - that is
+ * how "here are four dimensions" survives to become a question instead of a
+ * silent loss.
+ */
+export function amendmentsOf(ex: Extraction): AmendmentIn[] {
+  const raw: AmendmentIn[] = Array.isArray(ex.amendments) && ex.amendments.length
+    ? ex.amendments.filter((a) => a && typeof a === "object")
+    : (ex.existing_job_ref || ex.amendment_changes
+        ? [{ existing_job_ref: ex.existing_job_ref, changes: ex.amendment_changes }]
+        : []);
+
+  const orphaned: string[] = [];
+  const kept: AmendmentIn[] = [];
+  for (const a of raw.slice(0, MAX_JOBS)) {
+    const ref = a.existing_job_ref ? String(a.existing_job_ref).trim() : "";
+    const loose = (Array.isArray(a.unassigned) ? a.unassigned : []).map(String);
+    if (!ref) { orphaned.push(...loose); continue; }
+    kept.push({ existing_job_ref: ref, changes: a.changes ?? {}, unassigned: loose });
+  }
+  if (orphaned.length && kept.length) {
+    kept[0].unassigned = [...(kept[0].unassigned ?? []), ...orphaned];
+  }
+  return kept;
+}
+
 export function jobsOf(ex: Extraction): Record<string, unknown>[] {
   const list = Array.isArray(ex.jobs) ? ex.jobs : (ex.job ? [ex.job] : []);
   return list.filter((j) => j && typeof j === "object").slice(0, MAX_JOBS);
+}
+
+/**
+ * The second pass over an amendment, made once the jobs have been identified
+ * and read. `state` is what those jobs hold right now, so "match" refers to
+ * something the model can see rather than something it has to guess.
+ */
+const buildAmendSystem = (jobTypes: string, state: string) =>
+`You are the amendment parser for OneShot, a logistics job system.
+
+A message has asked for changes to jobs that already exist. THIS IS WHAT THOSE
+JOBS HOLD RIGHT NOW:
+
+${state}
+
+Respond ONLY with JSON, no prose, no markdown fences:
+{
+ "amendments": [{
+   "existing_job_ref": "the job number exactly as printed above, e.g. JOB-2026-0143",
+   "changes": {
+     "scheduled_date": "YYYY-MM-DD",
+     "time_window": "text",
+     "type": ${jobTypes},
+     "client_ref": "their reference",
+     "hard_deadline": true|false,
+     "stops": [{"kind":"collection"|"delivery"|"site","address":"...","label":null,
+                "contact_name":null,"contact_phone":null,"notes":null}],
+     "items_replace": [{"description":"...","quantity":1,"dimensions":"...",
+                        "declared_value":null,"special_handling":null}],
+     "items": [{"match":"[n]","dimensions":"..."}],
+     "remove_items": ["[n] or the exact description above"]
+   },
+   "unassigned": ["a detail that belongs to no job you can identify"]
+ }]
+}
+
+HOW TO CHANGE ITEMS - this is the part that matters:
+
+USE "items_replace" FOR ALMOST EVERYTHING. Give the COMPLETE list of what the
+job should hold once the change is made - every item, not only the ones that
+move. OneShot matches your list against what the job holds now, corrects what
+stays, removes what you leave out, and creates what is new. You do not have to
+work out which existing row is which, or whether something is an edit or an
+addition. Describe the job as it should be.
+
+  The job holds two travel frames for two Serge works. The thread says the
+  Serge frames are off, and gives measurements for three Mawande works and one
+  Deborah. The job should hold four frames, so:
+
+    "items_replace": [
+      {"description":"Travel frame - Mawande 1","dimensions":"Int: 367 x 16 x 176cm(h)",
+       "special_handling":"Artwork: 361 x 10 x 170cm(h)"},
+      {"description":"Travel frame - Mawande 2","dimensions":"Int: 350 x 13 x 180cm(h)",
+       "special_handling":"Artwork: 344 x 7 x 174cm(h)"},
+      {"description":"Travel frame - Mawande 3","dimensions":"Int: 260 x 11 x 156cm(h)",
+       "special_handling":"Artwork: 254 x 5 x 150cm(h)"},
+      {"description":"Travel frame - Deborah","dimensions":"Int: 236 x 11 x 156.5cm(h)",
+       "special_handling":"Artwork: 230 x 5 x 150.5cm(h)"}
+    ]
+
+  The two Serge frames are not in that list, so they go. Nothing had to name
+  them.
+
+RULES FOR "items_replace":
+- ONE ENTRY PER PHYSICAL OBJECT. Four frames of four different sizes are four
+  entries. Never one entry meant to cover several things of different sizes -
+  a measurement describes ONE object.
+- Use "quantity" only for things that are genuinely identical in every respect.
+- Keep items the change does not affect. Leaving one out DELETES it.
+- Give each entry a description that tells them apart. "Travel frame" four
+  times is four indistinguishable rows; name the work or the artist.
+- An item marked ALREADY HANDLED above is kept even if you leave it out, and
+  reported - it carries custody events. Include it if it still belongs.
+
+THE NARROW CASE - "items" with "match":
+Use this ONLY when nothing about the list changes and you are correcting one
+field on one row: {"match":"[2]","dimensions":"350 x 13 x 180cm(h)"}. Each
+number is ONE row; two rows reading "Travel frame" are two different frames.
+If the COUNT of items changes, or which items they are changes, use
+"items_replace" instead.
+
+
+DIMENSIONS: when a message gives both an artwork size and an internal or crate
+size for the same piece, the INTERNAL size is the frame or crate being built -
+that is the dimension the job needs. Record it as given, units and all.
+
+WHICH JOB GETS WHAT:
+- Use what the jobs hold above to decide. A job whose items are travel frames
+  takes the frame dimensions; a measure job that has already happened usually
+  takes none.
+- When the SAME change plainly applies to several jobs, repeat it in each
+  amendment. Do not write it once and hope.
+- NEVER DISTRIBUTE BY ORDER. If a message lists four sets of measurements and
+  the jobs above offer no way to tell which belongs to which item, do NOT hand
+  the first to the first, the second to the second, and so on. That produces a
+  confident, plausible, wrong answer, and a frame gets built to another work's
+  size. Put EVERY such detail in "unassigned", verbatim, and change nothing.
+- The test is simple: could you point at the job above and say WHY this
+  measurement belongs to that row? If not, it is unassigned. A label the items
+  carry ("Mawande", "Deborah", a work title), a count that matches exactly, or
+  the message saying so outright are reasons. Order of appearance is not.
+- One measurement never describes two objects. Four measurements mean four
+  entries in "items_replace", each with its own description.
+
+READ THE WHOLE MESSAGE INCLUDING EVERY QUOTED REPLY. "Amend these jobs based on
+the details received" points DOWNWARD into the thread. The instruction at the
+top and the facts at the bottom are one request.
+
+Today is ${new Date().toISOString().slice(0, 10)}. Dates are Africa/Johannesburg.
+Return {"amendments":[]} if the message asks for no change you can express.`;
+
+/** One call to the model, shared by both passes. */
+async function callModel(system: string, content: unknown[]): Promise<string> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 32000,
+      system,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  if (data.stop_reason === "max_tokens")
+    throw new Error("reply hit the 32000-token limit and was cut off");
+  return (data.content ?? []).filter((c: { type: string }) => c.type === "text")
+    .map((c: { text: string }) => c.text).join("");
+}
+
+/**
+ * Re-read an amendment with the jobs' current contents in hand. Returns the
+ * amendments only; everything else about the message was settled in pass one.
+ */
+export async function extractAmendments(
+  body: string, meta: string, jobTypes: string, state: string,
+): Promise<AmendmentIn[]> {
+  const text = await callModel(buildAmendSystem(jobTypes, state), [
+    { type: "text", text: `${meta}\n\n${body}` },
+  ]);
+  const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+  const list = Array.isArray(parsed?.amendments) ? parsed.amendments : [];
+  return list.filter((a: unknown) => a && typeof a === "object") as AmendmentIn[];
 }
 
 export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<Extraction> {
@@ -257,6 +523,12 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
         .map((t) => `"${t.key}" (${t.label})`).join(" | ") + " | null"
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
+  // The same list as bare keys. The prompt gets the prose form above; an
+  // amendment changing a job's type is checked against this, because a type
+  // the workspace does not have would be refused by the database anyway and is
+  // better caught with an explanation.
+  const legalTypes = ((types ?? []) as { key: string }[]).map((t) => t.key);
+
   let ex: Extraction;
   // Kept so the failure can be written onto the message. An email that arrived
   // and produced nothing must be visible in the app, not only in the logs.
@@ -277,10 +549,10 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
       } catch (e2) {
         parseError = e2 instanceof Error ? e2.message : String(e2);
         console.error("ingest: text-only retry also failed:", parseError);
-        ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+        ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
       }
     } else {
-      ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null } as Extraction;
+      ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
     }
   }
 
@@ -310,25 +582,38 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     const itemCount = js.reduce((n, j) => n + (Array.isArray(j.items) ? j.items.length : 0), 0);
     console.log(`ingest: kind=${ex.kind} confidence=${ex.confidence} jobs=${js.length} items=${itemCount} images=${images.length} bodyChars=${body.length}`);
   }
-  if (ex.kind === "chatter" || ex.confidence < 0.5) {
+  // An amendment that names a job is let through even on low confidence. For a
+  // REQUEST, a shaky parse should create nothing - a wrong job is expensive.
+  // For an amendment it is the opposite: the sender has told us which job, the
+  // block below refuses to write unless exactly one matches, and every change
+  // is reported back with its old value. Staying silent is the worse failure,
+  // because the sender believes the change was made and nobody finds out.
+  const namedAmendment = ex.kind === "amendment" && !!ex.existing_job_ref;
+  if (ex.kind === "chatter" || (ex.confidence < 0.5 && !namedAmendment)) {
     console.log("ingest: not treated as a job. Body began:", body.slice(0, 400).replace(/\s+/g, " "));
     return "";
   }
 
-  // Amendment to an existing job
-  if (ex.kind === "amendment" && ex.existing_job_ref) {
-    const { data: job } = await sb.from("jobs").select("*").eq("ref", ex.existing_job_ref).single();
-    if (!job) return `I couldn't find ${ex.existing_job_ref}.`;
-    const ch = ex.amendment_changes ?? {};
-    const patch: Record<string, unknown> = {};
-    for (const k of ["scheduled_date", "time_window", "origin", "destination", "type"]) if (k in ch) patch[k] = ch[k];
-    if (Object.keys(patch).length) await sb.from("jobs").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", job.id);
-    await sb.from("custody_events").insert({
-      tenant_id: tenantId, job_id: job.id, type: "amendment",
-      taken_at: new Date().toISOString(), payload: { source_message: msg.id, changes: ch },
-      notes: `Amended via ${channel} by ${sender}`,
-    });
-    return `${job.ref} updated: ${Object.entries(ch).map(([k, v]) => `${k} → ${JSON.stringify(v)}`).join(", ")} ✓`;
+  // Amendment to an existing job.
+  //
+  // The reference is resolved through the ladder in amend.ts, so "0161" and
+  // "Moshekwa/Melly" now work as well as the full job number. The rule that
+  // matters is below: when the reference is ambiguous or unknown, NOTHING is
+  // written and the reply asks. An email that silently changes the wrong job's
+  // date is the one failure nobody catches, because the mail looked answered.
+  if (ex.kind === "amendment") {
+    const asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList);
+    if (!asks.length) {
+      return "That reads like a change to an existing job, but it doesn't say which one. "
+        + "Reply with the job number and I'll make the change.";
+    }
+
+    const outcomes = await planAmendments(sb, tenantId, asks, legalTypes);
+    await applyPlanned(sb, tenantId, outcomes, { channel, by: sender, source_message: msg.id });
+    // The parser chose which jobs to amend; this checks its work against the
+    // message itself, so a job named in the mail and missed by the model is
+    // reported rather than silently left out of the reply.
+    return composeReply(outcomes, mentionedRefs(body));
   }
 
   if (ex.kind !== "request" || !jobsOf(ex).length) return "";
@@ -525,4 +810,59 @@ export async function materialise(
 
   return `${madeCount} job(s) created from this message${docNote}, pending confirmation:\n`
     + lines.map((l) => `  • ${l}`).join("\n") + `${failNote}${topMiss}`;
+}
+
+/**
+ * Amendments are read twice.
+ *
+ * Pass one (already done by the caller) works out WHICH jobs are being talked
+ * about. This resolves them, reads what they currently hold, and asks again -
+ * with the job's real items in front of the parser.
+ *
+ * That second look is not a refinement, it is the difference between working
+ * and not. Pass one is asked to name an item on a job it has never seen, so
+ * every item amendment it proposes is a guess at a description, and a guess
+ * that misses is refused. Pass two can point at "[1] Travel frame x2".
+ *
+ * If the second pass fails for any reason, the first pass's answer is used, so
+ * an amendment is never lost to this being clever.
+ */
+export async function refineAmendments(
+  // deno-lint-ignore no-explicit-any
+  sb: any, tenantId: string, ex: Extraction,
+  body: string, meta: string, typeList: string,
+): Promise<AmendmentIn[]> {
+  const first = amendmentsOf(ex);
+  if (!first.length) return first;
+
+  // Resolve only to read them. Ambiguity is settled later, by planAmendments.
+  const jobs: JobMatch[] = [];
+  for (const a of first) {
+    const { matches } = await resolveJob(sb, tenantId, a.existing_job_ref);
+    if (matches.length === 1 && !jobs.some((j) => j.id === matches[0].id)) jobs.push(matches[0]);
+  }
+  if (!jobs.length) return first;
+
+  try {
+    const states = await readJobStates(sb, tenantId, jobs);
+    const second = await extractAmendments(body, meta, typeList, renderJobStates(states));
+    if (!second.length) return first;
+
+    // Anything pass one named that pass two dropped is kept, so a second look
+    // can only ever add detail - never quietly lose a job.
+    const seen = new Set(second.map((a) => String(a.existing_job_ref ?? "").toLowerCase()));
+    const byRef = new Map(jobs.map((j) => [j.ref.toLowerCase(), j]));
+    const missing = first.filter((a) => {
+      const asked = String(a.existing_job_ref ?? "").toLowerCase();
+      if (seen.has(asked)) return false;
+      const resolved = [...byRef.values()].find((j) =>
+        j.ref.toLowerCase() === asked || (j.client_ref ?? "").toLowerCase() === asked);
+      return !(resolved && seen.has(resolved.ref.toLowerCase()));
+    });
+    return [...second, ...missing];
+  } catch (e) {
+    console.warn("ingest: second amendment pass failed, using the first:",
+      e instanceof Error ? e.message : String(e));
+    return first;
+  }
 }

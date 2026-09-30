@@ -17,6 +17,7 @@ import EditJob from "./pages/EditJob";
 import TypeSettings from "./pages/TypeSettings";
 import Clients from "./pages/Clients";
 import BillingSettings from "./pages/BillingSettings";
+import Statements from "./pages/Statements";
 import Signup from "./pages/Signup";
 import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
@@ -246,6 +247,7 @@ function Shell() {
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />
         <Route path="/settings/billing" element={<BillingSettings />} />
+        <Route path="/statements" element={<Statements />} />
       </Routes>
 
       {/* Sync badge with error display */}
