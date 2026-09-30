@@ -225,22 +225,41 @@
        block sits left, the document title and its date and reference right -
        the shape every invoice and delivery note in the world already has, so
        nobody has to learn to read it. */
+    /* Hidden on screen by default: on a job card it would only tell the reader
+       their own company's address. A statement is the exception - it IS the
+       document, and you should see what the customer will see before you send
+       it - so that one asks for .on-screen. */
     .letterhead { display: none; }
+    .letterhead.on-screen {
+      display: block; margin: 0 0 16px; padding-bottom: 10px;
+      border-bottom: 1.5px solid var(--ink, #111);
+    }
+
+    /* The inside of the letterhead is laid out the same way on screen and on
+       paper, so these live outside the print block. Only the sizes differ,
+       below, where points make sense. */
+    .letterhead-body { display: flex; align-items: flex-start; gap: 14px; }
+    .letterhead-logo { max-height: 64px; max-width: 190px; object-fit: contain; flex: none; }
+    .letterhead-who { flex: 1; font-size: 13px; line-height: 1.35; }
+    .letterhead-name { font-size: 18px; font-weight: 700; }
+    .letterhead-doc { flex: none; text-align: right; font-size: 13px; min-width: 150px; }
+    .letterhead-title { font-size: 18px; font-weight: 700; letter-spacing: .06em;
+                        text-transform: uppercase; margin-bottom: 4px; }
+    .letterhead-metarow { display: flex; justify-content: flex-end; gap: 10px; }
+    .letterhead-metalabel { color: var(--muted, #666); }
+    .letterhead-metavalue { font-weight: 600; }
 
     @media print {
-      .letterhead { display: block !important; margin: 0 0 14px; padding-bottom: 8px;
-                    border-bottom: 1.5px solid #000; break-inside: avoid; break-after: avoid; }
-      .letterhead-body { display: flex; align-items: flex-start; gap: 14px; }
-      .letterhead-logo { max-height: 64px; max-width: 190px; object-fit: contain;
-                         flex: none; }
-      .letterhead-who { flex: 1; font-size: 9.5pt; line-height: 1.35; color: #222; }
-      .letterhead-name { font-size: 13pt; font-weight: 700; color: #000; }
-      .letterhead-doc { flex: none; text-align: right; font-size: 9.5pt; min-width: 150px; }
-      .letterhead-title { font-size: 13pt; font-weight: 700; letter-spacing: .06em;
-                          text-transform: uppercase; color: #000; margin-bottom: 4px; }
-      .letterhead-metarow { display: flex; justify-content: flex-end; gap: 10px; }
+      .letterhead, .letterhead.on-screen {
+        display: block !important; margin: 0 0 14px; padding-bottom: 8px;
+        border-bottom: 1.5px solid #000; break-inside: avoid; break-after: avoid;
+      }
+      .letterhead-who { font-size: 9.5pt; color: #222; }
+      .letterhead-name { font-size: 13pt; color: #000; }
+      .letterhead-doc { font-size: 9.5pt; }
+      .letterhead-title { font-size: 13pt; color: #000; }
       .letterhead-metalabel { color: #555; }
-      .letterhead-metavalue { font-weight: 600; color: #000; }
+      .letterhead-metavalue { color: #000; }
     }
 
     @media print {
@@ -296,6 +315,15 @@
     .statement-table .num, .aging .num { text-align: right; font-variant-numeric: tabular-nums; }
     .aging td { font-variant-numeric: tabular-nums; }
     .statement-table tr:last-child td, .aging tr:last-child td { border-bottom: none; }
+    /* A receipt belongs to the invoice above it, so it is indented, lighter,
+       and carries no border of its own - the eye reads invoice-then-payments
+       as one block rather than as eight unrelated lines. */
+    .statement-table tr.payment-row td {
+      border-bottom: none; padding-top: 2px; padding-bottom: 2px;
+      font-size: 13px; color: var(--muted, #666);
+    }
+    .statement-table tr.payment-row td:nth-child(2) { padding-left: 14px; }
+    .statement-table tr.payment-row + tr:not(.payment-row) td { border-top: 1px solid var(--line); }
     @media print {
       .statement .card { border: none; padding: 0; box-shadow: none; }
       .statement-table { page-break-inside: auto; }

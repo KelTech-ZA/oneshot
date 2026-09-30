@@ -10,8 +10,11 @@ import { supabase } from "../lib/supabase";
 // handing them the bank account number. Ops edit the underlying row in
 // Billing details; there is no second copy of any of it to drift.
 //
-// Print-only by design. On screen it would just tell the user their own
-// company's address, which they already know.
+// Print-only by default. On a job card or an invoice, showing it on screen
+// would only tell the user their own company's address, which they already
+// know. A statement is different: it IS the document, and the reader needs to
+// see what the customer will see before sending it - so that one passes
+// screen.
 
 // One fetch per page load however many documents render a letterhead: a job
 // card and its invoice both want one, and asking twice is waste.
@@ -53,7 +56,7 @@ export function useLetterhead() {
  * meta    [[label, value], ...] printed to the right of the letterhead -
  *         the date and reference a document needs to stand on its own.
  */
-export default function Letterhead({ title, meta = [] }) {
+export default function Letterhead({ title, meta = [], screen = false }) {
   const head = useLetterhead();
   if (!head) return null;
 
@@ -73,7 +76,7 @@ export default function Letterhead({ title, meta = [] }) {
   const contact = [head.billing_email, head.phone].filter(Boolean).join(" · ");
 
   return (
-    <div className="only-print letterhead">
+    <div className={"letterhead" + (screen ? " on-screen" : " only-print")}>
       <div className="letterhead-body">
         {url && <img className="letterhead-logo" src={url} alt="" />}
         <div className="letterhead-who">

@@ -50,6 +50,10 @@ export default function Statements() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [sent, setSent] = useState("");
+  // Settling up from the statement, which is where you are when the bank
+  // statement is open beside you - not on each job in turn.
+  const [paying, setPaying] = useState(null);   // { id, amount, paid_on, method, reference }
+  const [note, setNote] = useState("");
 
   useEffect(() => {
     if (!isOps) return;
@@ -114,6 +118,25 @@ export default function Statements() {
     return [...m.entries()];
   }, [shown]);
 
+  const record = async (row, amount) => {
+    const amt = Number(amount);
+    if (!amt) { setMsg("Enter an amount."); return; }
+    setBusy(true); setMsg(""); setNote("");
+    const { error } = await supabase.from("invoice_payments").insert({
+      tenant_id: profile.tenant_id, invoice_id: row.id,
+      paid_on: paying?.paid_on || today(),
+      amount: amt,
+      method: paying?.method || null,
+      reference: paying?.reference || null,
+      created_by: profile?.id ?? null,
+    });
+    setBusy(false);
+    if (error) { setMsg(error.message); return; }
+    setPaying(null);
+    setNote(`${row.number}: ${amount} recorded.`);
+    await load();
+  };
+
   if (!isOps) {
     return <div className="page"><h1>Statements</h1>
       <p className="muted">The office keeps these.</p></div>;
@@ -136,6 +159,7 @@ export default function Statements() {
   return (
     <div className="page statement">
       <Letterhead
+        screen
         title="Statement of account"
         meta={[
           ["Date", today()],
@@ -219,11 +243,16 @@ export default function Statements() {
                 <th>Invoice</th><th>Date</th><th>Job</th><th>Reference</th>
                 <th className="num">Invoiced</th><th className="num">Paid</th>
                 <th className="num">Outstanding</th><th>Status</th>
+                <th className="no-print" />
               </tr>
             </thead>
             <tbody>
-              {shown.map((r) => (
-                <tr key={r.id} className={r.state === "void" ? "muted" : undefined}>
+              {shown.map((r) => {
+                const open = paying?.id === r.id;
+                const settled = r.state === "paid" || r.state === "void";
+                return (
+                <React.Fragment key={r.id}>
+                <tr className={r.state === "void" ? "muted" : undefined}>
                   <td>{r.number}</td>
                   <td>{r.invoice_date}</td>
                   <td>{r.job_ref || "—"}</td>
@@ -237,10 +266,71 @@ export default function Statements() {
                       <span style={{ color: "var(--warn)" }}> · {r.days_overdue}d late</span>
                     )}
                   </td>
+                  <td className="no-print num">
+                    {!settled && (
+                      <button className="btn btn-ghost" style={{ marginTop: 0, padding: "2px 8px" }}
+                        onClick={() => setPaying(open ? null : {
+                          id: r.id, paid_on: today(), amount: "", method: "", reference: "",
+                        })}>
+                        {open ? "Cancel" : "Payment"}
+                      </button>
+                    )}
+                  </td>
                 </tr>
-              ))}
+
+                {/* Settling up, in the row it belongs to. "Paid in full" fills
+                    the balance rather than setting a flag: the state is
+                    derived from what was received, so recording the money IS
+                    marking it paid, and the two can never disagree. */}
+                {open && (
+                  <tr className="no-print">
+                    <td colSpan={9} style={{ background: "var(--bg-soft, rgba(0,0,0,.03))" }}>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                        <div style={{ flex: "0 0 auto" }}>
+                          <label className="muted" style={{ fontSize: 12 }}>Date</label>
+                          <input type="date" value={paying.paid_on}
+                            onChange={(e) => setPaying({ ...paying, paid_on: e.target.value })} />
+                        </div>
+                        <div style={{ flex: "0 0 130px" }}>
+                          <label className="muted" style={{ fontSize: 12 }}>Amount</label>
+                          <input type="number" step="0.01" value={paying.amount}
+                            placeholder={String(r.balance)}
+                            onChange={(e) => setPaying({ ...paying, amount: e.target.value })} />
+                        </div>
+                        <div style={{ flex: "0 0 110px" }}>
+                          <label className="muted" style={{ fontSize: 12 }}>Method</label>
+                          <input type="text" value={paying.method} placeholder="EFT"
+                            onChange={(e) => setPaying({ ...paying, method: e.target.value })} />
+                        </div>
+                        <div style={{ flex: "1 1 140px" }}>
+                          <label className="muted" style={{ fontSize: 12 }}>Reference</label>
+                          <input type="text" value={paying.reference}
+                            onChange={(e) => setPaying({ ...paying, reference: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                        <button className="btn btn-primary" style={{ marginTop: 0 }} disabled={busy}
+                          onClick={() => record(r, r.balance)}>
+                          Paid in full ({amount(r.balance, r.currency)})
+                        </button>
+                        <button className="btn btn-ghost" style={{ marginTop: 0 }}
+                          disabled={busy || !Number(paying.amount)}
+                          onClick={() => record(r, paying.amount)}>
+                          Part payment
+                        </button>
+                      </div>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                        A returned payment goes in as a negative amount, so the balance
+                        reopens and the record of both stays.
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
+              );})}
             </tbody>
           </table>
+          {note && <div className="no-print" style={{ color: "var(--ok, #4ea373)", marginTop: 6 }}>{note}</div>}
 
           {byCurrency.map(([ccy, t]) => (
             <div className="card" key={ccy} style={{ marginTop: 14 }}>

@@ -141,7 +141,7 @@ export default function Dashboard() {
         Billing details
       </Link>
       <Link to="/statements" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Statements &amp; what is owed
+        Client statements
       </Link>
 
       <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>

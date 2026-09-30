@@ -34,9 +34,15 @@ const money = (n: unknown, ccy: string) => {
 };
 
 interface Row {
+  id: string;
   number: string; invoice_date: string; job_ref: string | null; their_reference: string | null;
   currency: string; total: number; paid: number; balance: number;
   state: string; days_overdue: number | null; age_days: number;
+}
+
+interface Payment {
+  id: string; invoice_id: string; paid_on: string; amount: number;
+  method: string | null; reference: string | null; notes: string | null;
 }
 
 Deno.serve(async (req) => {
@@ -61,7 +67,9 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Malformed request." }, 400); }
 
   const { client_id, from, to } = body;
-  const openOnly = body.open_only !== false;
+  // A statement shows the whole period. Arrears-only is a different document
+  // and has to be asked for, the same way it is on the page.
+  const openOnly = body.open_only === true;
   if (!client_id || !from || !to) return json({ error: "Which customer, and over what period?" }, 400);
 
   const { data: profile } = await sb.from("profiles")
@@ -84,6 +92,20 @@ Deno.serve(async (req) => {
 
   const rows = ((rowsRaw ?? []) as Row[])
     .filter((r) => (openOnly ? r.state !== "paid" && r.state !== "void" : true));
+
+  // What was received against those invoices. A statement that shows a balance
+  // without showing the payments behind it asks the customer to take the
+  // figure on trust - and it is the first thing they query.
+  const byInvoice = new Map<string, Payment[]>();
+  if (rows.length) {
+    const { data: pays } = await sb.from("invoice_payments")
+      .select("*").in("invoice_id", rows.map((r) => r.id))
+      .order("paid_on").order("created_at");
+    for (const p of (pays ?? []) as Payment[]) {
+      if (!byInvoice.has(p.invoice_id)) byInvoice.set(p.invoice_id, []);
+      byInvoice.get(p.invoice_id)!.push(p);
+    }
+  }
 
   if (!rows.length) {
     return json({ error: openOnly
@@ -112,7 +134,25 @@ Deno.serve(async (req) => {
   const td = "padding:6px 8px;border-bottom:1px solid #eee;font:14px system-ui";
   const num = td + ";text-align:right;font-variant-numeric:tabular-nums";
 
-  const lines = rows.map((r) => `
+  const pay = "padding:2px 8px;font:13px system-ui;color:#666";
+  const payNum = pay + ";text-align:right;font-variant-numeric:tabular-nums";
+
+  const lines = rows.map((r) => {
+    const receipts = (byInvoice.get(r.id) ?? []).map((p) => `
+    <tr>
+      <td style="${pay}"></td>
+      <td style="${pay}">${esc(p.paid_on)}</td>
+      <td style="${pay};padding-left:16px" colspan="2">${
+        Number(p.amount) < 0 ? "Payment reversed" : "Payment received"
+      }${p.method ? ` · ${esc(p.method)}` : ""}${
+        p.reference ? ` · ${esc(p.reference)}` : ""}${p.notes ? ` · ${esc(p.notes)}` : ""}</td>
+      <td style="${payNum}"></td>
+      <td style="${payNum}">${esc(money(p.amount, r.currency))}</td>
+      <td style="${payNum}"></td>
+      <td style="${pay}"></td>
+    </tr>`).join("");
+
+    return `
     <tr>
       <td style="${td}">${esc(r.number)}</td>
       <td style="${td}">${esc(r.invoice_date)}</td>
@@ -124,7 +164,8 @@ Deno.serve(async (req) => {
       <td style="${td}">${esc(r.state.replace("_", " "))}${
         r.days_overdue && r.days_overdue > 0 ? ` <span style="color:#b4531f">· ${r.days_overdue}d late</span>` : ""
       }</td>
-    </tr>`).join("");
+    </tr>${receipts}`;
+  }).join("");
 
   const summaries = [...totals.entries()].map(([ccy, t]) => `
     <table style="border-collapse:collapse;margin-top:18px;width:100%">
