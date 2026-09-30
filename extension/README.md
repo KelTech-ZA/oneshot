@@ -1,4 +1,4 @@
-# OneShot for Outlook — Chrome extension
+# OneShot for Outlook and WhatsApp — Chrome extension
 
 A slim strip across the bottom of Outlook on the web. It reads the mail your
 Outlook page has already loaded, scores it, and tells you how many of the last
@@ -13,6 +13,34 @@ for them and fold away again.
 4. Open `https://outlook.office.com/mail/` and reload once
 
 The strip appears at the bottom. Sign in once with your OneShot account.
+
+## Two surfaces, one extension
+
+| | Outlook Web | WhatsApp Web |
+|---|---|---|
+| Scans on a cycle | yes, last 30, every 3h | **no** |
+| Suggestions list | yes | **no** |
+| Create from what is open | yes, the reading pane | yes, the conversation |
+| Creates without a click | never | never |
+
+WhatsApp runs deliberately one capability behind. There is no subject line and
+a job arrives across several messages, so gating a chat list would be mostly
+noise. One conversation you have chosen, on a button you pressed, has none of
+that problem.
+
+It reads the open chat and nothing else: never the chat list, never another
+conversation. It never opens a chat, never marks anything read, and never
+sends. That restraint is the point - the behaviour Meta bans numbers for is
+sending: message velocity, bulk identical messages, protocol spoofing by tools
+that scan a QR code and log in as a fake client. This does none of it.
+
+It walks backwards from the newest message, stopping at 30 messages or a
+silence longer than 24 hours, whichever comes first - a long gap means the
+conversation before it was a different conversation.
+
+Voice notes, photos and documents cannot be read by a content script. They are
+counted and named on the form ("1 voice note, 2 photos in this chat could not
+be read"), so a half-read chat never produces a confident-looking card.
 
 ## The strip
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "OneShot for Outlook",
-  "version": "0.1.0",
-  "description": "Watches your inbox for mail that needs a job, and asks.",
+  "name": "OneShot for Outlook and WhatsApp",
+  "version": "0.2.0",
+  "description": "Turns mail and chats into OneShot jobs, when you ask it to.",
   "permissions": [
     "storage"
   ],
@@ -11,7 +11,8 @@
     "https://outlook.office365.com/*",
     "https://outlook.cloud.microsoft/*",
     "https://outlook.live.com/*",
-    "https://ntcvwosypcnwedxefwcr.supabase.co/*"
+    "https://ntcvwosypcnwedxefwcr.supabase.co/*",
+    "https://web.whatsapp.com/*"
   ],
   "content_scripts": [
     {
@@ -42,6 +43,28 @@
       ],
       "run_at": "document_idle",
       "all_frames": true
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "reader-wa.js"
+      ],
+      "run_at": "document_idle",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "gate.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
 }

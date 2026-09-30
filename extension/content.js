@@ -20,6 +20,12 @@
   const CYCLE_MS = 3 * 60 * 60 * 1000;
   const HOW_MANY = 30;
 
+  // Two surfaces, one strip. Mail is scanned on a cycle and offers
+  // suggestions; a chat is read only when asked, about the conversation on
+  // screen, and nothing else. WhatsApp deliberately runs one capability
+  // behind: no scanning, no list, no timer.
+  const CHAT = /(^|\.)web\.whatsapp\.com$/.test(location.host);
+
   const gate = window.OneShotGate.gate;
   const signals = window.OneShotGate.signals;
 
@@ -117,9 +123,12 @@
 
   const dot = el("span", { id: "oneshot-dot" });
   const status = el("span", { id: "oneshot-status", textContent: "OneShot - reading your inbox..." });
-  const mkBtn = el("button", { id: "oneshot-make", textContent: "Create job from this mail" });
+  const mkBtn = el("button", { id: "oneshot-make",
+    className: CHAT ? "primary" : "",
+    textContent: CHAT ? "Create job from this chat" : "Create job from this mail" });
   const btn = el("button", { className: "primary", textContent: "Suggestions" });
-  const bar = el("div", { id: "oneshot-bar" }, [dot, status, mkBtn, btn]);
+  const bar = el("div", { id: "oneshot-bar" },
+    CHAT ? [dot, status, mkBtn] : [dot, status, mkBtn, btn]);
   const panel = el("div", { id: "oneshot-panel" });
   strip.append(bar, panel);
 
@@ -141,7 +150,9 @@
     mkBtn.disabled = false; mkBtn.textContent = was;
     if (!msg || !msg.body || msg.body.length < 40) {
       openPanel = true;
-      manual = { error: "Open a message first - there is nothing in the reading pane to read." };
+      manual = { error: CHAT
+        ? "Open a chat first - there is no conversation on screen to read."
+        : "Open a message first - there is nothing in the reading pane to read." };
       render();
       return;
     }
@@ -158,7 +169,9 @@
 
   function askReader() {
     return new Promise((res) => {
-      const t = setTimeout(() => { window.removeEventListener("message", h); res(null); }, 2500);
+      // The WhatsApp reader waits for the lazily-rendered message list to
+      // settle before it answers, which can take a couple of seconds.
+      const t = setTimeout(() => { window.removeEventListener("message", h); res(null); }, 9000);
       const h = (e) => {
         if (e.data && e.data.__oneshot === "open-message") {
           clearTimeout(t); window.removeEventListener("message", h); res(e.data.msg);
@@ -248,6 +261,7 @@
   }
 
   function render() {
+    if (CHAT) return renderChat();
     const n = flagged.length;
     dot.className = messages.length ? (n ? "hot" : "live") : "";
     status.textContent = !messages.length
@@ -283,8 +297,10 @@
     if (!seen.length) {
       return out.reason ? `Nothing job-shaped - ${out.reason}.` : "Nothing job-shaped in this one.";
     }
-    return `Not enough to build a job, but it mentions ${seen.join(", ")}`
-         + "  -  worth a look, these are usually deadlines.";
+    // Only freight terms are deadlines. Saying so about "move" or "crate" is
+    // noise, and noise in a nudge is how people learn to ignore it.
+    const tail = s.freight.length ? "  -  freight terms usually mean a deadline." : "";
+    return `Not enough to build a job, but it mentions ${seen.join(", ")}.` + tail;
   }
 
 
@@ -356,6 +372,16 @@
       note.textContent = notJobText(manual.out || {}, manual.msg.body)
         + "  -  fill in what you know and create it anyway.";
     }
+    // A chat is rarely all text. Say what was left out rather than let a
+    // half-read conversation produce a confident-looking card.
+    const m = manual.msg.media;
+    if (m && (m.voice || m.images || m.docs)) {
+      const bits = [];
+      if (m.voice) bits.push(`${m.voice} voice note${m.voice > 1 ? "s" : ""}`);
+      if (m.images) bits.push(`${m.images} photo${m.images > 1 ? "s" : ""}`);
+      if (m.docs) bits.push(`${m.docs} document${m.docs > 1 ? "s" : ""}`);
+      note.textContent += `  -  ${bits.join(", ")} in this chat could not be read.`;
+    }
 
     const typeSel = el("select");
     typeSel.append(el("option", { value: "", textContent: "Type - choose one" }));
@@ -406,6 +432,23 @@
         msg,
       ]),
     ]);
+  }
+
+
+  // In a chat the strip says one thing: whether there is a conversation open
+  // to read. Everything else happens in the panel after the button.
+  function renderChat() {
+    dot.className = "live";
+    status.textContent = manual && manual.msg
+      ? `Read ${manual.msg.messageCount} message${manual.msg.messageCount > 1 ? "s" : ""} from ${manual.msg.fromName || "this chat"}`
+      : session
+        ? "OneShot - open a chat, then create a job from it"
+        : "OneShot - sign in to create jobs";
+    panel.classList.toggle("open", openPanel);
+    if (!openPanel) { panel.textContent = ""; return; }
+    panel.textContent = "";
+    if (!session) { panel.append(authRow()); return; }
+    if (manual) panel.append(manualRow());
   }
 
   function manualRow() {
