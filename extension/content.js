@@ -41,19 +41,46 @@
   const justDone = new Map();        // id -> what was created, kept visible until the panel closes
   let manual = null;                 // the "this mail" flow, when it is running
   let amend = null;                  // the "change a job" flow, when it is running
+  let heartbeat = null;              // the three-hour clock, stoppable
 
   // -------------------------------------------------------------------------
   // Storage
   // -------------------------------------------------------------------------
+  // Reloading the extension kills the handle a content script already running
+  // in an open tab holds, while the script itself carries on - timers and all.
+  // Every chrome.* call it makes after that throws "Extension context
+  // invalidated", once a minute, into a log nobody reads.
+  //
+  // So the strip notices, stops its own clock, and says what to do about it.
+  // The page is still usable; it just cannot reach storage until it reloads.
+  let dead = false;
+  const alive = () => {
+    if (dead) return false;
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch { return false; }
+  };
+  function died() {
+    if (dead) return;
+    dead = true;
+    if (heartbeat) clearInterval(heartbeat);
+    status.textContent = "OneShot was updated - reload this page to pick up the new version";
+    dot.className = "";
+  }
+
   const store = {
     async load() {
-      const d = await chrome.storage.local.get(["session", "decisions", "clientDomains", "jobTypes"]);
-      session = d.session || null;
-      decisions = d.decisions || {};
-      clientDomains = d.clientDomains || [];
-      jobTypes = d.jobTypes || [];
+      if (!alive()) return died();
+      try {
+        const d = await chrome.storage.local.get(["session", "decisions", "clientDomains", "jobTypes"]);
+        session = d.session || null;
+        decisions = d.decisions || {};
+        clientDomains = d.clientDomains || [];
+        jobTypes = d.jobTypes || [];
+      } catch { died(); }
     },
-    save(patch) { chrome.storage.local.set(patch); },
+    save(patch) {
+      if (!alive()) return died();
+      try { chrome.storage.local.set(patch); } catch { died(); }
+    },
   };
 
   // -------------------------------------------------------------------------
@@ -322,6 +349,7 @@
   }
 
   function render() {
+    if (dead) { panel.classList.remove("open"); panel.textContent = ""; return; }
     if (CHAT) return renderChat();
     const n = flagged.length;
     dot.className = messages.length ? (n ? "hot" : "live") : "";
@@ -880,7 +908,8 @@
     [800, 2500, 6000, 12000].forEach(ms => setTimeout(nudge, ms));
     if (session) { loadClients(); loadJobTypes(); }
     render();
-    setInterval(() => {
+    heartbeat = setInterval(() => {
+        if (!alive()) return died();
         if (Date.now() - lastScan >= CYCLE_MS) { laterThisLoad.clear(); nudge(); scan(); }
     }, 60_000);
   })();
