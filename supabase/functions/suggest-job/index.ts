@@ -25,6 +25,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, materialise, jobsOf, refineAmendments } from "../_shared/extract.ts";
+import { diffChanges, diffJobs, recordFeedback } from "../_shared/learn.ts";
 import type { Extraction } from "../_shared/extract.ts";
 import { applyPlanned, describe, nameJob, planAmendments } from "../_shared/amend.ts";
 import type { Change, JobMatch, JobOutcome } from "../_shared/amend.ts";
@@ -79,6 +80,10 @@ Deno.serve(async (req) => {
     // `jobs` is what they approved, one entry per job.
     hints?: Record<string, string>;
     jobs?: { job_id: string; changes: Change[] }[];
+    // What the parser originally offered, sent back so the difference between
+    // it and what the reader approved can be kept. This is the correction.
+    proposed?: Extraction;
+    proposed_changes?: Change[];
     // The single-job shape, still accepted.
     hint?: string; job_id?: string; changes?: Change[];
   };
@@ -159,6 +164,18 @@ Deno.serve(async (req) => {
     try {
       const reply = await materialise(sb, tenantId, msg, pruneMissing(ex));
       const refs = [...reply.matchAll(/JOB-\d{4}-\d+/g)].map((m) => m[0]);
+
+      // What the parser offered against what the reader actually approved.
+      // Recorded after the job exists, so a failure here can never cost a job.
+      await recordFeedback(sb, {
+        tenantId, messageId: msg.id, channel: "chrome extension", surface: "create",
+        proposed: payload.proposed ?? null,
+        accepted: ex,
+        edits: payload.proposed ? diffJobs(jobsOf(payload.proposed), jobsOf(ex)) : {},
+        confidence: payload.proposed?.confidence ?? null,
+        approvedBy: user.id,
+      });
+
       return json({ ok: true, reply, refs });
     } catch (e) {
       console.error("suggest-job: create failed:", e instanceof Error ? e.message : String(e));
@@ -255,6 +272,17 @@ Deno.serve(async (req) => {
       channel: "chrome extension", by: sender,
       source_message: msg?.id ?? null, approved_by: user.id,
     });
+
+    // A line the reader unticked is the clearest correction the app gets.
+    if (payload.proposed_changes?.length) {
+      await recordFeedback(sb, {
+        tenantId, messageId: msg?.id ?? null, channel: "chrome extension", surface: "amend",
+        proposed: payload.proposed_changes,
+        accepted: wanted.flatMap((w) => w.changes),
+        edits: diffChanges(payload.proposed_changes, wanted.flatMap((w) => w.changes)),
+        approvedBy: user.id,
+      });
+    }
 
     const done = outcomes.filter((o) => o.status === "applied");
     if (!done.length) {

@@ -471,7 +471,14 @@
         collection: coll.value, delivery: del.value, items: items.value,
         ref: ref.value, hard: hard.checked, extra: f.extra,
       }, manual.thread);
-      const done = await api("suggest-job", { action: "create", thread: manual.thread, extraction: ex });
+      // The parser's original proposal travels with the edited one, so the
+      // difference between them can be kept. That difference is the only
+      // labelled correction this system ever gets, and it was being thrown
+      // away every time anyone fixed a field before pressing Create.
+      const done = await api("suggest-job", {
+        action: "create", thread: manual.thread, extraction: ex,
+        proposed: (manual.out && manual.out.extraction) || null,
+      });
       if (done.error) { msg.textContent = done.error; go.disabled = false; go.textContent = "Create job"; return; }
       manual = { done: { text: done.reply || "Created.", ref: (done.refs || [])[0] || null, subject: manual.msg.subject } };
       render();
@@ -716,7 +723,12 @@
       if (!jobs.length) { msgEl.textContent = "Tick at least one change."; return; }
 
       go.disabled = true; go.textContent = "Applying...";
-      const out = await api("suggest-job", { action: "apply-amendment", thread: amend.thread, jobs });
+      const out = await api("suggest-job", {
+        action: "apply-amendment", thread: amend.thread, jobs,
+        // Including the ones just unticked: a rejected line says more about
+        // where the parser is weak than an accepted one does.
+        proposed_changes: outcomes.flatMap((o) => o.changes || []),
+      });
       if (out.error) {
         msgEl.textContent = out.error;
         go.disabled = false; go.textContent = "Apply changes";

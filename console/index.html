@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>OneShot — parser console</title>
+<style>
+  /* Deliberately not the customer app. This is a workbench: dark, dense,
+     numbers in a monospace so columns line up when you scan them. Nobody
+     should ever be unsure which of the two they are looking at. */
+  :root {
+    --bg: #0e1113; --panel: #151a1d; --line: #242b2f; --ink: #e8edef;
+    --muted: #8d989d; --accent: #4e9bd8; --warn: #e0a33e; --bad: #d4705a;
+    --good: #58a97a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 16px 20px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  h1 span { color: var(--muted); font-weight: 400; }
+  .spacer { flex: 1; }
+  main { padding: 20px; max-width: 1180px; }
+  section { margin-bottom: 30px; }
+  h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin: 0 0 4px; font-weight: 600;
+  }
+  .lede { color: var(--muted); font-size: 13px; margin: 0 0 12px; max-width: 70ch; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); font-weight: 600; padding: 0 10px 6px 0; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .num { text-align: right; font-variant-numeric: tabular-nums;
+         font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; }
+  .term { font-weight: 600; }
+  .muted { color: var(--muted); }
+  .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .kind {
+    display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px;
+  }
+  .ex { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .diff { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .from { color: var(--muted); text-decoration: line-through; }
+  .to { color: var(--ink); }
+  .arrow { color: var(--muted); margin: 0 5px; }
+
+  button {
+    font: inherit; font-size: 13px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: var(--ink); padding: 5px 11px; cursor: pointer;
+  }
+  button:hover { background: #1d2429; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  input {
+    background: #0b0e10; border: 1px solid var(--line); color: var(--ink);
+    border-radius: 6px; padding: 7px 10px; font: inherit; min-width: 230px;
+  }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+
+  #signin { max-width: 340px; margin: 60px auto; }
+  #signin .panel > * + * { margin-top: 10px; }
+  #signin input { width: 100%; }
+  .err { color: var(--bad); font-size: 13px; }
+  .empty { color: var(--muted); padding: 10px 0; }
+  .ro {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 9px;
+  }
+</style>
+</head>
+<body>
+
+<div id="signin" hidden>
+  <div class="panel">
+    <h1>OneShot <span>— parser console</span></h1>
+    <p class="lede">Maintenance crew only.</p>
+    <input id="email" type="email" placeholder="you@section9.co.za" autocomplete="username">
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="go" class="on">Sign in</button>
+    <div id="signin-msg" class="err"></div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>OneShot <span>— parser console</span></h1>
+    <span class="ro">read only</span>
+    <div class="spacer"></div>
+    <span id="who" class="muted"></span>
+    <button id="out">Sign out</button>
+  </header>
+
+  <main>
+    <div class="tabs">
+      <button data-tab="overview" class="on">Overview</button>
+      <button data-tab="vocab">Vocabulary</button>
+      <button data-tab="edits">Corrections</button>
+    </div>
+    <div id="msg" class="err"></div>
+    <div id="body"></div>
+  </main>
+</div>
+
+<script>
+// No build step and no CDN: a console that cannot be opened because an outside
+// script moved is a console nobody fixes anything with. Supabase's auth and
+// function endpoints are plain HTTP, so plain fetch is enough.
+const SUPABASE_URL = "https://ntcvwosypcnwedxefwcr.supabase.co";
+const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im50Y3Z3b3N5cGNud2VkeGVmd2NyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3MzI0ODEsImV4cCI6MjEwMDMwODQ4MX0.rFgFqxMpN6DaE3H74Pw74nTBUuNLdHUHECkyfKZ_Dz4";
+const KEY = "oneshot_console_session";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let session = null;
+try { session = JSON.parse(localStorage.getItem(KEY) || "null"); } catch {}
+
+async function signIn(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: ANON, "content-type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || "Sign in failed.");
+  return data;
+}
+
+async function read(view, extra = {}) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/console-read`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token}` },
+    body: JSON.stringify({ view, ...extra }),
+  });
+  const data = await res.json().catch(() => ({ error: "Unreadable reply" }));
+  if (res.status === 401) { signOut(); throw new Error("That session expired. Sign in again."); }
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+function signOut() {
+  session = null;
+  localStorage.removeItem(KEY);
+  $("app").hidden = true;
+  $("signin").hidden = false;
+}
+
+// --- rendering --------------------------------------------------------------
+
+const pct = (v) => {
+  const n = Number(v);
+  if (!isFinite(n)) return '<span class="muted">—</span>';
+  const cls = n >= 85 ? "good" : n >= 60 ? "warn" : "bad";
+  return `<span class="${cls}">${n.toFixed(1)}%</span>`;
+};
+
+function table(head, rows, empty) {
+  if (!rows.length) return `<div class="empty">${esc(empty)}</div>`;
+  return `<table><thead><tr>${head.map((h) =>
+    `<th class="${h.num ? "num" : ""}">${esc(h.label)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
+}
+
+function renderOverview(d) {
+  const acc = d.accuracy.map((r) => `<tr>
+    <td>${esc(r.workspace)}</td>
+    <td>${esc(r.channel)}</td>
+    <td class="muted">${esc(r.surface)}</td>
+    <td>${esc(r.week)}</td>
+    <td class="num">${r.proposals}</td>
+    <td class="num">${r.untouched}</td>
+    <td class="num">${pct(r.pct_untouched)}</td>
+    <td class="num muted">${r.avg_confidence_when_right ?? "—"} / ${r.avg_confidence_when_wrong ?? "—"}</td>
+  </tr>`);
+
+  const weak = d.weak_fields.map((r) => `<tr>
+    <td class="term">${esc(r.field)}</td>
+    <td class="num">${r.corrections}</td>
+    <td class="num ${r.workspaces > 1 ? "warn" : "muted"}">${r.workspaces}</td>
+    <td class="muted">${esc(String(r.last_corrected ?? "").slice(0, 10))}</td>
+  </tr>`);
+
+  const vocab = d.vocab.map(vocabRow);
+
+  return `
+    <section>
+      <h2>How often the parser is right</h2>
+      <p class="lede">A proposal nobody changed is one it got right. The last two
+        numbers are its own confidence when it was right, and when it was wrong —
+        if those are the same number, confidence means nothing yet and cannot be
+        used to let it act on its own.</p>
+      <div class="panel">${table(
+        [{label:"Workspace"},{label:"Channel"},{label:"What"},{label:"Week"},
+         {label:"Proposals",num:1},{label:"Untouched",num:1},{label:"Right first time",num:1},
+         {label:"Confidence right / wrong",num:1}],
+        acc, "Nothing recorded yet. It fills as jobs are created and amended.")}
+      </div>
+    </section>
+
+    <section>
+      <h2>Where it is weak</h2>
+      <p class="lede">Fields people correct most. One workspace is a quirk of how
+        that client writes; the same field in several is a parser fault worth
+        fixing in the prompt.</p>
+      <div class="panel">${table(
+        [{label:"Field"},{label:"Corrections",num:1},{label:"Workspaces",num:1},{label:"Last"}],
+        weak, "No corrections recorded yet.")}
+      </div>
+    </section>
+
+    <section>
+      <h2>Vocabulary waiting on a decision</h2>
+      <p class="lede">Words the parser met that no workspace has an entry for.
+        Counted across every workspace, because the same term tripping it in four
+        places is one fix, not four.</p>
+      <div class="panel">${table(
+        [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},{label:"First seen"}],
+        vocab, "Nothing unrecognised yet.")}
+      </div>
+    </section>`;
+}
+
+function vocabRow(r) {
+  const ex = Array.isArray(r.examples) ? r.examples.slice(0, 2) : [];
+  return `<tr>
+    <td>
+      <div class="term">${esc(r.term)}</div>
+      ${ex.map((e) => `<div class="ex">“${esc(String(e).slice(0, 120))}”</div>`).join("")}
+    </td>
+    <td><span class="kind">${esc(String(r.kind).replace("_", " "))}</span></td>
+    <td class="num">${r.seen_total}</td>
+    <td class="num ${r.workspaces > 1 ? "warn" : ""}">${r.workspaces}</td>
+    <td class="muted">${esc(String(r.first_seen ?? "").slice(0, 10))}</td>
+  </tr>`;
+}
+
+function renderVocab(d) {
+  return `<section>
+    <h2>Vocabulary</h2>
+    <p class="lede">Everything the parser has met and could not place, most seen
+      first. Reading only — deciding what to do with a term comes next, and
+      deliberately not in a console that can only look.</p>
+    <div class="panel">${table(
+      [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},{label:"First seen"}],
+      d.rows.map(vocabRow), "Nothing unrecognised yet.")}
+    </div>
+  </section>`;
+}
+
+function renderEdits(d) {
+  const rows = d.rows.map((r) => {
+    const lines = Object.entries(r.edits || {}).map(([field, v]) => `
+      <div class="diff"><span class="muted">${esc(field)}</span>
+        <span class="from">${esc(JSON.stringify(v.from))}</span>
+        <span class="arrow">&rarr;</span>
+        <span class="to">${esc(JSON.stringify(v.to))}</span></div>`).join("");
+    return `<tr>
+      <td class="muted">${esc(String(r.created_at).slice(0, 16).replace("T", " "))}</td>
+      <td>${esc(r.workspace)}<div class="ex">${esc(r.channel)} · ${esc(r.surface)}</div></td>
+      <td>
+        <div class="term">${esc(r.subject || "(no subject)")}</div>
+        ${lines}
+      </td>
+      <td class="num muted">${r.confidence ?? "—"}</td>
+    </tr>`;
+  });
+  return `<section>
+    <h2>What people corrected</h2>
+    <p class="lede">The actual before and after. A count tells you a field is
+      weak; only this tells you why.</p>
+    <div class="panel">${table(
+      [{label:"When"},{label:"Where"},{label:"Correction"},{label:"Confidence",num:1}],
+      rows, "No corrections recorded yet.")}
+    </div>
+  </section>`;
+}
+
+// --- wiring -----------------------------------------------------------------
+
+let tab = "overview";
+
+async function show() {
+  $("msg").textContent = "";
+  $("body").innerHTML = '<div class="empty">Reading…</div>';
+  try {
+    if (tab === "overview") $("body").innerHTML = renderOverview(await read("overview"));
+    else if (tab === "vocab") $("body").innerHTML = renderVocab(await read("vocab", { limit: 200 }));
+    else $("body").innerHTML = renderEdits(await read("edits", { limit: 100 }));
+  } catch (e) {
+    $("body").innerHTML = "";
+    $("msg").textContent = e.message;
+  }
+}
+
+document.querySelectorAll("[data-tab]").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll("[data-tab]").forEach((x) => x.classList.remove("on"));
+    b.classList.add("on");
+    tab = b.dataset.tab;
+    show();
+  };
+});
+
+$("go").onclick = async () => {
+  $("signin-msg").textContent = "";
+  try {
+    session = await signIn($("email").value.trim(), $("password").value);
+    localStorage.setItem(KEY, JSON.stringify(session));
+    start();
+  } catch (e) { $("signin-msg").textContent = e.message; }
+};
+$("password").onkeydown = (e) => { if (e.key === "Enter") $("go").click(); };
+$("out").onclick = signOut;
+
+function start() {
+  $("signin").hidden = true;
+  $("app").hidden = false;
+  $("who").textContent = session?.user?.email ?? "";
+  show();
+}
+
+if (session?.access_token) start(); else $("signin").hidden = false;
+</script>
+</body>
+</html>

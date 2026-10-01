@@ -6,6 +6,9 @@ import {
   readJobStates, renderJobStates, resolveJob,
 } from "./amend.ts";
 import type { JobMatch } from "./amend.ts";
+import { planBilling, planCharges } from "./billing.ts";
+import type { ChargeType, ClientRow } from "./billing.ts";
+import { noteVocab, recordFeedback } from "./learn.ts";
 
 const buildSystem = (jobTypes: string) => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
@@ -28,6 +31,12 @@ Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, 
    "items": [{"description":"","quantity":1,"identity_tier":1|2|3,
               "dimensions":null,"declared_value":null,"special_handling":null,
               "image_indexes":[],"from_stop":null,"to_stop":null}],
+   "charges": [{"description":"","quantity":1,"unit":"job|item|hour|day|km|null",
+                "unit_price":null,"currency":null}],
+   "billing": {"bill_to_name":null,"bill_to_address":null,"vat_number":null,
+               "reg_number":null,"billing_email":null,"their_reference":null,
+               "payment_terms":null,"vat_applicable":null,"vat_rate":null,
+               "currency":null,"quote_number":null},
    "missing": ["field names required but absent, for THIS job"]
  }],
  "missing": ["field names absent across the whole message"],
@@ -177,6 +186,45 @@ AMENDMENTS - changing jobs that already exist:
   "changes" is a legitimate answer for a message that mentions a job without
   altering it - that is a status_query.
 - Removing an item is NOT an amendment you can express. Say so in "missing".
+
+
+QUOTES, PRICES AND WHO IS BILLED:
+- A message may carry a QUOTE as well as the work: priced lines in the body, or
+  an attached PDF or Word document, or someone typing prices into a chat. Read
+  it the same way you read the schedule, and put the money on the job it is for.
+- "charges" is the priced work, ONE ENTRY PER LINE OF THE QUOTE:
+      {"description":"Crate fabrication - Gopal Dagnogo travel frame",
+       "quantity":1,"unit":"job","unit_price":4250,"currency":"ZAR"}
+  Copy the description close to how the quote words it - that line ends up on
+  an invoice the customer will compare against their quote.
+- "unit_price" is the price for ONE of the unit, before VAT. If the quote shows
+  a line total for a quantity, divide it out; if that does not divide cleanly,
+  record quantity 1 and the line total as the unit price rather than inventing
+  a rate.
+- NEVER INVENT A PRICE. If work is described with no figure against it, record
+  the charge with "unit_price": null and list "pricing" in that job's "missing".
+  A blank on an invoice gets queried; a made-up number gets paid, and then it is
+  your word against the customer's quote.
+- Do NOT turn a total into lines, and do NOT add a VAT line as a charge. VAT is
+  a flag, not a line item: put it in "billing" as "vat_applicable" and
+  "vat_rate". A quote reading "Subtotal R4,250 / VAT @15% R637.50 / Total
+  R4,887.50" has ONE charge of 4250, with vat_applicable true and vat_rate 15.
+- Zero-rated, exempt, "excludes VAT" for an export: vat_applicable false.
+- "currency": the currency the quote is in - ZAR, EUR, USD, GBP. Never convert.
+- "billing" is WHO IS BILLED, which is often not who sent the message: a gallery
+  instructing a move may be billed to a collector or a shipper. Take the billing
+  name, address, VAT and registration numbers from the quote's "Bill to" or
+  "Invoice to" block when it has one, not from the sender's signature.
+- "their_reference" is the customer's own purchase order or quote number for
+  this work; "quote_number" is YOUR quote's number if the document shows one.
+- WHICH JOB GETS WHICH CHARGE: match on what the line names. A quote line that
+  says "Gopal Dagnogo travel frame" belongs to the job carrying that reference.
+  If a quote line cannot be tied to one job, put it on the FIRST job of the
+  message and list "charge_allocation" in that job's "missing" so a person
+  checks it. Never spread one line across several jobs, and never repeat the
+  same line on every job - that multiplies the invoice.
+- A message with prices but no new work is not a request. If it prices work
+  already in hand, that is kind=amendment with the charges in "changes".
 
 
 SEA AND AIR FREIGHT - a whole class of job this parser used to miss:
@@ -424,8 +472,50 @@ top and the facts at the bottom are one request.
 Today is ${new Date().toISOString().slice(0, 10)}. Dates are Africa/Johannesburg.
 Return {"amendments":[]} if the message asks for no change you can express.`;
 
-/** One call to the model, shared by both passes. */
-async function callModel(system: string, content: unknown[]): Promise<string> {
+/**
+ * Read the JSON out of a model reply, even when it did not arrive clean.
+ *
+ * This exists because of a real failure: a nine-job schedule came back
+ * beginning "I need to ..." and JSON.parse threw on the first character. The
+ * whole mail was lost - no jobs, no reply, nothing on screen but a parse error
+ * nobody was looking at. The model had understood the mail perfectly; it had
+ * simply started talking first.
+ *
+ * So: strip fences, and if the text still is not JSON, take the first balanced
+ * {...} out of it. Balanced, not greedy-regex, because a brace inside a string
+ * ("Int: 150 x 35 {sic}") must not end the object.
+ */
+export function readJson(text: string): unknown {
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(cleaned); } catch { /* it came back wrapped in prose */ }
+
+  const start = cleaned.indexOf("{");
+  if (start === -1) throw new Error(`the parser replied with no JSON at all: "${cleaned.slice(0, 120)}"`);
+
+  let depth = 0, inString = false, escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const c = cleaned[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === "\\") { escaped = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      return JSON.parse(cleaned.slice(start, i + 1));
+    }
+  }
+  throw new Error(`the parser's reply held no complete JSON object: "${cleaned.slice(0, 120)}"`);
+}
+
+/**
+ * One call to the model, shared by both passes.
+ *
+ * `prefill` puts words in the model's mouth: the reply is made to BEGIN with
+ * them, which is how a model that would otherwise open with "I need to..." is
+ * held to JSON. The prefill is prepended back onto the answer, since the API
+ * returns only what came after it.
+ */
+async function callModel(system: string, content: unknown[], prefill = ""): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -437,15 +527,18 @@ async function callModel(system: string, content: unknown[]): Promise<string> {
       model: "claude-sonnet-4-6",
       max_tokens: 32000,
       system,
-      messages: [{ role: "user", content }],
+      messages: prefill
+        ? [{ role: "user", content }, { role: "assistant", content: prefill }]
+        : [{ role: "user", content }],
     }),
   });
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (data.stop_reason === "max_tokens")
     throw new Error("reply hit the 32000-token limit and was cut off");
-  return (data.content ?? []).filter((c: { type: string }) => c.type === "text")
+  const text = (data.content ?? []).filter((c: { type: string }) => c.type === "text")
     .map((c: { text: string }) => c.text).join("");
+  return prefill + text;
 }
 
 /**
@@ -457,59 +550,33 @@ export async function extractAmendments(
 ): Promise<AmendmentIn[]> {
   const text = await callModel(buildAmendSystem(jobTypes, state), [
     { type: "text", text: `${meta}\n\n${body}` },
-  ]);
-  const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+  ], "{");
+  const parsed = readJson(text) as { amendments?: unknown };
   const list = Array.isArray(parsed?.amendments) ? parsed.amendments : [];
   return list.filter((a: unknown) => a && typeof a === "object") as AmendmentIn[];
 }
 
 export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<Extraction> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      // A 12-item job needs ~1,200 tokens of JSON and a 20-item job ~1,850.
-      // At 1500 the reply was truncated mid-string and the parse threw, which
-      // is what silently swallowed jobs with long item lists. A week's
-      // schedule is fifteen or twenty such jobs in one reply, so the ceiling
-      // has to hold all of them - a truncated schedule is the same silent
-      // swallow, just harder to notice.
-      max_tokens: 32000,
-      system: buildSystem(jobTypes),
-      messages: [{
-        role: "user",
-        content: [
-          ...docs.map((d, i) => ([
-            { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
-            { type: "document", source: { type: "base64", media_type: d.media_type, data: d.data } },
-          ])).flat(),
-          ...images.map((im, i) => ([
-            { type: "text", text: `[IMAGE ${i + 1}]` },
-            { type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } },
-          ])).flat(),
-          { type: "text", text: `${meta}\n\n${body}` },
-        ],
-      }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const text = (data.content ?? []).filter((c: { type: string }) => c.type === "text")
-    .map((c: { text: string }) => c.text).join("");
+  const content = [
+    ...docs.map((d, i) => ([
+      { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
+      { type: "document", source: { type: "base64", media_type: d.media_type, data: d.data } },
+    ])).flat(),
+    ...images.map((im, i) => ([
+      { type: "text", text: `[IMAGE ${i + 1}]` },
+      { type: "image", source: { type: "base64", media_type: im.media_type, data: im.data } },
+    ])).flat(),
+    { type: "text", text: `${meta}\n\n${body}` },
+  ];
 
-  // Name a truncation for what it is. "Unterminated string in JSON" tells you
-  // nothing about the cause; running out of room does.
-  if (data.stop_reason === "max_tokens")
-    throw new Error("reply hit the 32000-token limit and was cut off - the schedule "
-      + "holds more jobs or items than the parser can return in one reply");
-
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
+  // The reply is made to begin with "{". A nine-job schedule was once lost
+  // because the model opened with "I need to ..." and the whole mail went
+  // nowhere; holding it to JSON from the first character is the cheapest way
+  // that cannot happen again.
+  const text = await callModel(buildSystem(jobTypes), content, "{");
+  return readJson(text) as Extraction;
 }
+
 
 // Creates message + (job + items) rows. Returns a human summary for the reply.
 // deno-lint-ignore no-explicit-any
@@ -538,21 +605,33 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   catch (e) {
     parseError = e instanceof Error ? e.message : String(e);
     console.error("ingest: extraction failed:", parseError);
-    // Heavily illustrated emails can fail on the attachments alone. A job built
-    // from the text is far better than nothing, so try once more without them.
+
+    // ALWAYS try again. The old code only retried when there were attachments
+    // to drop, so a plain-text mail got exactly one attempt - and the one
+    // attempt a nine-job schedule got came back as prose, which lost the lot.
+    // The same mail parsed perfectly when it was sent again two hours later,
+    // which is the whole argument for a second go.
+    const attempts: { why: string; run: () => Promise<Extraction> }[] = [];
     if (images.length || docs.length) {
-      console.warn(`ingest: retrying without ${images.length} image(s) and ${docs.length} document(s)`);
+      attempts.push({
+        why: `without ${images.length} image(s) and ${docs.length} document(s)`,
+        run: () => extract(body, meta, typeList, [], []),
+      });
+    }
+    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs) });
+
+    ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
+    for (const attempt of attempts) {
+      console.warn(`ingest: retrying ${attempt.why}`);
       try {
-        ex = await extract(body, meta, typeList, [], []);
-        parseError = null;                      // the retry got there
-        console.log("ingest: text-only retry succeeded");
+        ex = await attempt.run();
+        parseError = null;
+        console.log(`ingest: retry ${attempt.why} succeeded`);
+        break;
       } catch (e2) {
         parseError = e2 instanceof Error ? e2.message : String(e2);
-        console.error("ingest: text-only retry also failed:", parseError);
-        ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
+        console.error(`ingest: retry ${attempt.why} also failed:`, parseError);
       }
-    } else {
-      ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
     }
   }
 
@@ -589,6 +668,15 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // is reported back with its old value. Staying silent is the worse failure,
   // because the sender believes the change was made and nobody finds out.
   const namedAmendment = ex.kind === "amendment" && !!ex.existing_job_ref;
+  // A mail that could not be read at all gets an answer. Returning "" here was
+  // how a nine-job schedule produced total silence: no jobs, no reply, and a
+  // parse error recorded where nobody was looking. The sender believed it had
+  // been received.
+  if (parseError) {
+    return "I couldn't read that one - the parser failed on it twice. "
+      + "Nothing was created. Forward it again, or create the jobs in the app.";
+  }
+
   if (ex.kind === "chatter" || (ex.confidence < 0.5 && !namedAmendment)) {
     console.log("ingest: not treated as a job. Body began:", body.slice(0, 400).replace(/\s+/g, " "));
     return "";
@@ -633,6 +721,25 @@ export async function materialise(
 ): Promise<string> {
   const jobList = jobsOf(ex);
   if (!jobList.length) return "";
+
+  // Read once for the whole message rather than per job: a schedule of nine
+  // jobs would otherwise fetch the rate card nine times.
+  const [{ data: typeRows }, { data: clientRows }] = await Promise.all([
+    sb.from("charge_types").select("id,key,label,unit").eq("tenant_id", tenantId).eq("active", true),
+    sb.from("clients").select("id,name,legal_name,billing_address,vat_number,reg_number,billing_email,payment_terms")
+      .eq("tenant_id", tenantId),
+  ]);
+  const chargeTypes = (typeRows ?? []) as ChargeType[];
+  const clients = (clientRows ?? []) as ClientRow[];
+
+  const { data: jobTypeRows } = await sb.from("job_types")
+    .select("key").eq("tenant_id", tenantId).eq("active", true);
+  const chargeTypesSeen = {
+    jobTypes: ((jobTypeRows ?? []) as { key: string }[]).map((t) => t.key),
+  };
+  // One short line of context per noted word, so a decision is made on
+  // evidence rather than on a bare term.
+  const subjectLine = `${(msg as { subject?: string }).subject ?? ""}`.slice(0, 200) || null;
 
   // The source paperwork is uploaded ONCE and linked to every job the message
   // produced. A schedule attached as a PDF is the provenance for all sixteen
@@ -695,6 +802,57 @@ export async function materialise(
         "| code:", jobErr?.code ?? "-", "| type:", j.type ?? "move",
         "| ref:", j.client_ref ?? "-");
       return { ok: false, line: `could not create "${j.client_ref ?? j.type ?? "a job"}": ${jobErr?.message ?? "insert returned nothing"}` };
+    }
+
+    // ---- the money, when the message carried a quote --------------------
+    //
+    // Written straight after the job, before stops and items, so that a
+    // failure further down still leaves the billing attached to something
+    // rather than stranded.
+    {
+      const billing = planBilling(tenantId, job.id, j.billing as never, clients, null);
+
+      if (Object.keys(billing.job).length) {
+        await sb.from("jobs").update(billing.job).eq("id", job.id);
+      }
+      if (billing.row) {
+        const { error } = await sb.from("job_billing")
+          .upsert(billing.row, { onConflict: "job_id" });
+        if (error) console.error("billing insert failed:", error.message);
+      }
+
+      // Words this workspace has no entry for. Noted, never acted on: a job
+      // type invented by a mail does not become a job type because it was
+      // used once.
+      const proposedType = String(j.type ?? "").trim();
+      if (proposedType && !chargeTypesSeen.jobTypes.includes(proposedType)) {
+        await noteVocab(sb, tenantId, "job_type", proposedType, subjectLine);
+      }
+      if (billing.row && !billing.row.client_id && billing.row.bill_to_name) {
+        await noteVocab(sb, tenantId, "client_name", String(billing.row.bill_to_name), subjectLine);
+      }
+
+      const { rows: chargeRows, unpriced } = planCharges(
+        tenantId, job.id, j.charges, chargeTypes, null,
+      );
+      for (const row of chargeRows) {
+        // A priced line matching nothing on the rate card is either a new kind
+        // of work or a wording the rate card should recognise. Either way a
+        // person decides, not this function.
+        if (!row.charge_type_id) await noteVocab(sb, tenantId, "charge_type", row.description, subjectLine);
+      }
+      if (chargeRows.length) {
+        const { error } = await sb.from("job_charges").insert(chargeRows);
+        if (error) console.error("charges insert failed:", error.message);
+        else console.log(`ingest: ${chargeRows.length} charge line(s) on ${job.ref}`);
+      }
+      // Quoted work with no figure against it is flagged on the job, so the
+      // board shows it rather than it surfacing when the invoice goes out.
+      if (unpriced.length) {
+        const extra = unpriced.map((d) => `missing_info:pricing — ${d}`.slice(0, 180));
+        await sb.from("jobs")
+          .update({ flags: [...flags, ...extra] }).eq("id", job.id);
+      }
     }
 
     // Every address the sender gave, in order, capped at 3 of each kind.
