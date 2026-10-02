@@ -26,6 +26,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, materialise, jobsOf, refineAmendments } from "../_shared/extract.ts";
 import { diffChanges, diffJobs, recordFeedback } from "../_shared/learn.ts";
+import { loadHints, renderHints } from "../_shared/hints.ts";
 import type { Extraction } from "../_shared/extract.ts";
 import { applyPlanned, describe, nameJob, planAmendments } from "../_shared/amend.ts";
 import type { Change, JobMatch, JobOutcome } from "../_shared/amend.ts";
@@ -105,13 +106,17 @@ Deno.serve(async (req) => {
         .map((t) => `"${t.key}" (${t.label})`).join(" | ") + " | null"
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
+  // Same rules the email path reads, so the extension and the inbox cannot
+  // drift apart in what they have been taught.
+  const vocabHints = renderHints(await loadHints(sb, tenantId));
+
   const meta = `Channel: email thread. Sender: ${sender}. Subject: ${subject ?? "-"}`
     + (thread.received_at ? `. Received: ${thread.received_at}` : "");
 
   // ---- suggest ------------------------------------------------------------
   if ((payload.action ?? "suggest") === "suggest") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList); }
+    try { ex = await extract(body, meta, typeList, [], [], vocabHints); }
     catch (e) {
       // A parse failure here is not an error the reader should see as a
       // failure of theirs - it is simply "no suggestion". Logged, not shown.
@@ -191,7 +196,7 @@ Deno.serve(async (req) => {
   // one of them is how two jobs get forgotten.
   if (payload.action === "amend") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList); }
+    try { ex = await extract(body, meta, typeList, [], [], vocabHints); }
     catch (e) {
       console.warn("suggest-job: amend parse failed:", e instanceof Error ? e.message : String(e));
       return json({ ok: true, outcomes: [], reason: "I couldn't read this thread." });
@@ -199,7 +204,7 @@ Deno.serve(async (req) => {
 
     // Two passes: the second one gets to see what the named jobs actually
     // hold, which is the only way "change that item" can mean anything.
-    let asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList);
+    let asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList, vocabHints);
 
     // The reader typed a reference, or picked from candidates. Their answer
     // replaces what the parser read; with nothing parsed at all it becomes the

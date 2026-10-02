@@ -63,16 +63,40 @@
   }
   button:hover { background: #1d2429; }
   button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  input {
+  button.small { font-size: 12px; padding: 3px 9px; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select, textarea {
     background: #0b0e10; border: 1px solid var(--line); color: var(--ink);
     border-radius: 6px; padding: 7px 10px; font: inherit; min-width: 230px;
   }
-  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  textarea { width: 100%; min-height: 62px; resize: vertical; font-size: 14px; }
+  select { min-width: 210px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+
+  /* The decide form, opened under the term it is about. */
+  .decide {
+    margin-top: 10px; padding: 12px; border: 1px solid var(--line);
+    border-radius: 7px; background: #0b0e10;
+  }
+  .decide .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 9px; }
+  .decide label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); font-weight: 600; min-width: 76px;
+  }
+  .decide .hint { font-size: 12px; color: var(--muted); max-width: 62ch; margin: 2px 0 9px; }
+  .scope-warn { color: var(--warn); font-size: 12px; }
+  .pill {
+    display: inline-block; font-size: 11px; border: 1px solid var(--line);
+    border-radius: 999px; padding: 1px 8px; color: var(--muted); margin-right: 5px;
+  }
+  .pill.global { border-color: var(--accent); color: var(--accent); }
+  .act-map { color: var(--good); } .act-teach { color: var(--accent); } .act-ignore { color: var(--muted); }
 
   #signin { max-width: 340px; margin: 60px auto; }
   #signin .panel > * + * { margin-top: 10px; }
   #signin input { width: 100%; }
   .err { color: var(--bad); font-size: 13px; }
+  .ok { color: var(--good); font-size: 13px; }
   .empty { color: var(--muted); padding: 10px 0; }
   .ro {
     font-size: 11px; color: var(--muted); border: 1px solid var(--line);
@@ -86,7 +110,7 @@
   <div class="panel">
     <h1>OneShot <span>— parser console</span></h1>
     <p class="lede">Maintenance crew only.</p>
-    <input id="email" type="email" placeholder="you@section9.co.za" autocomplete="username">
+    <input id="email" type="email" placeholder="you@example.com" autocomplete="username">
     <input id="password" type="password" placeholder="Password" autocomplete="current-password">
     <button id="go" class="on">Sign in</button>
     <div id="signin-msg" class="err"></div>
@@ -96,7 +120,7 @@
 <div id="app" hidden>
   <header>
     <h1>OneShot <span>— parser console</span></h1>
-    <span class="ro">read only</span>
+    <span class="ro">crew</span>
     <div class="spacer"></div>
     <span id="who" class="muted"></span>
     <button id="out">Sign out</button>
@@ -106,6 +130,7 @@
     <div class="tabs">
       <button data-tab="overview" class="on">Overview</button>
       <button data-tab="vocab">Vocabulary</button>
+      <button data-tab="rules">Rules in force</button>
       <button data-tab="edits">Corrections</button>
     </div>
     <div id="msg" class="err"></div>
@@ -125,8 +150,16 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-let session = null;
-try { session = JSON.parse(localStorage.getItem(KEY) || "null"); } catch {}
+// Storage is a convenience here, never a requirement: in a private window, or
+// with site data blocked, every one of these throws. Signing in has to work
+// anyway - it just will not be remembered.
+const store = {
+  get() { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch { return null; } },
+  set(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* not remembered */ } },
+  clear() { try { localStorage.removeItem(KEY); } catch { /* nothing to clear */ } },
+};
+
+let session = store.get();
 
 async function signIn(email, password) {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
@@ -139,11 +172,11 @@ async function signIn(email, password) {
   return data;
 }
 
-async function read(view, extra = {}) {
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/console-read`, {
+async function call(fn, payload) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${fn}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token}` },
-    body: JSON.stringify({ view, ...extra }),
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({ error: "Unreadable reply" }));
   if (res.status === 401) { signOut(); throw new Error("That session expired. Sign in again."); }
@@ -151,9 +184,15 @@ async function read(view, extra = {}) {
   return data;
 }
 
+// Reading and deciding are two different functions on purpose: console-read
+// holds no write action at all, so if it is ever broken into the worst case is
+// a leak rather than a parser quietly taught to misread everybody's mail.
+const read   = (view, extra = {}) => call("console-read", { view, ...extra });
+const decide = (payload) => call("console-decide", payload);
+
 function signOut() {
   session = null;
-  localStorage.removeItem(KEY);
+  store.clear();
   $("app").hidden = true;
   $("signin").hidden = false;
 }
@@ -193,8 +232,6 @@ function renderOverview(d) {
     <td class="muted">${esc(String(r.last_corrected ?? "").slice(0, 10))}</td>
   </tr>`);
 
-  const vocab = d.vocab.map(vocabRow);
-
   return `
     <section>
       <h2>How often the parser is right</h2>
@@ -225,15 +262,15 @@ function renderOverview(d) {
       <h2>Vocabulary waiting on a decision</h2>
       <p class="lede">Words the parser met that no workspace has an entry for.
         Counted across every workspace, because the same term tripping it in four
-        places is one fix, not four.</p>
+        places is one fix, not four. Decide them under Vocabulary.</p>
       <div class="panel">${table(
         [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},{label:"First seen"}],
-        vocab, "Nothing unrecognised yet.")}
+        d.vocab.map(plainVocabRow), "Nothing unrecognised yet.")}
       </div>
     </section>`;
 }
 
-function vocabRow(r) {
+function plainVocabRow(r) {
   const ex = Array.isArray(r.examples) ? r.examples.slice(0, 2) : [];
   return `<tr>
     <td>
@@ -247,15 +284,147 @@ function vocabRow(r) {
   </tr>`;
 }
 
+// --- vocabulary, with the deciding ------------------------------------------
+
+// The rows currently on screen. Kept here rather than re-read on every click,
+// so the form can be opened and closed without a round trip.
+let vocabRows = [];
+let openKey = null;
+
+const rowKey = (r) => `${r.kind}::${r.normalised}`;
+
 function renderVocab(d) {
+  vocabRows = d.rows;
+  const rows = d.rows.map((r) => {
+    const ex = Array.isArray(r.examples) ? r.examples.slice(0, 2) : [];
+    const key = rowKey(r);
+    const seen = Array.isArray(r.where_seen) ? r.where_seen : [];
+    const ruled = Number(r.rules) > 0;
+
+    return `<tr>
+      <td>
+        <div class="term">${esc(r.term)}</div>
+        ${ex.map((e) => `<div class="ex">“${esc(String(e).slice(0, 140))}”</div>`).join("")}
+        <div class="ex">${seen.map((w) =>
+          `<span class="pill">${esc(w.workspace)} · ${w.seen}${
+            w.status !== "new" ? " · " + esc(w.status) : ""}</span>`).join("")}</div>
+        ${openKey === key ? decideForm(r) : ""}
+      </td>
+      <td><span class="kind">${esc(String(r.kind).replace("_", " "))}</span></td>
+      <td class="num">${r.seen_total}</td>
+      <td class="num ${r.workspaces > 1 ? "warn" : ""}">${r.workspaces}</td>
+      <td class="num ${ruled ? "good" : "muted"}">${
+        ruled ? (r.has_global_rule ? "global" : "yes") : "—"}</td>
+      <td><button class="small ${openKey === key ? "on" : ""}" data-decide="${esc(key)}">${
+        ruled ? "Change" : "Decide"}</button></td>
+    </tr>`;
+  });
+
   return `<section>
     <h2>Vocabulary</h2>
     <p class="lede">Everything the parser has met and could not place, most seen
-      first. Reading only — deciding what to do with a term comes next, and
-      deliberately not in a console that can only look.</p>
+      first. A decision here reaches the parser on the next message it reads:
+      mapping and ignoring take effect by lookup, teaching goes into the prompt.</p>
     <div class="panel">${table(
-      [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},{label:"First seen"}],
-      d.rows.map(vocabRow), "Nothing unrecognised yet.")}
+      [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},
+       {label:"Rule",num:1},{label:""}],
+      rows, "Nothing unrecognised yet.")}
+    </div>
+  </section>`;
+}
+
+function decideForm(r) {
+  const seen = Array.isArray(r.where_seen) ? r.where_seen : [];
+  // A plain term has nothing to point at: it is taught or ignored, never mapped.
+  const mappable = r.kind !== "term";
+
+  return `<div class="decide" data-form="${esc(rowKey(r))}">
+    <div class="row">
+      <label>Reading</label>
+      <select data-f="action">
+        ${mappable ? '<option value="map">Map — it means something we already have</option>' : ""}
+        <option value="teach"${mappable ? "" : " selected"}>Teach — a sentence for the parser</option>
+        <option value="ignore">Ignore — it is not vocabulary</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label>Applies to</label>
+      <select data-f="tenant">
+        <option value="">Every workspace</option>
+        ${seen.map((w) => `<option value="${esc(w.tenant_id)}">${esc(w.workspace)} only</option>`).join("")}
+      </select>
+      <span class="scope-warn" data-f="scopewarn" hidden>A mapping has to name one
+        workspace — it points at that workspace's own list.</span>
+    </div>
+
+    <div class="row" data-f="maprow" hidden>
+      <label>Means</label>
+      <select data-f="maps_to"><option value="">Pick a workspace first…</option></select>
+    </div>
+
+    <div data-f="teachrow" hidden>
+      <p class="hint">One sentence, as you would tell a new reader. “A stack date
+        is the container cut-off — treat it as the scheduled date.”</p>
+      <textarea data-f="note" placeholder="What does this term mean, and what should the parser do with it?"></textarea>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button class="on" data-f="save">Save rule</button>
+      <button data-f="cancel">Cancel</button>
+      <span data-f="msg"></span>
+    </div>
+  </div>`;
+}
+
+// --- rules in force ---------------------------------------------------------
+
+function renderRules(d, log) {
+  const rows = d.rows.map((r) => `<tr>
+    <td>
+      <div class="term">${esc(r.term)}</div>
+      ${r.note ? `<div class="ex">${esc(r.note)}</div>` : ""}
+    </td>
+    <td><span class="kind">${esc(String(r.kind).replace("_", " "))}</span></td>
+    <td class="act-${esc(r.action)}">${esc(r.action)}${
+      r.maps_to ? ` <span class="muted">&rarr; ${esc(r.maps_to)}</span>` : ""}</td>
+    <td><span class="pill ${r.tenant_id ? "" : "global"}">${esc(r.workspace)}</span></td>
+    <td class="num ${Number(r.seen_total) ? "" : "muted"}">${r.seen_total}</td>
+    <td class="muted">${esc(String(r.decided_at ?? "").slice(0, 10))}
+      <div class="ex">${esc(r.decided_by_email ?? "")}</div></td>
+    <td><button class="small" data-withdraw="${esc(r.id)}">Withdraw</button></td>
+  </tr>`);
+
+  const logRows = (log?.rows ?? []).map((r) => `<tr>
+    <td class="muted">${esc(String(r.at).slice(0, 16).replace("T", " "))}</td>
+    <td class="${r.op === "withdrawn" ? "bad" : "good"}">${esc(r.op)}</td>
+    <td class="term">${esc(r.normalised)}</td>
+    <td><span class="kind">${esc(String(r.kind ?? "").replace("_", " "))}</span></td>
+    <td>${esc(r.action ?? "")}${r.maps_to ? ` <span class="muted">&rarr; ${esc(r.maps_to)}</span>` : ""}</td>
+    <td class="muted">${esc(r.actor_email ?? "")}</td>
+  </tr>`);
+
+  return `<section>
+    <h2>Rules in force</h2>
+    <p class="lede">What the parser has been taught. “Seen” is how often the term
+      has come up since — a rule nothing has hit is one we cannot yet say was
+      right. Withdrawing puts the term back in the queue, unless another rule
+      still answers it.</p>
+    <div class="panel">${table(
+      [{label:"Term"},{label:"Kind"},{label:"Reading"},{label:"Scope"},
+       {label:"Seen",num:1},{label:"Decided"},{label:""}],
+      rows, "No rules yet. Decide a term under Vocabulary and it appears here.")}
+    </div>
+  </section>
+
+  <section>
+    <h2>Every decision, in order</h2>
+    <p class="lede">Append-only. A rule changes how every future message is read,
+      so who set it and when is answerable in one place rather than inferred
+      from behaviour.</p>
+    <div class="panel">${table(
+      [{label:"When"},{label:"What"},{label:"Term"},{label:"Kind"},{label:"Reading"},{label:"Who"}],
+      logRows, "Nothing decided yet.")}
     </div>
   </section>`;
 }
@@ -288,17 +457,129 @@ function renderEdits(d) {
   </section>`;
 }
 
+// --- the decide form's behaviour --------------------------------------------
+
+function wireForm() {
+  const form = document.querySelector("[data-form]");
+  if (!form) return;
+  const f = (name) => form.querySelector(`[data-f="${name}"]`);
+  const row = vocabRows.find((r) => rowKey(r) === form.dataset.form);
+  if (!row) return;
+
+  const sync = () => {
+    const action = f("action").value;
+    const tenant = f("tenant").value;
+    f("maprow").hidden = action !== "map";
+    f("teachrow").hidden = action !== "teach";
+    // A global map is refused by the database too - see 44-decide.sql - but
+    // saying so here means nobody has to find that out by being refused.
+    f("scopewarn").hidden = !(action === "map" && !tenant);
+    f("save").disabled = action === "map" && !tenant;
+  };
+
+  // Targets are fetched only when they are needed, and only for the workspace
+  // chosen: a mapping points at that workspace's own list, so there is no one
+  // list to cache.
+  const loadTargets = async () => {
+    const sel = f("maps_to");
+    const tenant = f("tenant").value;
+    if (f("action").value !== "map" || !tenant) return;
+    sel.innerHTML = `<option value="">Reading…</option>`;
+    try {
+      const { targets } = await decide({ do: "targets", tenant_id: tenant, kind: row.kind });
+      sel.innerHTML = targets.length
+        ? `<option value="">Pick one…</option>` + targets.map((t) =>
+            `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join("")
+        : `<option value="">That workspace has nothing to map onto</option>`;
+    } catch (e) {
+      sel.innerHTML = `<option value="">${esc(e.message)}</option>`;
+    }
+  };
+
+  f("action").onchange = () => { sync(); loadTargets(); };
+  f("tenant").onchange = () => { sync(); loadTargets(); };
+  f("cancel").onclick = () => { openKey = null; show(); };
+
+  f("save").onclick = async () => {
+    const action = f("action").value;
+    const payload = {
+      do: "decide",
+      kind: row.kind,
+      term: row.term,
+      action,
+      tenant_id: f("tenant").value || null,
+      maps_to: action === "map" ? f("maps_to").value : null,
+      note: action === "teach" ? f("note").value : null,
+    };
+    f("msg").className = "muted";
+    f("msg").textContent = "Saving…";
+    f("save").disabled = true;
+    try {
+      await decide(payload);
+      openKey = null;
+      await show();
+      $("msg").className = "ok";
+      $("msg").textContent =
+        `“${row.term}” decided. The parser picks it up on the next message it reads.`;
+    } catch (e) {
+      f("save").disabled = false;
+      f("msg").className = "err";
+      f("msg").textContent = e.message;
+    }
+  };
+
+  sync();
+  loadTargets();
+}
+
+function wireButtons() {
+  document.querySelectorAll("[data-decide]").forEach((b) => {
+    b.onclick = () => {
+      openKey = openKey === b.dataset.decide ? null : b.dataset.decide;
+      show();
+    };
+  });
+  document.querySelectorAll("[data-withdraw]").forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = "Withdrawing…";
+      try {
+        await decide({ do: "withdraw", id: b.dataset.withdraw });
+        await show();
+      } catch (e) {
+        $("msg").className = "err";
+        $("msg").textContent = e.message;
+        b.disabled = false;
+        b.textContent = "Withdraw";
+      }
+    };
+  });
+}
+
 // --- wiring -----------------------------------------------------------------
 
 let tab = "overview";
 
 async function show() {
   $("msg").textContent = "";
+  $("msg").className = "err";
   $("body").innerHTML = '<div class="empty">Reading…</div>';
   try {
-    if (tab === "overview") $("body").innerHTML = renderOverview(await read("overview"));
-    else if (tab === "vocab") $("body").innerHTML = renderVocab(await read("vocab", { limit: 200 }));
-    else $("body").innerHTML = renderEdits(await read("edits", { limit: 100 }));
+    if (tab === "overview") {
+      $("body").innerHTML = renderOverview(await read("overview"));
+    } else if (tab === "vocab") {
+      $("body").innerHTML = renderVocab(await read("vocab", { limit: 200 }));
+    } else if (tab === "rules") {
+      const [rules, log] = await Promise.all([
+        read("rules", { limit: 200 }),
+        read("decisions", { limit: 100 }),
+      ]);
+      $("body").innerHTML = renderRules(rules, log);
+    } else {
+      $("body").innerHTML = renderEdits(await read("edits", { limit: 100 }));
+    }
+    wireButtons();
+    wireForm();
   } catch (e) {
     $("body").innerHTML = "";
     $("msg").textContent = e.message;
@@ -310,6 +591,7 @@ document.querySelectorAll("[data-tab]").forEach((b) => {
     document.querySelectorAll("[data-tab]").forEach((x) => x.classList.remove("on"));
     b.classList.add("on");
     tab = b.dataset.tab;
+    openKey = null;
     show();
   };
 });
@@ -318,7 +600,7 @@ $("go").onclick = async () => {
   $("signin-msg").textContent = "";
   try {
     session = await signIn($("email").value.trim(), $("password").value);
-    localStorage.setItem(KEY, JSON.stringify(session));
+    store.set(session);
     start();
   } catch (e) { $("signin-msg").textContent = e.message; }
 };

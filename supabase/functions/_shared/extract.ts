@@ -9,8 +9,10 @@ import type { JobMatch } from "./amend.ts";
 import { planBilling, planCharges } from "./billing.ts";
 import type { ChargeType, ClientRow } from "./billing.ts";
 import { noteVocab, recordFeedback } from "./learn.ts";
+import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
+import type { Hint } from "./hints.ts";
 
-const buildSystem = (jobTypes: string) => `You are the intake parser for OneShot, a logistics job system.
+const buildSystem = (jobTypes: string, hints = "") => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
 {
  "kind": "request" | "amendment" | "status_query" | "chatter",
@@ -288,7 +290,7 @@ WHERE depends on the kind of job:
   condition checking - needs only ONE address: where the work happens. Put it in
   "destination". Do NOT report a missing origin for this kind of job; there is
   no collection, nothing is being moved from anywhere.
-List genuinely absent fields in "missing", judged against the job type above.`;
+List genuinely absent fields in "missing", judged against the job type above.${hints}`;
 
 
 export interface InboundDoc {
@@ -368,7 +370,7 @@ export function jobsOf(ex: Extraction): Record<string, unknown>[] {
  * and read. `state` is what those jobs hold right now, so "match" refers to
  * something the model can see rather than something it has to guess.
  */
-const buildAmendSystem = (jobTypes: string, state: string) =>
+const buildAmendSystem = (jobTypes: string, state: string, hints = "") =>
 `You are the amendment parser for OneShot, a logistics job system.
 
 A message has asked for changes to jobs that already exist. THIS IS WHAT THOSE
@@ -470,7 +472,7 @@ the details received" points DOWNWARD into the thread. The instruction at the
 top and the facts at the bottom are one request.
 
 Today is ${new Date().toISOString().slice(0, 10)}. Dates are Africa/Johannesburg.
-Return {"amendments":[]} if the message asks for no change you can express.`;
+Return {"amendments":[]} if the message asks for no change you can express.${hints}`;
 
 /**
  * Read the JSON out of a model reply, even when it did not arrive clean.
@@ -546,9 +548,9 @@ async function callModel(system: string, content: unknown[], prefill = ""): Prom
  * amendments only; everything else about the message was settled in pass one.
  */
 export async function extractAmendments(
-  body: string, meta: string, jobTypes: string, state: string,
+  body: string, meta: string, jobTypes: string, state: string, hints = "",
 ): Promise<AmendmentIn[]> {
-  const text = await callModel(buildAmendSystem(jobTypes, state), [
+  const text = await callModel(buildAmendSystem(jobTypes, state, hints), [
     { type: "text", text: `${meta}\n\n${body}` },
   ], "{");
   const parsed = readJson(text) as { amendments?: unknown };
@@ -556,7 +558,7 @@ export async function extractAmendments(
   return list.filter((a: unknown) => a && typeof a === "object") as AmendmentIn[];
 }
 
-export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = []): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = [], hints = ""): Promise<Extraction> {
   const content = [
     ...docs.map((d, i) => ([
       { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
@@ -573,7 +575,7 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
   // because the model opened with "I need to ..." and the whole mail went
   // nowhere; holding it to JSON from the first character is the cheapest way
   // that cannot happen again.
-  const text = await callModel(buildSystem(jobTypes), content, "{");
+  const text = await callModel(buildSystem(jobTypes, hints), content, "{");
   return readJson(text) as Extraction;
 }
 
@@ -596,12 +598,20 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // better caught with an explanation.
   const legalTypes = ((types ?? []) as { key: string }[]).map((t) => t.key);
 
+  // What this workspace has already been taught. Loaded BEFORE the parse, so a
+  // correction somebody made last week is in front of the model this morning.
+  // An empty list leaves the prompt exactly as it was before any of this
+  // existed, which is the right thing to fall back to.
+  const hintRows = await loadHints(sb, tenantId);
+  const hints = renderHints(hintRows);
+  if (hintRows.length) console.log(`ingest: ${hintRows.length} vocabulary rule(s) in force`);
+
   let ex: Extraction;
   // Kept so the failure can be written onto the message. An email that arrived
   // and produced nothing must be visible in the app, not only in the logs.
   let parseError: string | null = null;
   const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`;
-  try { ex = await extract(body, meta, typeList, images, docs); }
+  try { ex = await extract(body, meta, typeList, images, docs, hints); }
   catch (e) {
     parseError = e instanceof Error ? e.message : String(e);
     console.error("ingest: extraction failed:", parseError);
@@ -615,10 +625,10 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     if (images.length || docs.length) {
       attempts.push({
         why: `without ${images.length} image(s) and ${docs.length} document(s)`,
-        run: () => extract(body, meta, typeList, [], []),
+        run: () => extract(body, meta, typeList, [], [], hints),
       });
     }
-    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs) });
+    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs, hints) });
 
     ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
     for (const attempt of attempts) {
@@ -690,7 +700,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // written and the reply asks. An email that silently changes the wrong job's
   // date is the one failure nobody catches, because the mail looked answered.
   if (ex.kind === "amendment") {
-    const asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList);
+    const asks = await refineAmendments(sb, tenantId, ex, body, meta, typeList, hints);
     if (!asks.length) {
       return "That reads like a change to an existing job, but it doesn't say which one. "
         + "Reply with the job number and I'll make the change.";
@@ -737,9 +747,33 @@ export async function materialise(
   const chargeTypesSeen = {
     jobTypes: ((jobTypeRows ?? []) as { key: string }[]).map((t) => t.key),
   };
+
   // One short line of context per noted word, so a decision is made on
   // evidence rather than on a bare term.
   const subjectLine = `${(msg as { subject?: string }).subject ?? ""}`.slice(0, 200) || null;
+
+  // The decided rules, applied MECHANICALLY below rather than suggested to the
+  // model. A rule enforced by a lookup holds every time; a rule mentioned in a
+  // prompt holds most of the time, and "most" is not good enough for which
+  // customer an invoice belongs to.
+  const hintRows: Hint[] = await loadHints(sb, tenantId);
+  const chargeRules = ruleMap(hintRows, "charge_type");
+  const clientRules = ruleMap(hintRows, "client_name");
+  const typeRules   = ruleMap(hintRows, "job_type");
+  // Terms somebody has marked as noise. Without this, an ignored term is
+  // re-queued by the next mail that uses it and the queue never empties.
+  const hushed = {
+    job_type: ignoredTerms(hintRows, "job_type"),
+    charge_type: ignoredTerms(hintRows, "charge_type"),
+    client_name: ignoredTerms(hintRows, "client_name"),
+  };
+  const note = async (
+    kind: "job_type" | "charge_type" | "client_name", term: string | null | undefined,
+  ) => {
+    const t = normaliseTerm(term);
+    if (!t || hushed[kind].has(t)) return;
+    await noteVocab(sb, tenantId, kind, String(term), subjectLine);
+  };
 
   // The source paperwork is uploaded ONCE and linked to every job the message
   // produced. A schedule attached as a PDF is the provenance for all sixteen
@@ -787,8 +821,16 @@ export async function materialise(
     const legacyOrigin = parsedStops.length ? null : (j.origin ?? null);
     const legacyDest   = parsedStops.length ? null : (j.destination ?? null);
 
+    // A type the workspace does not have, that somebody has since said what it
+    // means, becomes the type they said. This is the case that used to land in
+    // the vocabulary queue, sit there, and default the job to "move".
+    const ruledType = mapJobType(j.type as string | null, chargeTypesSeen.jobTypes, typeRules);
+    if (ruledType.mapped) {
+      console.log(`ingest: job type "${String(j.type)}" read as "${ruledType.type}" by rule`);
+    }
+
     const { data: job, error: jobErr } = await sb.from("jobs").insert({
-      tenant_id: tenantId, type: j.type ?? "move",
+      tenant_id: tenantId, type: ruledType.type ?? j.type ?? "move",
       origin: legacyOrigin, destination: legacyDest,
       client_ref: j.client_ref ?? null,
       scheduled_date: isoDate, time_window: timeWindow,
@@ -810,7 +852,7 @@ export async function materialise(
     // failure further down still leaves the billing attached to something
     // rather than stranded.
     {
-      const billing = planBilling(tenantId, job.id, j.billing as never, clients, null);
+      const billing = planBilling(tenantId, job.id, j.billing as never, clients, null, clientRules);
 
       if (Object.keys(billing.job).length) {
         await sb.from("jobs").update(billing.job).eq("id", job.id);
@@ -824,22 +866,25 @@ export async function materialise(
       // Words this workspace has no entry for. Noted, never acted on: a job
       // type invented by a mail does not become a job type because it was
       // used once.
+      // Only words STILL unaccounted for after the rules have run. A term a
+      // rule now answers is no longer a question, and re-queueing it would
+      // make the review list unfinishable.
       const proposedType = String(j.type ?? "").trim();
-      if (proposedType && !chargeTypesSeen.jobTypes.includes(proposedType)) {
-        await noteVocab(sb, tenantId, "job_type", proposedType, subjectLine);
+      if (proposedType && !ruledType.mapped && !chargeTypesSeen.jobTypes.includes(proposedType)) {
+        await note("job_type", proposedType);
       }
       if (billing.row && !billing.row.client_id && billing.row.bill_to_name) {
-        await noteVocab(sb, tenantId, "client_name", String(billing.row.bill_to_name), subjectLine);
+        await note("client_name", String(billing.row.bill_to_name));
       }
 
       const { rows: chargeRows, unpriced } = planCharges(
-        tenantId, job.id, j.charges, chargeTypes, null,
+        tenantId, job.id, j.charges, chargeTypes, null, chargeRules,
       );
       for (const row of chargeRows) {
         // A priced line matching nothing on the rate card is either a new kind
         // of work or a wording the rate card should recognise. Either way a
         // person decides, not this function.
-        if (!row.charge_type_id) await noteVocab(sb, tenantId, "charge_type", row.description, subjectLine);
+        if (!row.charge_type_id) await note("charge_type", row.description);
       }
       if (chargeRows.length) {
         const { error } = await sb.from("job_charges").insert(chargeRows);
@@ -988,7 +1033,7 @@ export async function materialise(
 export async function refineAmendments(
   // deno-lint-ignore no-explicit-any
   sb: any, tenantId: string, ex: Extraction,
-  body: string, meta: string, typeList: string,
+  body: string, meta: string, typeList: string, hints = "",
 ): Promise<AmendmentIn[]> {
   const first = amendmentsOf(ex);
   if (!first.length) return first;
@@ -1003,7 +1048,7 @@ export async function refineAmendments(
 
   try {
     const states = await readJobStates(sb, tenantId, jobs);
-    const second = await extractAmendments(body, meta, typeList, renderJobStates(states));
+    const second = await extractAmendments(body, meta, typeList, renderJobStates(states), hints);
     if (!second.length) return first;
 
     // Anything pass one named that pass two dropped is kept, so a second look

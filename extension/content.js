@@ -54,21 +54,30 @@
   // So the strip notices, stops its own clock, and says what to do about it.
   // The page is still usable; it just cannot reach storage until it reloads.
   let dead = false;
-  const alive = () => {
-    if (dead) return false;
-    try { return !!(chrome.runtime && chrome.runtime.id); } catch { return false; }
-  };
+
+  // Death is detected by a call FAILING, never by a capability being absent.
+  // Testing for chrome.runtime up front looks tidier and is wrong: anything
+  // that leaves it undefined would make the strip declare itself dead on a
+  // perfectly good page.
   function died() {
     if (dead) return;
     dead = true;
     if (heartbeat) clearInterval(heartbeat);
     status.textContent = "OneShot was updated - reload this page to pick up the new version";
     dot.className = "";
+    panel.classList.remove("open");
+    panel.textContent = "";
   }
+
+  // An invalidated handle keeps chrome.runtime but drops its id. Present and
+  // id-less is dead; absent entirely is simply not something to judge on.
+  const invalidated = () => {
+    try { return !!(chrome.runtime && !chrome.runtime.id); } catch { return true; }
+  };
 
   const store = {
     async load() {
-      if (!alive()) return died();
+      if (dead) return;
       try {
         const d = await chrome.storage.local.get(["session", "decisions", "clientDomains", "jobTypes"]);
         session = d.session || null;
@@ -78,8 +87,14 @@
       } catch { died(); }
     },
     save(patch) {
-      if (!alive()) return died();
-      try { chrome.storage.local.set(patch); } catch { died(); }
+      if (dead) return;
+      try {
+        // In MV3 this returns a promise, and an invalidated extension REJECTS
+        // rather than throwing - which is exactly why the error arrived as
+        // "Uncaught (in promise)" and not as something a try/catch would see.
+        const p = chrome.storage.local.set(patch);
+        if (p && typeof p.catch === "function") p.catch(() => died());
+      } catch { died(); }
     },
   };
 
@@ -349,7 +364,11 @@
   }
 
   function render() {
-    if (dead) { panel.classList.remove("open"); panel.textContent = ""; return; }
+    // Checked here as well as on the clock: a reader who clicks finds out
+    // immediately rather than up to a minute later, and this runs on every
+    // interaction anyway.
+    if (!dead && invalidated()) died();
+    if (dead) return;
     if (CHAT) return renderChat();
     const n = flagged.length;
     dot.className = messages.length ? (n ? "hot" : "live") : "";
@@ -909,7 +928,7 @@
     if (session) { loadClients(); loadJobTypes(); }
     render();
     heartbeat = setInterval(() => {
-        if (!alive()) return died();
+        if (invalidated()) return died();
         if (Date.now() - lastScan >= CYCLE_MS) { laterThisLoad.clear(); nudge(); scan(); }
     }, 60_000);
   })();

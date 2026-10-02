@@ -8,8 +8,10 @@
 //
 // READ-ONLY, deliberately and completely. There is no write action in this
 // file, so a console that can only look cannot accidentally become one that
-// acts. Deciding what to do about a term is a later, separate piece of work
-// with its own review.
+// acts. Deciding lives in console-decide, which is a separate function with
+// the same crew check - so if this one is ever broken into, the worst case is
+// a leak rather than a parser quietly taught to misread everybody's mail.
+// DO NOT add a write action here.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -77,6 +79,23 @@ Deno.serve(async (req) => {
         .order("seen_total", { ascending: false }).limit(limit);
       if (body.kind) q = q.eq("kind", body.kind);
       const { data, error } = await q;
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, rows: data ?? [] });
+    }
+
+    // Rules in force. A read, so it lives here; making them is console-decide.
+    case "rules": {
+      const { data, error } = await admin.from("console_rules")
+        .select("*").order("decided_at", { ascending: false }).limit(limit);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, rows: data ?? [] });
+    }
+
+    // Who decided what, and when. A rule changes how every future message is
+    // read, so this has to be answerable without archaeology.
+    case "decisions": {
+      const { data, error } = await admin.from("vocab_rule_log")
+        .select("*").order("at", { ascending: false }).limit(limit);
       if (error) return json({ error: error.message }, 500);
       return json({ ok: true, rows: data ?? [] });
     }

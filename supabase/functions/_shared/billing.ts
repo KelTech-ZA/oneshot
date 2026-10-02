@@ -131,9 +131,23 @@ export interface ChargePlan {
 export interface ChargeType { id: string; key: string; label: string; unit: string | null }
 
 /** Loose name matching against the workspace's own rate card. See rule 2. */
-function matchType(types: ChargeType[], description: string): ChargeType | null {
+function matchType(
+  types: ChargeType[],
+  description: string,
+  rules?: Map<string, string>,
+): ChargeType | null {
   const want = description.toLowerCase().replace(/\s+/g, " ").trim();
   if (!want) return null;
+
+  // A decided rule comes first: it is the one case where a person has actually
+  // said what this line means. A quote line matching no label is how a term
+  // reached the vocabulary queue, and answering it is what the queue was for.
+  const ruled = rules?.get(want);
+  if (ruled) {
+    const byKey = types.find((t) => t.key === ruled);
+    if (byKey) return byKey;
+    // A rule pointing at a type since deleted is dropped, not guessed around.
+  }
 
   const exact = types.find((t) => (t.label ?? "").toLowerCase().trim() === want);
   if (exact) return exact;
@@ -158,6 +172,8 @@ export function planCharges(
   parsed: unknown,
   types: ChargeType[],
   createdBy: string | null = null,
+  /** Decided charge-type rules: normalised description -> charge_types.key. */
+  rules?: Map<string, string>,
 ): ChargePlan {
   const rows: ChargeRow[] = [];
   const unpriced: string[] = [];
@@ -177,7 +193,7 @@ export function planCharges(
     const quantity = qtyRaw != null && qtyRaw > 0 ? qtyRaw : 1;
 
     const unitRaw = text(raw?.unit, 20)?.toLowerCase() ?? null;
-    const type = matchType(types, description);
+    const type = matchType(types, description, rules);
     const unit = (unitRaw && UNITS.includes(unitRaw) ? unitRaw : null)
       ?? type?.unit ?? "job";
 
@@ -214,11 +230,29 @@ export interface ClientRow {
   payment_terms?: string | null;
 }
 
-/** The same exact-name match the backfill uses, so both agree. */
-export function matchClient(clients: ClientRow[], name: string | null): ClientRow | null {
+/** The same exact-name match the backfill uses, so both agree.
+ *
+ *  `rules` maps a normalised name somebody has decided about to a clients.id.
+ *  This is what turns "Avalon", "Avalon Gallery" and "avalon trust" into one
+ *  customer, which is the difference between a statement that adds up and
+ *  three statements for the same person. */
+export function matchClient(
+  clients: ClientRow[],
+  name: string | null,
+  rules?: Map<string, string>,
+): ClientRow | null {
   if (!name) return null;
   const want = name.toLowerCase().replace(/\s+/g, " ").trim();
   if (!want) return null;
+
+  const ruled = rules?.get(want);
+  if (ruled) {
+    const byId = clients.find((c) => c.id === ruled);
+    if (byId) return byId;
+    // A rule pointing at a client since deleted falls through to name matching
+    // rather than returning nothing: the name may still match on its own.
+  }
+
   return clients.find((c) => (c.legal_name ?? "").toLowerCase().replace(/\s+/g, " ").trim() === want)
     ?? clients.find((c) => (c.name ?? "").toLowerCase().replace(/\s+/g, " ").trim() === want)
     ?? null;
@@ -230,6 +264,8 @@ export function planBilling(
   parsed: ParsedBilling | null | undefined,
   clients: ClientRow[],
   updatedBy: string | null = null,
+  /** Decided client-name rules: normalised name -> clients.id. */
+  rules?: Map<string, string>,
 ): BillingPlan {
   const job: Record<string, unknown> = {};
   if (!parsed || typeof parsed !== "object") return { row: null, job };
@@ -246,7 +282,7 @@ export function planBilling(
   }
 
   const name = text(parsed.bill_to_name, 200);
-  const client = matchClient(clients, name);
+  const client = matchClient(clients, name, rules);
 
   const row: Record<string, unknown> = {
     job_id: jobId, tenant_id: tenantId,
