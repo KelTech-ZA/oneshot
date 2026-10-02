@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
+import JobFlags from "./JobFlags";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
 import JobCharges from "./JobCharges";
@@ -258,6 +259,10 @@ export default function Job() {
           <JobStamp status={job.status} lastEvent={job.last_event_label} alert={job.last_event_alert} />
         </div>
       </div>
+
+      {/* A job's own doubts, which used to disappear the moment it was
+          confirmed - exactly when they start mattering. */}
+      <JobFlags flags={job.flags} />
 
       {/* Two columns on a desktop: the job on the left, what it costs on the
           right. Ops only - crew never see charges, here or in the database. */}

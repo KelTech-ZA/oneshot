@@ -10,6 +10,8 @@ import { planBilling, planCharges } from "./billing.ts";
 import type { ChargeType, ClientRow } from "./billing.ts";
 import { noteVocab, recordFeedback } from "./learn.ts";
 import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
+import { checkYear, todayInZA, weekdayOf } from "./dates.ts";
+import { describeFailure, explainFailure } from "./failure.ts";
 import type { Hint } from "./hints.ts";
 
 const buildSystem = (jobTypes: string, hints = "") => `You are the intake parser for OneShot, a logistics job system.
@@ -290,7 +292,18 @@ WHERE depends on the kind of job:
   condition checking - needs only ONE address: where the work happens. Put it in
   "destination". Do NOT report a missing origin for this kind of job; there is
   no collection, nothing is being moved from anywhere.
-List genuinely absent fields in "missing", judged against the job type above.${hints}`;
+List genuinely absent fields in "missing", judged against the job type above.
+
+TODAY IS ${todayInZA()} (${weekdayOf(todayInZA())}). Dates are Africa/Johannesburg.
+This line exists because without it the year came out of nowhere and jobs were
+created twelve months in the past, where nobody looks for them.
+- A date written WITHOUT a year means its NEXT occurrence from today. Never a
+  past one. "5 Oct" read on ${todayInZA()} is ${new Date(Date.parse(todayInZA() + "T12:00:00Z")).getUTCFullYear()}-10-05 or later, never an earlier year.
+- When the message names a WEEKDAY as well - "Monday, 5 Oct" - use it to choose
+  the year. The weekday and the date only line up in some years, and that is
+  the most reliable signal in the whole message.
+- Work already done, being written up afterwards, is the one case that may be
+  in the past. It will say so.${hints}`;
 
 
 export interface InboundDoc {
@@ -516,31 +529,66 @@ export function readJson(text: string): unknown {
  * them, which is how a model that would otherwise open with "I need to..." is
  * held to JSON. The prefill is prepended back onto the answer, since the API
  * returns only what came after it.
+ *
+ * NOT EVERY MODEL ACCEPTS ONE. Some refuse a conversation that ends with an
+ * assistant turn, with a 400 - and this is not hypothetical: adding the
+ * prefill silently killed EVERY parse for a day and a half. Both the first
+ * attempt and the retry sent it, both were refused identically, and four real
+ * emails became "unknown" with no job and no visible cause. The lesson is not
+ * "drop the prefill" - it earns its place when the model takes it - but that a
+ * request shape the API may reject must never be the only shape tried.
+ *
+ * So: try it, and if the API says this model will not take one, say so once and
+ * carry on without it for the rest of this isolate. readJson() already digs the
+ * JSON out of a prose-wrapped reply, which is what the prefill was insurance
+ * against rather than a substitute for.
  */
-async function callModel(system: string, content: unknown[], prefill = ""): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+let prefillRefused = false;
+
+async function post(body: unknown): Promise<Response> {
+  return await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 32000,
-      system,
-      messages: prefill
-        ? [{ role: "user", content }, { role: "assistant", content: prefill }]
-        : [{ role: "user", content }],
-    }),
+    body: JSON.stringify(body),
   });
+}
+
+async function callModel(system: string, content: unknown[], prefill = ""): Promise<string> {
+  const base = { model: "claude-sonnet-4-6", max_tokens: 32000, system };
+  const user = [{ role: "user", content }];
+  const usePrefill = !!prefill && !prefillRefused;
+
+  let res = await post(usePrefill
+    ? { ...base, messages: [...user, { role: "assistant", content: prefill }] }
+    : { ...base, messages: user });
+
+  let echo = usePrefill ? prefill : "";
+
+  if (!res.ok && usePrefill) {
+    const detail = await res.text();
+    // Matched on the API's own wording for this refusal, not on the status
+    // alone: a 400 for any other reason still has to surface as an error.
+    if (/prefill|must end with a user message/i.test(detail)) {
+      console.warn("extract: this model refuses an assistant prefill - continuing without it");
+      prefillRefused = true;
+      echo = "";
+      res = await post({ ...base, messages: user });
+    } else {
+      throw new Error(`Anthropic ${res.status}: ${detail}`);
+    }
+  }
+
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
   const data = await res.json();
   if (data.stop_reason === "max_tokens")
     throw new Error("reply hit the 32000-token limit and was cut off");
   const text = (data.content ?? []).filter((c: { type: string }) => c.type === "text")
     .map((c: { text: string }) => c.text).join("");
-  return prefill + text;
+  return echo + text;
 }
 
 /**
@@ -610,7 +658,11 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // Kept so the failure can be written onto the message. An email that arrived
   // and produced nothing must be visible in the app, not only in the logs.
   let parseError: string | null = null;
-  const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`;
+  // The prompt tells the model to resolve dates against the message date, so
+  // the message date has to actually be in front of it. It was not, which is
+  // how "Monday, 5 Oct" became October 2025.
+  const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`
+    + `. Received: ${todayInZA()} (${weekdayOf(todayInZA())}), Africa/Johannesburg`;
   try { ex = await extract(body, meta, typeList, images, docs, hints); }
   catch (e) {
     parseError = e instanceof Error ? e.message : String(e);
@@ -650,7 +702,8 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     sender, subject, body, raw,
   };
   let { data: msg, error: msgErr } = await sb.from("messages")
-    .insert({ ...msgRow, parse_error: parseError }).select().single();
+    .insert({ ...msgRow, parse_error: parseError ? describeFailure(parseError) : null })
+    .select().single();
 
   // If step 38 has not been run yet, parse_error does not exist and the insert
   // above fails - which would lose EVERY inbound message, not just the ones
@@ -683,8 +736,12 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // parse error recorded where nobody was looking. The sender believed it had
   // been received.
   if (parseError) {
-    return "I couldn't read that one - the parser failed on it twice. "
-      + "Nothing was created. Forward it again, or create the jobs in the app.";
+    // The sender gets the same answer the board gets. They are the person best
+    // placed to send it again, and "the parser failed twice" tells them nothing
+    // about whether doing so is worth their time.
+    const { readable, retryable } = explainFailure(parseError);
+    return `${readable}\n\nNothing was created from this email.`
+      + (retryable ? "" : " Create the jobs in the app if they are urgent.");
   }
 
   if (ex.kind === "chatter" || (ex.confidence < 0.5 && !namedAmendment)) {
@@ -804,10 +861,28 @@ export async function materialise(
     // Postgres and used to take the entire job down with it. Anything that is
     // not a plain YYYY-MM-DD is dropped and flagged for ops instead.
     const rawDate = j.scheduled_date == null ? null : String(j.scheduled_date).trim();
-    const isoDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
+    let isoDate = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null;
     if (rawDate && !isoDate) {
       console.warn(`ingest: unusable date from parser: "${rawDate}" - job saved without one`);
       flags.push("missing_info:scheduled_date");
+    }
+
+    // The year, checked rather than trusted. Telling the model what today is
+    // makes this rare; it does not make it impossible, and the failure is the
+    // quiet kind - a job dated last October exists, answers a search, and is
+    // simply absent from a board that shows work still to come.
+    if (isoDate) {
+      const year = checkYear(isoDate, todayInZA());
+      if (year.corrected) {
+        console.warn(`ingest: "${isoDate}" is in the past - read as ${year.date}`);
+        flags.push(`check:date_year_assumed — read "${isoDate}" as ${year.date}`);
+        isoDate = year.date;
+      } else if (year.suspect) {
+        // Left exactly as read. Too far back to be a missing year, so it is
+        // either deliberate or a misreading, and only a person can say which.
+        console.warn(`ingest: "${isoDate}" is long past and was kept as-is`);
+        flags.push(`check:date_in_past — ${isoDate}`);
+      }
     }
     // Same care for the time window: free text in the database, but an
     // over-long value usually means the model put the whole sentence in it.

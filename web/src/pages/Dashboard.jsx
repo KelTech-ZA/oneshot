@@ -7,6 +7,7 @@ import JobList from "./JobList";
 import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
 import ClashWarning from "./ClashWarning";
 import JobSearch from "./JobSearch";
+import JobFlags from "./JobFlags";
 
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
@@ -190,11 +191,7 @@ export default function Dashboard() {
             {j.line_items?.[0]?.count ?? 0} item(s) · {j.scheduled_date ?? "no date"}
             {j.messages ? ` · via ${j.messages.channel} from ${j.messages.sender}` : ""}
           </div>
-          {j.flags?.length > 0 && (
-            <div style={{ color: "var(--warn)", fontSize: 13, marginTop: 4 }}>
-              ⚠ {j.flags.map((f) => f.replace("missing_info:", "missing ")).join(", ")}
-            </div>
-          )}
+          <JobFlags flags={j.flags} compact />
           <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => confirm(j)}>✓ Confirm job</button>
           <div className="quiet-actions">
             <Link to={`/job/${j.id}/edit`}>✎ Edit</Link>
@@ -282,11 +279,28 @@ export default function Dashboard() {
                     cursor: "pointer", font: "inherit" }}>×</button>
               </div>
               {m.subject && <div style={{ fontWeight: 600, marginTop: 4 }}>{m.subject}</div>}
-              {m.parse_error && (
-                <div className="muted" style={{ fontSize: 12, color: "var(--warn)", marginTop: 4 }}>
-                  {m.parse_error}
-                </div>
-              )}
+              {m.parse_error && (() => {
+                // Written as the answer, a blank line, then the raw text. Rows
+                // from before that split hold only the raw string, which still
+                // reads as the answer - no migration, nothing lost.
+                const at = m.parse_error.indexOf("\n\n");
+                const readable = at === -1 ? m.parse_error : m.parse_error.slice(0, at);
+                const detail = at === -1 ? "" : m.parse_error.slice(at + 2);
+                return (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 13, color: "var(--warn)" }}>{readable}</div>
+                    {detail && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>
+                          Technical detail
+                        </summary>
+                        <div className="muted" style={{ fontSize: 11, marginTop: 4,
+                          whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{detail}</div>
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
               <div style={{ fontSize: 13, marginTop: 6, whiteSpace: "pre-wrap",
                 maxHeight: 140, overflow: "auto" }}>{m.body}</div>
             </div>
