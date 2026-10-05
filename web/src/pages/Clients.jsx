@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
+import ClientAliases from "./ClientAliases";
 
 // The workspace's clients. Ops only, and scoped by RLS - Section 9's clients
 // are invisible to every other workspace.
@@ -38,7 +39,8 @@ export default function Clients() {
   const shown = rows.filter((r) => {
     const t = q.trim().toLowerCase();
     if (!t) return true;
-    return [r.name, r.legal_name, r.vat_number, r.billing_email, r.billing_address]
+    return [r.name, r.legal_name, ...(r.aliases ?? []),
+            r.vat_number, r.billing_email, r.billing_address]
       .filter(Boolean).some((v) => v.toLowerCase().includes(t));
   });
 
@@ -91,6 +93,14 @@ export default function Clients() {
               <input value={draft.name ?? ""}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 onBlur={() => save(r, { name: draft.name })} />
+              <ClientAliases
+                client={{ ...r, ...draft }}
+                others={rows}
+                onChange={(aliases) => {
+                  setDraft({ ...draft, aliases });
+                  save(r, { aliases });
+                }}
+              />
               {FIELDS.map(([key, label, ph]) => (
                 <div key={key}>
                   <label>{label}</label>
@@ -125,6 +135,11 @@ export default function Clients() {
               onClick={() => { setEditing(r.id); setDraft(r); }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600 }}>{r.legal_name || r.name}</div>
+                {(r.aliases?.length > 0) && (
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    also called {r.aliases.join(", ")}
+                  </div>
+                )}
                 <div className="muted" style={{ fontSize: 13 }}>
                   {[r.vat_number && `VAT ${r.vat_number}`,
                     r.eori_number && `EORI ${r.eori_number}`,

@@ -200,11 +200,25 @@ const CLIENTS: ClientRow[] = [
   { id: "c-2", name: "Blank Projects", legal_name: null },
 ];
 
-Deno.test("a client rule makes three spellings one customer", () => {
-  assertEquals(matchClient(CLIENTS, "Avalon"), null, "no rule, no match");
-  const r = new Map([["avalon", "c-1"], ["avalon gallery", "c-1"]]);
-  assertEquals(matchClient(CLIENTS, "Avalon", r)?.id, "c-1");
-  assertEquals(matchClient(CLIENTS, "avalon  gallery", r)?.id, "c-1");
+Deno.test("a short form now matches on its own, with no rule at all", () => {
+  // This used to require a console decision. The matcher reduces both sides
+  // to their distinctive core, so "Avalon" reaches "Avalon Trust (Pty) Ltd"
+  // unaided - which is the whole point of the tiers in clientmatch.ts.
+  assertEquals(matchClient(CLIENTS, "Avalon")?.id, "c-1");
+});
+
+Deno.test("a rule is still what settles a name nothing could derive", () => {
+  // "ATG" has no textual relationship to "Avalon Trust", so only a decision
+  // (or an alias on the client) can connect them.
+  assertEquals(matchClient(CLIENTS, "ATG"), null, "not derivable");
+  const r = new Map([["atg", "c-1"]]);
+  assertEquals(matchClient(CLIENTS, "ATG", r)?.id, "c-1");
+  assertEquals(matchClient(CLIENTS, " atg ", r)?.id, "c-1", "and spacing is ignored");
+});
+
+Deno.test("an alias on the client does the same job without the console", () => {
+  const withAlias: ClientRow[] = [{ ...CLIENTS[0], aliases: ["ATG"] }, CLIENTS[1]];
+  assertEquals(matchClient(withAlias, "ATG")?.id, "c-1");
 });
 
 Deno.test("a client rule pointing at a deleted client falls back to the name", () => {

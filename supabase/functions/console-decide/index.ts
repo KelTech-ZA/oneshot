@@ -103,9 +103,35 @@ Deno.serve(async (req) => {
       });
       if (error) return json({ error: error.message }, 400);
 
+      // A client mapping is a fact about the CUSTOMER, not about parsing, so
+      // it is written onto the client record as well - where ops can see and
+      // edit it next to the VAT number, without going near this console. The
+      // rule still exists and still wins; this keeps the two from drifting.
+      let alias: string | null = null;
+      if (kind === "client_name" && action === "map" && tenant) {
+        const id = String(body.maps_to ?? "");
+        const { data: client } = await admin.from("clients")
+          .select("id,aliases").eq("id", id).eq("tenant_id", tenant).maybeSingle();
+        if (client) {
+          const have = (client.aliases ?? []) as string[];
+          const same = (a: string, b: string) =>
+            a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() ===
+            b.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          if (!have.some((a) => same(a, term))) {
+            const { error: aErr } = await admin.from("clients")
+              .update({ aliases: [...have, term] }).eq("id", id).eq("tenant_id", tenant);
+            // Never fatal: the rule is already saved and already works. A
+            // failure here costs tidiness, not behaviour.
+            if (aErr) console.warn("console-decide: alias not added:", aErr.message);
+            else alias = term;
+          }
+        }
+      }
+
       console.log(`console-decide: ${user.email} ${action} "${term}" (${kind})`
-        + (tenant ? ` for ${tenant}` : " for EVERY workspace"));
-      return json({ ok: true, id: data });
+        + (tenant ? ` for ${tenant}` : " for EVERY workspace")
+        + (alias ? " - also added as a client alias" : ""));
+      return json({ ok: true, id: data, alias });
     }
 
     // -----------------------------------------------------------------------

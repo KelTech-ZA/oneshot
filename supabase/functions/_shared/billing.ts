@@ -25,6 +25,9 @@
 // deno-lint-ignore no-explicit-any
 type Sb = any;
 
+import { findClient } from "./clientmatch.ts";
+import type { MatchableClient } from "./clientmatch.ts";
+
 export interface ParsedCharge {
   description?: unknown;
   quantity?: unknown;
@@ -225,37 +228,26 @@ export interface BillingPlan {
 
 export interface ClientRow {
   id: string; name: string | null; legal_name: string | null;
+  /** Other names this customer is called in mail. See 46-client-aliases.sql. */
+  aliases?: string[] | null;
   billing_address?: string | null; vat_number?: string | null;
   reg_number?: string | null; billing_email?: string | null;
   payment_terms?: string | null;
 }
 
-/** The same exact-name match the backfill uses, so both agree.
+/**
+ * Which customer a quote means.
  *
- *  `rules` maps a normalised name somebody has decided about to a clients.id.
- *  This is what turns "Avalon", "Avalon Gallery" and "avalon trust" into one
- *  customer, which is the difference between a statement that adds up and
- *  three statements for the same person. */
+ * The matching itself lives in clientmatch.ts, which is where the tiers and
+ * the guards are tested. This stays as the name the rest of the app already
+ * calls, so nothing else had to change.
+ */
 export function matchClient(
   clients: ClientRow[],
   name: string | null,
   rules?: Map<string, string>,
 ): ClientRow | null {
-  if (!name) return null;
-  const want = name.toLowerCase().replace(/\s+/g, " ").trim();
-  if (!want) return null;
-
-  const ruled = rules?.get(want);
-  if (ruled) {
-    const byId = clients.find((c) => c.id === ruled);
-    if (byId) return byId;
-    // A rule pointing at a client since deleted falls through to name matching
-    // rather than returning nothing: the name may still match on its own.
-  }
-
-  return clients.find((c) => (c.legal_name ?? "").toLowerCase().replace(/\s+/g, " ").trim() === want)
-    ?? clients.find((c) => (c.name ?? "").toLowerCase().replace(/\s+/g, " ").trim() === want)
-    ?? null;
+  return findClient(clients as MatchableClient[], name, rules).client as ClientRow | null;
 }
 
 export function planBilling(

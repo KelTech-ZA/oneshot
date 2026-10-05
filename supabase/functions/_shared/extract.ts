@@ -793,7 +793,7 @@ export async function materialise(
   // jobs would otherwise fetch the rate card nine times.
   const [{ data: typeRows }, { data: clientRows }] = await Promise.all([
     sb.from("charge_types").select("id,key,label,unit").eq("tenant_id", tenantId).eq("active", true),
-    sb.from("clients").select("id,name,legal_name,billing_address,vat_number,reg_number,billing_email,payment_terms")
+    sb.from("clients").select("id,name,legal_name,aliases,billing_address,vat_number,reg_number,billing_email,payment_terms")
       .eq("tenant_id", tenantId),
   ]);
   const chargeTypes = (typeRows ?? []) as ChargeType[];
