@@ -46,7 +46,10 @@
   let clientsByName = new Map();
   let decisions = {};       // id -> "no" | "done", persisted
   const laterThisLoad = new Set();   // "Later" = out of the way until reload or next cycle
-  const justDone = new Map();        // id -> what was created, kept visible until the panel closes
+  const justDone = new Map();        // conversation -> what was created, kept visible until the panel closes
+  // conversation -> { thread, out }: a proposal asked for and not yet acted on.
+  // Survives the panel being rebuilt, which the DOM-only version did not.
+  const proposals = new Map();
   let manual = null;                 // the "this mail" flow, when it is running
   let amend = null;                  // the "change a job" flow, when it is running
   let heartbeat = null;              // the three-hour clock, stoppable
@@ -287,7 +290,7 @@
     // is would put them right back where they started. The "x" is how you say
     // you are done with it.
     openPanel = !openPanel;
-    if (!openPanel) { justDone.clear(); manual = null; amend = null; scan(); }
+    if (!openPanel) { justDone.clear(); proposals.clear(); manual = null; amend = null; scan(); }
     render();
   };
 
@@ -459,15 +462,74 @@
     return m;
   }
 
-  function scan() {
-    lastScan = Date.now();
+  // What a decision is remembered against.
+  //
+  // Outlook's row id is regenerated every time the list draws, so a decision
+  // keyed on it survived exactly until the next reload - which is why threads
+  // already turned into jobs kept coming back as fresh suggestions. The
+  // conversation id is the same for the whole thread and the same tomorrow.
+  // The row id stays as the fallback for anything that has no conversation id.
+  const keyOf = (m) => (m && (m.convId || m.id)) || "";
+
+  // Threads the SERVER says already produced a job, keyed the same way as
+  // decisions. Held separately so a withdrawn job on the server can bring a
+  // thread back, which clearing a local decision never would.
+  let serverDone = {};
+  let askingSeen = false;
+
+  /**
+   * Ask once per scan which of the threads on screen already have jobs.
+   *
+   * This is what makes the answer the same on a second machine, for a
+   * colleague, and for a thread somebody forwarded to intake instead of using
+   * the strip. Failure is silent and harmless: not knowing is exactly where
+   * the strip stood before.
+   */
+  async function askSeen(list) {
+    if (!session || askingSeen) return;
+    const ids = [...new Set(list.map(keyOf).filter(Boolean))].slice(0, 100);
+    if (!ids.length) return;
+    askingSeen = true;
+    try {
+      const out = await api("suggest-job", { action: "seen", external_ids: ids });
+      if (out && out.done && typeof out.done === "object") {
+        // Compared by content, not by size. {conv-a: ...} and {conv-b: ...}
+        // are the same length and a completely different answer.
+        const same = JSON.stringify(out.done) === JSON.stringify(serverDone);
+        serverDone = out.done;
+        // sift(), not render(): the answer has to go back through the FILTER,
+        // which is what decides whether a thread is offered. render() only
+        // redraws the list scan() had already worked out, so the server's
+        // answer arrived one scan late - a thread a colleague had already
+        // dealt with was offered once more before disappearing. Not scan()
+        // either, or asking would ask again, for ever.
+        if (!same) sift();
+      }
+    } catch { /* leave it as it was */ } finally { askingSeen = false; }
+  }
+
+  // Work out what to offer, and redraw. Separate from scan() so that an answer
+  // arriving from the server can be put through the filter without triggering
+  // another round of asking.
+  function sift() {
     const recent = messages.slice(0, HOW_MANY).map(resolve);
     flagged = recent
       .map(m => ({ m, g: gate(m, { clientDomains, ownDomains: [], sensitivity: 0 }) }))
-      .filter(x => x.g.pass && !laterThisLoad.has(x.m.id)
-                && (justDone.has(x.m.id) || (decisions[x.m.id] !== "no" && decisions[x.m.id] !== "done")))
+      .filter(x => x.g.pass && !laterThisLoad.has(keyOf(x.m))
+                && (justDone.has(keyOf(x.m))
+                    || (decisions[keyOf(x.m)] !== "no" && decisions[keyOf(x.m)] !== "done"
+                        && !serverDone[keyOf(x.m)])))
       .sort((a, b) => b.g.score - a.g.score);
     refresh();
+    return recent;
+  }
+
+  function scan() {
+    lastScan = Date.now();
+    // Asked about everything recent, not only what survived the filter - a
+    // thread hidden by a local decision still wants its server answer, so the
+    // two cannot drift apart.
+    askSeen(sift());
   }
 
   // -------------------------------------------------------------------------
@@ -714,10 +776,23 @@
       const done = await api("suggest-job", {
         action: "create", thread: manual.thread, extraction: ex,
         proposed: (manual.out && manual.out.extraction) || null,
+        // So the server knows which thread this job came from, and can say so
+        // to any other browser that asks.
+        external_id: keyOf(manual.msg) || null,
       });
       if (done.error) { msg.textContent = done.error; go.disabled = false; go.textContent = "Create job"; return; }
+
+      // Mark the THREAD dealt with. This was missing entirely: a job created
+      // from the reading pane recorded nothing, so the same thread kept being
+      // suggested afterwards as though nothing had happened.
+      const key = keyOf(manual.msg);
+      if (key) {
+        decisions[key] = "done";
+        store.save({ decisions });
+        justDone.set(key, { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
+      }
       manual = { done: { text: done.reply || "Created.", ref: (done.refs || [])[0] || null, subject: manual.msg.subject } };
-      render();
+      scan();
     };
 
     return el("div", { className: "oneshot-row oneshot-formrow" }, [
@@ -1018,8 +1093,13 @@
   function row(m, g) {
     const subj = el("div", { className: "oneshot-subj", textContent: m.subject || "(no subject)" });
 
-    if (justDone.has(m.id)) {
-      const done = justDone.get(m.id);
+    // Keyed the same way the decision is. These two disagreed: scan() kept the
+    // row on the list by conversation id while this looked the confirmation up
+    // by row id, so a thread that had just produced a job rendered as a fresh
+    // suggestion with a Make job button on it - an invitation to create the
+    // same job twice.
+    if (justDone.has(keyOf(m))) {
+      const done = justDone.get(keyOf(m));
       const open = el("button", { textContent: done.ref ? `Open ${done.ref}` : "Open the board" });
       open.onclick = () => window.open(APP + "/dashboard", "_blank");
       return el("div", { className: "oneshot-row" }, [
@@ -1033,19 +1113,55 @@
     const meta = el("div", { className: "oneshot-meta",
       textContent: `${m.fromName || m.from || "unknown"}  -  ${why}${m.hasFullBody ? "" : "  -  preview only"}` });
 
-    const make = el("button", { className: "primary", textContent: "Make job" });
+    // A proposal already asked for on this thread. Held in `proposals` rather
+    // than written into the button, because the panel is rebuilt from scratch
+    // whenever the inbox republishes - a mail arriving, a mail being read, the
+    // list simply redrawing - and a state that lives only in the DOM is gone
+    // the moment that happens. It looked exactly like the strip ignoring the
+    // click: press Make job, watch it come back as Make job, nothing created.
+    const prop = proposals.get(keyOf(m));
+    if (prop) meta.textContent = proposalText(prop.out, prop.thread.body);
+
+    const make = el("button", { className: "primary",
+      textContent: prop ? (prop.out.isJob ? "Create in OneShot" : "Nothing to create") : "Make job" });
+    if (prop && !prop.out.isJob) make.disabled = true;
     const not  = el("button", { className: "ghost", textContent: "Not this one" });
     const later= el("button", { className: "ghost", textContent: "Later" });
 
     make.onclick = async () => {
+      // Second click, and only the second click, writes anything.
+      if (prop && prop.out.isJob) {
+        make.disabled = true; make.textContent = "Creating...";
+        const done = await api("suggest-job", {
+          action: "create", thread: prop.thread, extraction: prop.out.extraction,
+          external_id: keyOf(m) || null,
+        });
+        if (done.error) {
+          meta.textContent = done.error;
+          make.disabled = false; make.textContent = "Create in OneShot";
+          return;
+        }
+        proposals.delete(keyOf(m));
+        decisions[keyOf(m)] = "done"; store.save({ decisions });
+        justDone.set(keyOf(m), { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
+        render();
+        return;
+      }
       make.disabled = true; make.textContent = "Reading...";
       const thread = { subject: m.subject, from: m.from, body: m.body, received_at: m.received };
       const out = await api("suggest-job", { action: "suggest", thread });
       if (out.error) { meta.textContent = out.error; make.disabled = false; make.textContent = "Make job"; return; }
-      showProposal(m, thread, out, make, meta);
+      proposals.set(keyOf(m), { thread, out });
+      render();
     };
-    not.onclick   = () => { decisions[m.id] = "no";    store.save({ decisions }); scan(); };
-    later.onclick = () => { laterThisLoad.add(m.id); scan(); };
+    not.onclick   = () => {
+      proposals.delete(keyOf(m));
+      decisions[keyOf(m)] = "no"; store.save({ decisions }); scan();
+    };
+    later.onclick = () => {
+      proposals.delete(keyOf(m));
+      laterThisLoad.add(keyOf(m)); scan();
+    };
 
     const main = el("div", { className: "oneshot-main oneshot-goto", title: "Show me this one in the list" }, [subj, meta]);
     main.onclick = () => {
@@ -1075,27 +1191,13 @@
     ]);
   }
 
-  function showProposal(m, thread, out, make, meta) {
-    if (!out.isJob) {
-      meta.textContent = notJobText(out, thread.body);
-      make.textContent = "Nothing to create";
-      make.disabled = true;
-      return;
-    }
+  // What a proposal says, so the row can be rebuilt from it rather than
+  // remembering it in the button's own text.
+  function proposalText(out, body) {
+    if (!out.isJob) return notJobText(out, body);
     const missing = out.missing || [];
-    meta.textContent = (out.summary || `${out.jobCount} job${out.jobCount > 1 ? "s" : ""} found`)
+    return (out.summary || `${out.jobCount} job${out.jobCount > 1 ? "s" : ""} found`)
       + (missing.length ? `  -  still needs: ${missing.join(", ")}` : "");
-    make.textContent = "Create in OneShot";
-    make.disabled = false;
-    // Second click, and only the second click, writes anything.
-    make.onclick = async () => {
-      make.disabled = true; make.textContent = "Creating...";
-      const done = await api("suggest-job", { action: "create", thread, extraction: out.extraction });
-      if (done.error) { meta.textContent = done.error; make.disabled = false; make.textContent = "Create in OneShot"; return; }
-      decisions[m.id] = "done"; store.save({ decisions });
-      justDone.set(m.id, { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
-      render();
-    };
   }
 
   // -------------------------------------------------------------------------
@@ -1104,12 +1206,29 @@
 
   function ingest(list) {
     if (!Array.isArray(list) || !list.length) return;
-    const byId = new Map(messages.map(m => [m.id, m]));
+    // Keyed on the conversation, not on the row.
+    //
+    // This used to dedupe by m.id, and Outlook regenerates every row id on
+    // every draw - so the merge merged nothing. Each redraw, and the list
+    // redraws whenever mail arrives or is read, added another copy of every
+    // thread: the same mail appeared two, three, four times in the strip and
+    // "N of the last 30" climbed with it. Half of "it keeps showing me the
+    // same threads" was this, not the forgotten decisions.
+    //
+    // The newer entry wins, because it carries the row id that is actually on
+    // screen now - clicking a row and reading the open mail both need that. A
+    // body already fetched is never given up for one that has not been.
+    const byKey = new Map(messages.map(m => [keyOf(m), m]));
     for (const m of list) {
-      const prev = byId.get(m.id);
-      if (!prev || (m.hasFullBody && !prev.hasFullBody)) byId.set(m.id, m);
+      const k = keyOf(m);
+      if (!k) continue;
+      const prev = byKey.get(k);
+      if (!prev) { byKey.set(k, m); continue; }
+      byKey.set(k, prev.hasFullBody && !m.hasFullBody
+        ? { ...m, body: prev.body, hasFullBody: true }
+        : m);
     }
-    messages = [...byId.values()]
+    messages = [...byKey.values()]
       .sort((a, b) => String(b.received).localeCompare(String(a.received)));
     scan();
   }

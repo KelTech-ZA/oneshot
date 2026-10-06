@@ -46,6 +46,27 @@
     return null;
   }
 
+  // -------------------------------------------------------------------------
+  // Which conversation this is
+  // -------------------------------------------------------------------------
+  // The row's own id is a GUID Outlook's renderer makes up, and it makes up a
+  // new one every time the list draws. Remembering "this thread is dealt with"
+  // against it therefore remembered nothing: reload, new ids, and every thread
+  // already turned into a job came back as a fresh suggestion.
+  //
+  // data-convid is Outlook's conversation id - the same value for every
+  // message in a thread, and the same after a reload. That is the thing worth
+  // remembering, and the thing the server can be asked about.
+  function convOf(el) {
+    if (!el) return "";
+    const own = el.getAttribute && el.getAttribute("data-convid");
+    if (own) return own;
+    const inside = el.querySelector && el.querySelector("[data-convid]");
+    if (inside) return inside.getAttribute("data-convid") || "";
+    const up = el.closest && el.closest("[data-convid]");
+    return (up && up.getAttribute("data-convid")) || "";
+  }
+
   function parse(el) {
     const label = (el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
     if (!label) return null;
@@ -70,6 +91,7 @@
 
     return {
       id: el.id,
+      convId: convOf(el),
       subject,
       from: "",                       // the list shows display names, not addresses
       fromName,
@@ -285,6 +307,10 @@
 
     return {
       id: (selected && selected.id) || "open:" + location.pathname.slice(-24),
+      // Taken from the selected row when there is one, otherwise from the pane
+      // itself - an open thread carries it either way.
+      convId: convOf(selected) || convOf(pane) ||
+              convOf(document.querySelector('div[role="main"]')),
       subject: subject || "(no subject)",
       from, fromName: fromLabel.fromName || "",
       received: fromLabel.received || "",

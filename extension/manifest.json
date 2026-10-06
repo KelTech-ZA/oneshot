@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OneShot for Outlook and WhatsApp",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Turns mail and chats into OneShot jobs, when you ask it to.",
   "permissions": [
     "storage"

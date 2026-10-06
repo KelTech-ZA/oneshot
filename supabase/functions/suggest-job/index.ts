@@ -80,6 +80,10 @@ Deno.serve(async (req) => {
     // keyed by how the parser read it, valued with the job they chose.
     // `jobs` is what they approved, one entry per job.
     hints?: Record<string, string>;
+    /** Outlook's conversation id for the thread a job is being made from. */
+    external_id?: string | null;
+    /** For the "seen" action: the threads currently on screen. */
+    external_ids?: string[];
     jobs?: { job_id: string; changes: Change[] }[];
     // What the parser originally offered, sent back so the difference between
     // it and what the reader approved can be kept. This is the correction.
@@ -154,6 +158,31 @@ Deno.serve(async (req) => {
     });
   }
 
+  // ---- seen ---------------------------------------------------------------
+  // "Which of these threads already have jobs?" Asked once per scan, for
+  // everything on screen. The browser remembers its own decisions, but only
+  // the server knows what another machine, a colleague, or a forwarded mail
+  // already dealt with.
+  if (payload.action === "seen") {
+    const ids = (payload.external_ids ?? [])
+      .filter((x): x is string => typeof x === "string" && !!x)
+      .slice(0, 100);
+    if (!ids.length) return json({ ok: true, done: {} });
+
+    const { data, error } = await sb.rpc("threads_with_jobs", { p_ids: ids });
+    // Never fatal: not knowing is the state the strip was already in, and a
+    // failure here must not stop somebody creating a job.
+    if (error) {
+      console.warn("suggest-job: seen lookup failed:", error.message);
+      return json({ ok: true, done: {} });
+    }
+    const done: Record<string, string> = {};
+    for (const r of (data ?? []) as { external_id: string; job_ref: string }[]) {
+      if (r.external_id) done[r.external_id] = r.job_ref;
+    }
+    return json({ ok: true, done });
+  }
+
   // ---- create -------------------------------------------------------------
   if (payload.action === "create") {
     const ex = payload.extraction;
@@ -166,6 +195,10 @@ Deno.serve(async (req) => {
     const { data: msg, error: msgErr } = await sb.from("messages").insert({
       tenant_id: tenantId, channel: "email", kind: "request",
       sender, subject, body,
+      // The mail client's own id for this thread, so every browser can be told
+      // it has already been dealt with - not just the one that did it.
+      external_id: typeof payload.external_id === "string" && payload.external_id
+        ? payload.external_id.slice(0, 400) : null,
       raw: { source: "mail add-in", received_at: thread.received_at ?? null,
              approved_by: user.id, approved_at: new Date().toISOString() },
     }).select().single();
