@@ -142,7 +142,14 @@ Deno.serve(async (req) => {
       jobCount: jobs.length,
       missing,
       // The pane renders this; the extraction round-trips back on create.
-      extraction: isJob ? ex : null,
+      //
+      // Sent WHATEVER the verdict. It used to be withheld unless the parser
+      // called the message a request, so a reader who pointed at a FedEx
+      // notification - two full addresses, a tracking number, a consignment -
+      // got an empty form and typed all of it again. The verdict belongs in
+      // `isJob`, which the suggestions list still obeys; the reading belongs
+      // to whoever asked for it.
+      extraction: ex,
       summary: isJob ? summarise(jobs) : null,
     });
   }

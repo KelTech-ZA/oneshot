@@ -1,7 +1,8 @@
-// OneShot — send Web Push for a custody event or a new job.
+// OneShot — send Web Push for a custody event, a new job, or a reminder.
 //
-// Called by a database trigger (notify_push) on insert, authenticated with a
-// shared secret rather than a user JWT, since there is no user in the request.
+// Called by a database trigger (notify_push) on insert, or by the reminder
+// sweep (public.fire_due_reminders), authenticated with a shared secret rather
+// than a user JWT, since there is no user in the request.
 //
 // Deploy: supabase functions deploy send-push --no-verify-jwt
 // Secrets needed: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
@@ -37,8 +38,36 @@ Deno.serve(async (req) => {
 
   let tenantId: string, title: string, body: string, url: string, actorId: string | null = null;
   let crew: string[] = [];
+  // A reminder goes to one person - the one who set it - rather than to
+  // whoever happens to be ops. When this is set it replaces the audience rules
+  // below entirely.
+  let only: string[] | null = null;
+  // Where to write back why nothing arrived, if nothing does. A reminder that
+  // silently fails is the worst possible outcome for this feature: the sweep
+  // has already marked it sent, so without this there is nothing to look at.
+  let reminderId: string | null = null;
 
-  if (kind === "event") {
+  if (kind === "reminder") {
+    const { data: r } = await admin.from("job_reminders")
+      .select("id, tenant_id, job_id, user_id, note, acked_at").eq("id", id).maybeSingle();
+    if (!r) return json({ error: "reminder not found" }, 404);
+    // Acknowledged between the sweep claiming it and this running. Nothing to
+    // say any more.
+    if (r.acked_at) return json({ ok: true, sent: 0, reason: "already acknowledged" });
+
+    const { data: job } = await admin.from("jobs")
+      .select("ref, scheduled_date, status").eq("id", r.job_id).maybeSingle();
+
+    reminderId = r.id;
+    tenantId   = r.tenant_id;
+    only       = [r.user_id];
+    title      = `Reminder — ${job?.ref ?? "job"}`;
+    // The person's own words first; they wrote them to be read at this moment.
+    body       = r.note
+      ? r.note
+      : `${job?.ref ?? "This job"} · ${job?.scheduled_date ?? "no date"}`;
+    url        = `/job/${r.job_id}`;
+  } else if (kind === "event") {
     const { data: ev } = await admin.from("custody_events")
       .select("id, tenant_id, job_id, type, user_id, photo_path").eq("id", id).maybeSingle();
     if (!ev) return json({ error: "event not found" }, 404);
@@ -72,20 +101,36 @@ Deno.serve(async (req) => {
   }
 
   // Who should hear about it: ops hear everything; crew only about their jobs.
+  // A reminder ignores all of that and goes to its one owner - but still only
+  // if they are in the workspace, so somebody who has left stops being paged.
   const { data: members } = await admin.from("memberships")
     .select("user_id, role").eq("tenant_id", tenantId);
 
-  const audience = (members ?? [])
-    .filter((m) => m.user_id !== actorId)                       // never notify the actor
-    .filter((m) => m.role === "ops" || crew.includes(m.user_id))
-    .map((m) => m.user_id);
+  const audience = only
+    ? only.filter((u) => (members ?? []).some((m) => m.user_id === u))
+    : (members ?? [])
+      .filter((m) => m.user_id !== actorId)                     // never notify the actor
+      .filter((m) => m.role === "ops" || crew.includes(m.user_id))
+      .map((m) => m.user_id);
 
-  if (!audience.length) return json({ ok: true, sent: 0, reason: "no audience" });
+  const note = async (why: string) => {
+    if (reminderId) {
+      await admin.from("job_reminders").update({ last_error: why }).eq("id", reminderId);
+    }
+  };
+
+  if (!audience.length) {
+    await note("the person who set it is no longer in this workspace");
+    return json({ ok: true, sent: 0, reason: "no audience" });
+  }
 
   const { data: subs } = await admin.from("push_subscriptions")
     .select("id, endpoint, p256dh, auth").in("user_id", audience);
 
-  if (!subs?.length) return json({ ok: true, sent: 0, reason: "no devices registered" });
+  if (!subs?.length) {
+    await note("no device of theirs is registered for alerts - it is waiting in the app instead");
+    return json({ ok: true, sent: 0, reason: "no devices registered" });
+  }
 
   const payload = JSON.stringify({ title, body, url, tag: `${kind}-${id}` });
   let sent = 0;
@@ -107,6 +152,7 @@ Deno.serve(async (req) => {
   }));
 
   if (dead.length) await admin.from("push_subscriptions").delete().in("id", dead);
+  if (!sent) await note("every registered device refused the push");
 
   return json({ ok: true, sent, pruned: dead.length });
 });

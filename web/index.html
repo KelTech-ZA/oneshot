@@ -329,6 +329,104 @@
       .statement-table { page-break-inside: auto; }
       .statement-table tr { page-break-inside: avoid; }
     }
+
+    /* ---- reminders on a job ------------------------------------------- */
+    /* Two ways to say a time: flick the wheel, or type it. The wheel is a
+       scroll container exactly five cells tall with two blank cells padding
+       each end, so the first and last value can still reach the middle; the
+       snapping is what lets the component read a value back by rounding
+       scrollTop rather than guessing where a flick landed. --rem-cell must stay
+       in step with CELL in JobReminders.jsx - the arithmetic is shared. */
+    :root { --rem-cell: 36px; }
+
+    .rem { margin-top: 4px; }
+    .rem-add { margin-top: 0; padding: 6px 12px; font-size: 13px; }
+    .rem-set { margin-top: 10px; }
+
+    .rem-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .rem-chip {
+      font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 999px;
+      border: 1px solid var(--line); background: transparent; color: var(--ink);
+      cursor: pointer;
+    }
+    .rem-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .rem-chip:disabled { opacity: .4; cursor: default; }
+
+    .rem-label {
+      display: block; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--ink-soft); margin: 10px 0 4px;
+    }
+
+    .rem-time { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+    .rem-typed {
+      width: 6.5em; font-family: var(--mono); font-size: 22px; font-weight: 600;
+      letter-spacing: .06em; text-align: center; margin: 0;
+    }
+    .rem-or { font-size: 12px; padding-bottom: 10px; }
+
+    .rem-wheels { display: flex; align-items: flex-start; gap: 2px; }
+    .rem-wheel-wrap { display: flex; flex-direction: column; align-items: center; }
+    .rem-wheel-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--ink-soft); margin-bottom: 2px;
+    }
+    .rem-wheel {
+      height: calc(var(--rem-cell) * 5);
+      width: 62px;
+      overflow-y: scroll;
+      scroll-snap-type: y mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      border: 1px solid var(--line); border-radius: 10px;
+      background: var(--bg);
+    }
+    .rem-wheel::-webkit-scrollbar { display: none; }
+    /* The blank cells that let the first and last value reach the centre. */
+    .rem-pad { height: calc(var(--rem-cell) * 2); }
+    .rem-cell {
+      display: flex; align-items: center; justify-content: center;
+      height: var(--rem-cell); width: 100%;
+      scroll-snap-align: center;
+      font-family: var(--mono); font-size: 17px; font-variant-numeric: tabular-nums;
+      background: none; border: none; cursor: pointer; padding: 0;
+      color: var(--ink-soft); opacity: .55;
+    }
+    .rem-cell[data-on] {
+      color: var(--ink); opacity: 1; font-weight: 700; font-size: 20px;
+    }
+    .rem-colon {
+      font-family: var(--mono); font-size: 20px; font-weight: 700;
+      align-self: center; padding-top: 14px; color: var(--ink-soft);
+    }
+
+    /* Reading the instant back in words is the only defence against a reminder
+       quietly set for the wrong day, so it is not a hint - it is the loudest
+       thing in the block. */
+    .rem-says {
+      margin-top: 14px; padding: 9px 11px; border-radius: 10px;
+      background: var(--bg); border: 1px solid var(--line);
+      font-size: 14px; font-weight: 600;
+    }
+    .rem-says.bad { color: var(--warn); border-color: var(--warn); }
+    .rem-who { font-size: 12px; margin-top: 6px; }
+    .rem-err { color: var(--warn); font-size: 13px; margin-top: 8px; }
+
+    .rem-row { display: flex; align-items: flex-start; gap: 10px; }
+    /* Past due and not yet dealt with: the one state that has to catch an eye. */
+    .rem-row.ripe { border-color: var(--accent); border-width: 1.5px; }
+    .rem-when { font-weight: 600; font-size: 14px; }
+    .rem-away { font-weight: 400; font-size: 13px; }
+    .rem-row .rem-note { font-size: 14px; margin-top: 2px; }
+    .rem-for { font-size: 12px; margin-top: 2px; }
+    .rem-acts { display: flex; align-items: center; gap: 6px; flex: none; }
+    .rem-x {
+      background: none; border: none; font-size: 20px; line-height: 1;
+      color: var(--ink-soft); cursor: pointer; padding: 0 2px;
+    }
+    .rem-x:hover { color: var(--warn); }
+    .rem-past { margin-bottom: 12px; }
+    .rem-past summary { font-size: 13px; cursor: pointer; }
+    .rem-done { font-size: 13px; padding: 3px 0 0 4px; }
 </style>
 </head>
 <body>

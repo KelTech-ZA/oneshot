@@ -114,9 +114,14 @@ export default function Notices({ profile }) {
   const push = (n) => setNotices((cur) =>
     cur.some((x) => x.key === n.key) || isDismissed(n.key) ? cur : [...cur, n]);
 
+  // Some notices have a consequence beyond this device. A reminder that has
+  // been seen is acknowledged in the database, so it does not reappear on the
+  // phone in your pocket and does not come back here if site data is cleared.
   const dismiss = (key) => {
+    const n = notices.find((x) => x.key === key);
     remember(key);
     setNotices((cur) => cur.filter((x) => x.key !== key));
+    try { n?.onDismiss?.(); } catch { /* a dismissal must always dismiss */ }
   };
 
   const dismissAll = () => {
@@ -198,6 +203,62 @@ export default function Notices({ profile }) {
     })();
 
     return () => supabase.removeChannel(ch);
+  }, [profile.id]);
+
+  // ---- reminders that have come due --------------------------------------
+  // Push is the main delivery and this is the floor under it. A reminder has to
+  // arrive, and there are several ordinary ways push does not: permission was
+  // never granted, the iPhone was never added to the home screen, the browser
+  // dropped the subscription, pg_cron is not enabled on the project, the laptop
+  // was asleep at 09:00. In every one of those the reminder is still sitting in
+  // the database saying it is due, and asking for it costs one indexed query.
+  //
+  // Set in the job card, delivered here: there is no reminders page, and this
+  // is the stack every other alert already arrives in.
+  useEffect(() => {
+    let stop = false;
+
+    const sweep = async () => {
+      const { data, error } = await supabase.rpc("my_due_reminders");
+      if (stop || error || !data) return;
+      for (const r of data) {
+        const at = new Date(r.due_at);
+        push({
+          key: `rem-${r.id}`,
+          tone: "warn",
+          title: "Reminder",
+          jobId: r.job_id,
+          body: `${r.job_ref} · ${r.note || "set for " + at.toLocaleString("en-ZA", {
+            day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`,
+          // Seen is seen, everywhere.
+          onDismiss: () => supabase.from("job_reminders")
+            .update({ acked_at: new Date().toISOString() }).eq("id", r.id),
+        });
+        // Only when the server has NOT already pushed it, and only when the tab
+        // is not the thing being looked at - otherwise this is a system alert
+        // for a card already on screen, or a second copy of one the service
+        // worker just showed.
+        if (!r.sent_at && document.visibilityState !== "visible")
+          browserNotify("Reminder", `${r.job_ref}${r.note ? " — " + r.note : ""}`);
+      }
+    };
+
+    sweep();
+    // A minute is close enough: a reminder for 09:00 arriving by 09:01 is fine,
+    // and this is the backstop rather than the mechanism.
+    const tick = setInterval(() => {
+      if (document.visibilityState === "visible") sweep();
+    }, 60_000);
+    const onBack = () => { if (document.visibilityState === "visible") sweep(); };
+    document.addEventListener("visibilitychange", onBack);
+    window.addEventListener("focus", onBack);
+
+    return () => {
+      stop = true;
+      clearInterval(tick);
+      document.removeEventListener("visibilitychange", onBack);
+      window.removeEventListener("focus", onBack);
+    };
   }, [profile.id]);
 
   // Shown while permission is undecided OR blocked - a blocked device needs a

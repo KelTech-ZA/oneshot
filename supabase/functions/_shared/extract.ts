@@ -278,6 +278,25 @@ DECIDING request vs chatter - read the WHOLE message before deciding:
   A clear address and clear items is high confidence even in a messy thread.
 - Only chatter when there is genuinely no job present: no addresses, no items,
   nothing to move, make, pack or install.
+
+ALWAYS FILL "jobs" WITH WHAT THE MESSAGE SAYS, WHATEVER YOU DECIDE "kind" IS.
+This is the one place the two answers come apart, and it matters:
+- "kind" is your judgement about what the message IS. Keep it honest. A carrier
+  notification saying a parcel is out for delivery is a status_query, not a new
+  request, and nothing is created from it automatically.
+- "jobs" is what the message CONTAINS. A person may be looking at that same
+  notification and asking for a job from it - an inbound consignment they have
+  to receive is real work even though FedEx sent the mail. If you have left
+  "jobs" empty, they get a blank form and retype an address that was sitting in
+  front of you.
+So when a message names addresses, a date, a reference or a consignment, put
+them in "jobs" even for status_query or chatter. A carrier notification with a
+From and a To address is one job: the delivery address is the destination, the
+sender's address the origin, the tracking number goes in client_ref, and the
+consignment description - often in a "This is concerning your shipment" line -
+is the item. If nothing names the contents, one item called "Consignment".
+Filling this in is never a claim that a job should be created. It is only
+refusing to throw away what you have already read.
 FORWARDED EMAILS: many requests arrive forwarded by staff. If the body contains a forwarded
 message (Fwd:, "---------- Forwarded message", "From: ... Sent: ..."), extract the job from the
 ORIGINAL message and treat the original sender as the requester (note them in origin/contact

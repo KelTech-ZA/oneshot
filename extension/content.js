@@ -32,6 +32,14 @@
   let messages = [];        // newest first, from the reader
   let flagged = [];         // those that clear the gate and aren't settled
   let openPanel = false;
+  // The mail they asked to be shown in the list. While this is set the panel
+  // gets out of the way, because "show me this one" means they want to LOOK at
+  // it, and a list covering half the screen is the opposite of that.
+  let showing = null;          // { id, subject }
+  // When set, the panel shows that one row and nothing else, so going back to
+  // it after reading the mail costs a few lines of screen instead of half of it.
+  let onlyId = null;
+  let panelH = null;           // remembered height, in vh
   let lastScan = 0;
   let session = null;
   let clientDomains = [];
@@ -65,6 +73,11 @@
     if (heartbeat) clearInterval(heartbeat);
     status.textContent = "OneShot was updated - reload this page to pick up the new version";
     dot.className = "";
+    // The bar may currently be showing one mail instead of the status line.
+    // Put the ordinary one back, or the notice has nowhere to appear.
+    showing = null;
+    try { bar.textContent = ""; bar.append(dot, status); } catch { /* not built yet */ }
+    strip.classList.remove("panel-open");
     panel.classList.remove("open");
     panel.textContent = "";
   }
@@ -79,11 +92,13 @@
     async load() {
       if (dead) return;
       try {
-        const d = await chrome.storage.local.get(["session", "decisions", "clientDomains", "jobTypes"]);
+        const d = await chrome.storage.local.get(
+          ["session", "decisions", "clientDomains", "jobTypes", "panelH"]);
         session = d.session || null;
         decisions = d.decisions || {};
         clientDomains = d.clientDomains || [];
         jobTypes = d.jobTypes || [];
+        panelH = Number(d.panelH) || null;
       } catch { died(); }
     },
     save(patch) {
@@ -126,7 +141,26 @@
     max-height: 0; overflow: hidden; transition: max-height .22s ease;
     border-top: 1px solid transparent;
   }
-  #oneshot-panel.open { max-height: 52vh; overflow-y: auto; border-top-color: #2b3033; }
+  #oneshot-panel.open {
+    max-height: var(--oneshot-panel-h, 38vh);
+    overflow-y: auto; border-top-color: #2b3033;
+  }
+  /* Drag this to make the list taller or shorter. It remembers. */
+  #oneshot-grip {
+    height: 7px; cursor: ns-resize; background: #15191b;
+    border-bottom: 1px solid #1c2123; display: none;
+  }
+  #oneshot-grip::after {
+    content: ""; display: block; width: 36px; height: 3px; margin: 2px auto 0;
+    border-radius: 2px; background: #3a4145;
+  }
+  #oneshot-grip:hover::after { background: #5a646a; }
+  #oneshot-strip.panel-open #oneshot-grip { display: block; }
+  #oneshot-showing {
+    flex: 1; min-width: 0; color: #eef1f2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #oneshot-showing b { color: #8d979b; font-weight: 600; margin-right: 6px; }
   .oneshot-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid #1c2123; }
   .oneshot-row:last-child { border-bottom: none; }
   .oneshot-main { flex: 1; min-width: 0; }
@@ -197,12 +231,61 @@
   // states.
   const amBtn = el("button", { id: "oneshot-amend", textContent: "Amend job" });
   const btn = el("button", { className: "primary", textContent: "Suggestions" });
+  // Shown INSTEAD of the usual bar contents while one mail is being looked at.
+  const showingLbl = el("span", { id: "oneshot-showing" });
+  const showMake = el("button", { className: "primary", textContent: "Make job" });
+  const showBack = el("button", { textContent: "Back to list" });
+  const showDone = el("button", { className: "ghost", textContent: "\u00d7", title: "Stop showing this one" });
+
   const bar = el("div", { id: "oneshot-bar" },
     CHAT ? [dot, status, mkBtn] : [dot, status, mkBtn, amBtn, btn]);
+  const grip = el("div", { id: "oneshot-grip", title: "Drag to resize the list" });
   const panel = el("div", { id: "oneshot-panel" });
-  strip.append(bar, panel);
+  strip.append(bar, grip, panel);
+
+  /** How much of the window the strip is covering, so the reader can scroll
+   *  the row clear of it rather than behind it. */
+  const stripInset = () => Math.ceil(strip.getBoundingClientRect().height);
+
+  const stopShowing = () => {
+    showing = null;
+    onlyId = null;
+    try { window.postMessage({ __oneshot: "unmark" }, "*"); } catch { /* page gone */ }
+  };
+
+  // --- resizing -------------------------------------------------------------
+  const applyPanelH = () => {
+    strip.style.setProperty("--oneshot-panel-h", `${panelH || 38}vh`);
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    const startH = panelH || 38;
+    const move = (ev) => {
+      // Dragging UP makes it taller, which is the direction it grows.
+      const dvh = ((startY - ev.clientY) / window.innerHeight) * 100;
+      panelH = Math.min(70, Math.max(12, Math.round(startH + dvh)));
+      applyPanelH();
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      store.save({ panelH });
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+  });
+
+  showMake.onclick = () => { onlyId = showing && showing.id; openPanel = true; render(); };
+  showBack.onclick = () => { onlyId = null; openPanel = true; render(); };
+  showDone.onclick = () => { stopShowing(); render(); };
 
   btn.onclick = () => {
+    // Deliberately does NOT stop showing. Closing the list while still working
+    // through one mail is the normal case, and throwing away which mail that
+    // is would put them right back where they started. The "x" is how you say
+    // you are done with it.
     openPanel = !openPanel;
     if (!openPanel) { justDone.clear(); manual = null; amend = null; scan(); }
     render();
@@ -233,7 +316,14 @@
     const out = await api("suggest-job", { action: "suggest", thread });
     // Even a refusal opens the form. The click was the decision; the parser
     // only gets to pre-fill.
-    manual = { msg, thread, out: out.error ? null : out, state: "proposed" };
+    //
+    // The REASON is kept. It used to be dropped on the floor here - `out`
+    // became null and the card then explained the empty fields as "nothing
+    // job-shaped in this mail", which is a confident, wrong answer when the
+    // truth was a timeout or an expired session. An empty card that blames
+    // the mail is worse than one that says what went wrong.
+    manual = { msg, thread, out: out.error ? null : out,
+               failed: out.error || null, state: "proposed" };
     render();
   };
 
@@ -288,15 +378,32 @@
   // -------------------------------------------------------------------------
   // Talking to OneShot
   // -------------------------------------------------------------------------
-  async function api(path, body) {
-    const res = await fetch(`${FUNCTIONS}/${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json",
-                 authorization: `Bearer ${session?.access_token || ""}` },
-      body: JSON.stringify(body),
-    });
+  // A parse can take fifteen seconds, so this waits a long time - but never
+  // forever. It used to have no timeout and no catch at all: a dropped
+  // connection rejected the fetch, the click handler died mid-await, and the
+  // card sat on "Reading..." for the rest of the session with nothing on
+  // screen to say what had happened. A request that fails has to come back as
+  // an answer, or the reader is left watching a spinner.
+  async function api(path, body, ms = 90_000) {
+    let res;
+    try {
+      res = await fetch(`${FUNCTIONS}/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json",
+                   authorization: `Bearer ${session?.access_token || ""}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(ms),
+      });
+    } catch (e) {
+      const timedOut = e && (e.name === "TimeoutError" || e.name === "AbortError");
+      return { error: timedOut
+        ? "OneShot took too long to answer. Nothing is wrong with the mail - try again."
+        : "Could not reach OneShot. Check your connection and try again." };
+    }
     if (res.status === 401) { session = null; store.save({ session: null }); }
-    return res.json().catch(() => ({ error: "Unreadable reply" }));
+    const out = await res.json().catch(() => null);
+    if (out && typeof out === "object") return out;
+    return { error: `OneShot answered with ${res.status} and nothing readable.` };
   }
 
   async function signIn(email, password, msgEl) {
@@ -360,7 +467,59 @@
       .filter(x => x.g.pass && !laterThisLoad.has(x.m.id)
                 && (justDone.has(x.m.id) || (decisions[x.m.id] !== "no" && decisions[x.m.id] !== "done")))
       .sort((a, b) => b.g.score - a.g.score);
+    refresh();
+  }
+
+  // -------------------------------------------------------------------------
+  // Not taking the work away from somebody mid-sentence
+  // -------------------------------------------------------------------------
+  // render() empties the panel and rebuilds it. That is fine when a person
+  // asked for something, and ruinous when nobody did: Outlook republishes its
+  // list whenever a mail arrives, is read, or simply re-renders, and every one
+  // of those reached scan() -> render() and wiped a half-filled job card. The
+  // reader was typing an address when their own inbox deleted it.
+  //
+  // So background changes - new mail, the three-hourly clock - do not touch an
+  // open form. The data still updates underneath; only the redraw waits.
+  let pendingScan = false;
+
+  function editing() {
+    if (!openPanel) return false;
+    // A card being filled in, or an amendment being read. Neither is finished.
+    if (manual && !manual.done && !manual.error) return true;
+    if (amend && !amend.error) return true;
+    // Anything else with the caret in it, including a row's own fields.
+    const a = document.activeElement;
+    return !!(a && strip.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+  }
+
+  function refresh() {
+    if (editing()) { pendingScan = true; updateBar(); return; }
     render();
+  }
+
+  function updateBar() {
+    if (CHAT) return;
+    const n = flagged.length;
+    dot.className = messages.length ? (n ? "hot" : "live") : "";
+    status.textContent = !messages.length
+      ? "OneShot - waiting for Outlook to load your mail..."
+      : n
+        ? `${n} of the last ${Math.min(messages.length, HOW_MANY)} look like they need a job`
+        : `Nothing in the last ${Math.min(messages.length, HOW_MANY)} needs a job`;
+    btn.textContent = n ? `Show ${n}` : "Suggestions";
+
+    // While one mail is being looked at, the bar is about that mail. Anything
+    // else there is just competing for the one line they are reading.
+    bar.textContent = "";
+    if (showing && !openPanel) {
+      showingLbl.textContent = "";
+      showingLbl.append(el("b", { textContent: "Showing" }),
+                        document.createTextNode(showing.subject));
+      bar.append(dot, showingLbl, showDone, showBack, showMake);
+    } else {
+      bar.append(dot, status, mkBtn, amBtn, btn);
+    }
   }
 
   function render() {
@@ -370,15 +529,12 @@
     if (!dead && invalidated()) died();
     if (dead) return;
     if (CHAT) return renderChat();
-    const n = flagged.length;
-    dot.className = messages.length ? (n ? "hot" : "live") : "";
-    status.textContent = !messages.length
-      ? "OneShot - waiting for Outlook to load your mail..."
-      : n
-        ? `${n} of the last ${Math.min(messages.length, HOW_MANY)} look like they need a job`
-        : `Nothing in the last ${Math.min(messages.length, HOW_MANY)} needs a job`;
-    btn.textContent = n ? `Show ${n}` : "Suggestions";
+    pendingScan = false;
+    updateBar();
+
+    strip.classList.toggle("panel-open", openPanel);
     panel.classList.toggle("open", openPanel);
+    applyPanelH();
     if (!openPanel) { panel.textContent = ""; return; }
 
     panel.textContent = "";
@@ -392,7 +548,15 @@
           : "Open your inbox list so Outlook loads your mail, then reload." }));
       return;
     }
-    for (const { m, g } of flagged) panel.append(row(m, g));
+    const list = onlyId ? flagged.filter((x) => x.m.id === onlyId) : flagged;
+    if (onlyId && !list.length) {
+      // Dealt with, or dropped out of the window since. Fall back to the list
+      // rather than showing an empty panel with no way out of it.
+      onlyId = null;
+      for (const { m, g } of flagged) panel.append(row(m, g));
+      return;
+    }
+    for (const { m, g } of list) panel.append(row(m, g));
   }
 
 
@@ -473,10 +637,34 @@
   function manualForm() {
     const f = prefill(manual.out);
     const note = el("div", { className: "oneshot-meta" });
-    if (manual.out && manual.out.isJob) {
+    // A retry only exists when the attempt FAILED. Offering one after the
+    // parser read the mail and found no job would just invite the same answer.
+    let again = null;
+
+    if (manual.failed) {
+      note.className = "oneshot-meta oneshot-warn";
+      note.textContent = `${manual.failed}  -  nothing was filled in. `
+        + "Try again, or fill in what you know and create it anyway.";
+      again = el("button", { textContent: "Try again" });
+      again.onclick = async () => {
+        again.disabled = true; again.textContent = "Reading...";
+        const out = await api("suggest-job", { action: "suggest", thread: manual.thread });
+        manual = { ...manual, out: out.error ? null : out,
+                   failed: out.error || null, state: "proposed" };
+        render();
+      };
+    } else if (manual.out && manual.out.isJob) {
       const miss = (manual.out.missing || []);
       note.textContent = (manual.out.summary || "Read from this mail")
         + (miss.length ? `  -  still needs: ${miss.join(", ")}` : "");
+    } else if (f.collection || f.delivery || f.date || f.items || f.ref) {
+      // Not judged a new request - a carrier's "out for delivery" notice, a
+      // reply in a thread - but the parser still read addresses, a date or a
+      // reference out of it, and those are now in the form. Saying "not enough
+      // to build a job" over a form it has just filled in would be absurd.
+      note.textContent = "This reads as an update rather than a new request, so nothing "
+        + "was created on its own - but what it says is filled in below. Check it and "
+        + "create the job if you want it on the board.";
     } else {
       note.textContent = notJobText(manual.out || {}, manual.msg.body)
         + "  -  fill in what you know and create it anyway.";
@@ -508,8 +696,9 @@
 
     const go = el("button", { className: "primary", textContent: "Create job" });
     const cancel = el("button", { className: "ghost", textContent: "Cancel" });
+    const acts = again ? [again, cancel, go] : [cancel, go];
     const msg = el("div", { className: "oneshot-meta" });
-    cancel.onclick = () => { manual = null; render(); };
+    cancel.onclick = () => { manual = null; scan(); };
 
     go.onclick = async () => {
       go.disabled = true; go.textContent = "Creating...";
@@ -544,7 +733,7 @@
             el("span", { textContent: "Hard deadline" }), hard,
           ]),
         ]),
-        el("div", { className: "oneshot-acts", style: "margin-top:10px" }, [go, cancel]),
+        el("div", { className: "oneshot-acts", style: "margin-top:10px" }, acts),
         msg,
       ]),
     ]);
@@ -580,7 +769,7 @@
       const open = el("button", { textContent: manual.done.ref ? `Open ${manual.done.ref}` : "Open the board" });
       open.onclick = () => window.open(APP + "/dashboard", "_blank");
       const close = el("button", { className: "ghost", textContent: "Close" });
-      close.onclick = () => { manual = null; render(); };
+      close.onclick = () => { manual = null; scan(); };
       return el("div", { className: "oneshot-row" }, [
         el("div", { className: "oneshot-main" }, [
           el("div", { className: "oneshot-subj", textContent: manual.done.subject || "Job created" }),
@@ -611,7 +800,7 @@
   // Every line carries a checkbox, because a parser that got one field wrong
   // should not cost the reader the other three.
   function amendRow() {
-    const close = () => { amend = null; render(); };
+    const close = () => { amend = null; scan(); };
     const head = (t) => el("div", { className: "oneshot-subj", textContent: t });
     const note = (t, cls) => el("div", { className: "oneshot-meta" + (cls ? " " + cls : ""), textContent: t });
     const wrap = (kids) => el("div", { className: "oneshot-row" }, [
@@ -865,10 +1054,20 @@
       const h = (e) => {
         if (!e.data || e.data.__oneshot !== "revealed" || e.data.id !== m.id) return;
         window.removeEventListener("message", h);
-        meta.textContent = e.data.ok ? held : "Could not find it in the list - it may have scrolled out of the folder.";
+        if (e.data.ok) {
+          // They asked to look at it, so get out of the way and let them.
+          // The bar keeps hold of which one it is, and offers the next step,
+          // so reading the mail no longer costs a close-and-reopen.
+          showing = { id: m.id, subject: m.subject || "(no subject)" };
+          onlyId = null;
+          openPanel = false;
+          render();
+        } else {
+          meta.textContent = "Could not find it in the list - it may have scrolled out of the folder.";
+        }
       };
       window.addEventListener("message", h);
-      window.postMessage({ __oneshot: "reveal", id: m.id }, "*");
+      window.postMessage({ __oneshot: "reveal", id: m.id, bottomInset: stripInset() }, "*");
       setTimeout(() => { window.removeEventListener("message", h); if (meta.textContent === "Finding it...") meta.textContent = held; }, 6000);
     };
     return el("div", { className: "oneshot-row" }, [

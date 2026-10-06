@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useRefreshOnReturn } from "../lib/refresh";
 import { Ctx } from "../main";
 import JobList from "./JobList";
 
@@ -29,12 +30,14 @@ export default function Today() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState(null);
 
-  useEffect(() => {
-    supabase.from("jobs")
-      .select("*, line_items(count)")
-      .neq("status", "pending_confirmation")
-      .then(({ data }) => setJobs(data ?? []));
-  }, []);
+  const load = () => supabase.from("jobs")
+    .select("*, line_items(count)")
+    .neq("status", "pending_confirmation")
+    .then(({ data }) => setJobs(data ?? []));
+
+  useEffect(() => { load(); }, []);
+  // Crew leave this open in a van all morning. Same reason as the board.
+  useRefreshOnReturn(load);
 
   if (!jobs) return <div className="empty">Loading jobs…</div>;
   return (

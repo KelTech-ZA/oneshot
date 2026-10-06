@@ -5,6 +5,7 @@ import { Ctx } from "../main";
 import { JobStamp } from "./Today";
 import JobList from "./JobList";
 import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
+import { useRefreshOnReturn } from "../lib/refresh";
 import ClashWarning from "./ClashWarning";
 import JobSearch from "./JobSearch";
 import JobFlags from "./JobFlags";
@@ -27,6 +28,11 @@ export default function Dashboard() {
       .then(({ data }) => setJobTypes(data ?? []));
     loadUnread();
   }, []);
+
+  // This board sits open all day next to somebody's mail. Without this it
+  // shows whatever existed when the tab was opened, and a job created from
+  // Outlook ten minutes ago looks like a job that was never created.
+  useRefreshOnReturn(() => { load(); loadUnread(); });
 
   // Mail that arrived and produced nothing. Until now this was invisible:
   // the message was saved, no job was made, and the only trace was a line in

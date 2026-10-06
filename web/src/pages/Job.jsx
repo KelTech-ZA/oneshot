@@ -5,6 +5,7 @@ import { JobStamp } from "./Today";
 import JobFlags from "./JobFlags";
 import { Ctx } from "../main";
 import JobDocuments from "./JobDocuments";
+import JobReminders from "./JobReminders";
 import JobCharges from "./JobCharges";
 import Letterhead from "./Letterhead";
 import { stopName } from "./JobStops";
@@ -320,6 +321,11 @@ export default function Job() {
           <span style={{ fontWeight: 600 }}>{events.filter((e) => e.photo_path && e.item_id).length}</span>
         </div>
       </div>
+
+      {/* Directly under the dates, because that is what a reminder is about and
+          where the eye already is. The job card is the only place this lives. */}
+      <JobReminders jobId={id} tenantId={job.tenant_id} jobRef={job.ref}
+        profile={profile} names={names} />
 
       {stops.length > 2 && (
         <div className="card">

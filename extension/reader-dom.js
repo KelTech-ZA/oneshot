@@ -153,6 +153,47 @@
     }
   }
 
+  // Outlook marks the body of every message it renders, in three ways across
+  // its versions. Any of them is a FACT about where the mail is, and beats any
+  // amount of guessing by text size.
+  const BODY_ANCHOR =
+    '[id^="UniqueMessageBody"], div[role="document"], [aria-label*="message body" i]';
+
+  /**
+   * The reading pane, found rather than deduced.
+   *
+   * This exists because of a real failure. The old code took "the smallest
+   * element with more than 200 characters that is not the message list", and
+   * on an open thread - where Outlook hides the list - there was nothing left
+   * to exclude, so it picked the RIBBON. The parser was handed
+   *
+   *   "Create a new email message. (N) / Ignore / Reply / Forward / Share to
+   *    Teams ..."
+   *
+   * - 1,610 characters of toolbar and not one word of the email - and then
+   * reported, quite correctly, that there was not enough there to build a job.
+   * Every "it won't read this thread" was this.
+   */
+  function readingPane() {
+    const bodies = [...document.querySelectorAll(BODY_ANCHOR)]
+      .filter((e) => (e.innerText || "").trim().length > 1);
+    if (!bodies.length) return null;
+
+    // role="main" holds the subject, the sender headers and EVERY message in
+    // the thread, and stops short of the ribbon - so when it contains the
+    // bodies it is exactly the right amount of page.
+    const main = document.querySelector('div[role="main"]');
+    if (main && bodies.every((b) => main.contains(b))) return main;
+
+    // Otherwise climb from the first body until one element holds them all.
+    let n = bodies[0];
+    for (let up = 0; up < 10 && n.parentElement; up++) {
+      if (bodies.every((b) => n.contains(b))) break;
+      n = n.parentElement;
+    }
+    return n;
+  }
+
   function readOpenMessage() {
     const rows = rowsNow();
     const selected = document.querySelector('div[role="option"][aria-selected="true"]')
@@ -162,32 +203,42 @@
     const listHost = rows[0] && (rows[0].closest('[role="listbox"]') || rows[0].parentElement);
     const strip = document.getElementById("oneshot-strip");
 
-    let pane = null, best = Infinity;
-    for (const e of document.querySelectorAll("div, article, section")) {
-      if (listHost && listHost.contains(e)) continue;
-      if (strip && strip.contains(e)) continue;
-      if (e.querySelector('div[role="option"]')) continue;
-      const t = (e.innerText || "").trim();
-      if (t.length < 200) continue;
-      if (t.length < best) { best = t.length; pane = e; }
-    }
-    if (!pane) return null;
+    let pane = readingPane();
 
-    // The tightest block over 200 characters is often just the newest message,
-    // or - once the history is open - just the quoted part. Climb until the
-    // parent stops being the message and starts being the application: no list
-    // rows, not the strip, and not suddenly several times larger.
-    for (let up = 0; up < 6; up++) {
-      const parent = pane.parentElement;
-      if (!parent) break;
-      if (listHost && (listHost.contains(parent) || parent.contains(listHost))) break;
-      if (strip && parent.contains(strip)) break;
-      if (parent.querySelector('div[role="option"]')) break;
-      const mine = (pane.innerText || "").length;
-      const theirs = (parent.innerText || "").length;
-      if (theirs > Math.max(mine * 4, mine + 20000)) break;
-      if (theirs <= mine) break;
-      pane = parent;
+    if (!pane) {
+      // Nothing marked itself as a message body. Fall back to the old search,
+      // but never outside role="main" when there is one: that single line is
+      // what would have kept the ribbon out.
+      const main = document.querySelector('div[role="main"]');
+      const scope = main || document;
+      let best = Infinity;
+      for (const e of scope.querySelectorAll("div, article, section")) {
+        if (listHost && listHost.contains(e)) continue;
+        if (strip && strip.contains(e)) continue;
+        if (e.querySelector('div[role="option"]')) continue;
+        const t = (e.innerText || "").trim();
+        if (t.length < 200) continue;
+        if (t.length < best) { best = t.length; pane = e; }
+      }
+      if (!pane) return null;
+
+      // The tightest block over 200 characters is often just the newest
+      // message, or - once the history is open - just the quoted part. Climb
+      // until the parent stops being the message and starts being the
+      // application: no list rows, not the strip, not suddenly far larger.
+      for (let up = 0; up < 6; up++) {
+        const parent = pane.parentElement;
+        if (!parent) break;
+        if (main && parent === main.parentElement) break;
+        if (listHost && (listHost.contains(parent) || parent.contains(listHost))) break;
+        if (strip && parent.contains(strip)) break;
+        if (parent.querySelector('div[role="option"]')) break;
+        const mine = (pane.innerText || "").length;
+        const theirs = (parent.innerText || "").length;
+        if (theirs > Math.max(mine * 4, mine + 20000)) break;
+        if (theirs <= mine) break;
+        pane = parent;
+      }
     }
 
     openQuoted(pane);
@@ -219,7 +270,17 @@
     }
 
     const fromLabel = selected ? (parse(selected) || {}) : {};
-    const subject = (fromLabel.subject) ||
+
+    // The subject, from the pane's own heading first. The list row was being
+    // used, and when Outlook hides the list its rows go blank - which is how
+    // the subject came out as "Important Has attachments Justin Davy; Sarah
+    // Dawson; Ricky Chau; ..." instead of the actual subject line.
+    let paneSubject = "";
+    for (const h of pane.querySelectorAll('[role="heading"], h1, h2')) {
+      const t = (h.innerText || "").trim();
+      if (t && t.length <= 200) { paneSubject = t; break; }
+    }
+    const subject = paneSubject || fromLabel.subject ||
       (document.title || "").replace(/\s*-\s*Outlook.*$/i, "").trim();
 
     return {
@@ -238,10 +299,62 @@
   // -------------------------------------------------------------------------
   // Take me to it. The list is virtualised, so the row may not exist in the
   // DOM yet - step the scroller until it appears, then bring it into view and
-  // mark it briefly. Deliberately does NOT click: opening a thread marks it
-  // read, and finding it is not the same as dealing with it.
+  // mark it. Deliberately does NOT click: opening a thread marks it read, and
+  // finding it is not the same as dealing with it.
+  //
+  // THE MARK STAYS UNTIL SOMETHING ELSE HAPPENS. It used to clear itself after
+  // 2.6 seconds, which was exactly backwards: the whole point of "show me this
+  // one" is that your attention then goes somewhere else - to the panel, to
+  // closing the panel - and by the time you look back at the list the only
+  // thing telling you which mail to open has gone. A marker that expires while
+  // you are doing the thing it was shown for is not a marker.
+  //
+  // It is also re-applied when the list re-renders. Outlook recycles rows as
+  // you scroll, so the marked element can be destroyed and rebuilt under the
+  // same id, which silently lost the mark.
   // -------------------------------------------------------------------------
-  async function reveal(id) {
+
+  const MARK_CLASS = "oneshot-marked";
+  let markedId = null;
+
+  (function markStyle() {
+    const st = document.createElement("style");
+    st.textContent = `
+      .${MARK_CLASS} {
+        box-shadow: inset 4px 0 0 #1f6feb, 0 0 0 2px rgba(31,111,235,.5) !important;
+        border-radius: 4px;
+      }
+      /* No badge, deliberately. A ::after label needs a positioned ancestor,
+         and forcing position:relative onto one of Outlook's own rows is how
+         you break somebody's inbox layout to save a word. */`;
+    (document.head || document.documentElement).append(st);
+  })();
+
+  function clearMark() {
+    markedId = null;
+    for (const n of document.querySelectorAll("." + MARK_CLASS)) n.classList.remove(MARK_CLASS);
+  }
+
+  function applyMark() {
+    if (!markedId) return;
+    const el = document.getElementById(markedId);
+    for (const n of document.querySelectorAll("." + MARK_CLASS)) {
+      if (n !== el) n.classList.remove(MARK_CLASS);
+    }
+    if (el && !el.classList.contains(MARK_CLASS)) el.classList.add(MARK_CLASS);
+  }
+
+  // Cheap, and the only thing that survives Outlook rebuilding a row.
+  setInterval(applyMark, 700);
+
+  // Once they have clicked the mail, the mark has done its job.
+  document.addEventListener("click", (e) => {
+    if (!markedId) return;
+    const el = document.getElementById(markedId);
+    if (el && e.target instanceof Node && el.contains(e.target)) clearMark();
+  }, true);
+
+  async function reveal(id, bottomInset = 0) {
     const at = () => document.getElementById(id);
     let el = at();
 
@@ -263,10 +376,20 @@
     if (!el) return false;
 
     el.scrollIntoView({ block: "center", behavior: "smooth" });
-    const prev = el.style.boxShadow;
-    el.style.transition = "box-shadow .2s";
-    el.style.boxShadow = "inset 4px 0 0 #1f6feb, 0 0 0 2px rgba(31,111,235,.45)";
-    setTimeout(() => { el.style.boxShadow = prev; }, 2600);
+
+    // OneShot's own strip sits over the bottom of the window, so "centred in
+    // the scroller" can still mean "hidden behind the panel". Nudge it up by
+    // however much of the screen the strip is covering.
+    if (bottomInset > 0) {
+      await new Promise((r) => setTimeout(r, 320));   // let the smooth scroll land
+      const sc = scrollerFor(el);
+      const rect = el.getBoundingClientRect();
+      const floor = window.innerHeight - bottomInset - 12;
+      if (sc && rect.bottom > floor) sc.scrollTop += (rect.bottom - floor);
+    }
+
+    markedId = id;
+    applyMark();
     return true;
   }
 
@@ -317,9 +440,10 @@
     if (e.source !== window || !e.data) return;
     if (e.data.__oneshot === "please-publish") collect();
     if (e.data.__oneshot === "reveal") {
-      reveal(e.data.id).then((ok) =>
+      reveal(e.data.id, Number(e.data.bottomInset) || 0).then((ok) =>
         window.postMessage({ __oneshot: "revealed", id: e.data.id, ok }, "*"));
     }
+    if (e.data.__oneshot === "unmark") clearMark();
     if (e.data.__oneshot === "read-open") {
       let msg = null;
       try { msg = readOpenMessage(); } catch { /* report nothing rather than throw */ }
