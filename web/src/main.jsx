@@ -208,18 +208,34 @@ function Shell() {
   return (
     <Ctx.Provider value={{ session, profile }}>
       <div className="topbar">
-        <Link to="/" className="wordmark" style={{ color: "inherit", textDecoration: "none" }}>
-          ONE<b>SHOT</b>
-        </Link>
+        {/* Which workspace you are in, beside the name of the thing you are
+            in. Section 9 and Southern Guild run on the same app with the same
+            login and the screens are identical apart from the data, so this is
+            the only thing telling you whose jobs you are looking at.
+
+            It doubles as the switcher for anyone who belongs to more than one -
+            there is no sense carrying the workspace name twice in one ribbon,
+            once to read and once to click. */}
+        <div className="brand">
+          <Link to="/" className="wordmark" style={{ color: "inherit", textDecoration: "none" }}>
+            ONE<b>SHOT</b>
+          </Link>
+          {profile.workspace && (<>
+            <span className="brand-bar" aria-hidden="true">|</span>
+            {memberships?.length > 1 ? (
+              <button className="topbar-link brand-ws" data-switch="1"
+                title={`${profile.workspace} - tap to switch workspace`}
+                onClick={() => { sessionStorage.removeItem("oneshot_ws"); setPicking(true); }}>
+                {profile.workspace}
+              </button>
+            ) : (
+              <span className="topbar-link brand-ws" title={profile.workspace}>{profile.workspace}</span>
+            )}
+          </>)}
+        </div>
         <div className="row" style={{ gap: 14 }}>
-          {memberships?.length > 1 && (
-            <button className="muted" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit" }}
-              onClick={() => { sessionStorage.removeItem("oneshot_ws"); setPicking(true); }}>
-              ⇄ {profile.workspace ?? "Workspace"}
-            </button>
-          )}
-          {profile.role === "ops" && <Link to="/dashboard" className="muted">Office</Link>}
-          <button className="muted" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit" }}
+          {profile.role === "ops" && <Link to="/dashboard" className="topbar-link">Office</Link>}
+          <button className="topbar-link"
             onClick={async () => {
               const p = window.prompt("New password (min 8 characters):");
               if (!p) return;
@@ -229,7 +245,7 @@ function Shell() {
             }}>
             Password
           </button>
-          <button className="muted" style={{ background: "none", border: "none", cursor: "pointer", font: "inherit" }}
+          <button className="topbar-link"
             onClick={async () => { await supabase.auth.signOut(); nav("/"); }}>
             Sign out
           </button>

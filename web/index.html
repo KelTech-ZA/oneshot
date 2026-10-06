@@ -33,6 +33,44 @@
       text-transform: uppercase; font-size: 15px; }
     .wordmark b { color: var(--accent); }
 
+    /* The ribbon's own links.
+       A <button> needs its font declared or it renders in the browser's own
+       button font, and the inline `font: inherit` that did that job also reset
+       the SIZE - so Password and Sign out sat at 16px while Office, a plain
+       link with the same class, sat at 13px. One class for all of them
+       instead, at the size .muted was asking for in the first place. */
+    .topbar-link {
+      background: none; border: none; padding: 0; cursor: pointer;
+      font-family: var(--sans); font-size: 13px; line-height: 1.5;
+      color: var(--ink-soft); text-decoration: none;
+    }
+    .topbar-link:hover { color: var(--ink); }
+
+    /* Which workspace this is.
+       Two companies run on the same app with the same login, and the only
+       thing that distinguishes their screens is the data on them - so the one
+       question the ribbon has to answer at a glance is which of them you are
+       looking at. It sits with the wordmark because that is where a person
+       looks to find out what they are in. */
+    /* The name is the only thing in the ribbon allowed to shrink.
+       It first had a max-width of 44vw, which is not the same thing: on a
+       390px phone "Blank Projects Contemporary (Pty) Ltd" claimed its 171px,
+       squeezed the links, and Sign out wrapped - a 56px ribbon became 72px.
+       Letting it take only what is left over fixes that at every width
+       instead of at the one that was measured. */
+    .brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+    .wordmark { flex: none; }
+    .brand-bar { color: var(--line); font-size: 15px; line-height: 1; flex: none; }
+    .brand-ws {
+      cursor: default;
+      flex: 0 1 auto; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* ...and the links are the thing that never does. */
+    .topbar > .row { flex: none; white-space: nowrap; }
+    .brand-ws[data-switch] { cursor: pointer; }
+    .brand-ws[data-switch]:hover { color: var(--accent); }
+
     .page { flex:1; padding: 22px 18px; max-width: 720px; width:100%; margin: 0 auto;
       padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
     h1 { font-size: 24px; margin: 10px 0 22px; letter-spacing: -0.015em; }
