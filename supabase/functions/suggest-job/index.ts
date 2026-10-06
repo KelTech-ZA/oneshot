@@ -27,6 +27,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, materialise, jobsOf, refineAmendments } from "../_shared/extract.ts";
 import { diffChanges, diffJobs, recordFeedback } from "../_shared/learn.ts";
 import { loadHints, renderHints } from "../_shared/hints.ts";
+import { attachReminder, hintedWhen, parkThread, reminderHint } from "../_shared/reminders.ts";
 import type { Extraction } from "../_shared/extract.ts";
 import { applyPlanned, describe, nameJob, planAmendments } from "../_shared/amend.ts";
 import type { Change, JobMatch, JobOutcome } from "../_shared/amend.ts";
@@ -82,8 +83,13 @@ Deno.serve(async (req) => {
     hints?: Record<string, string>;
     /** Outlook's conversation id for the thread a job is being made from. */
     external_id?: string | null;
-    /** For the "seen" action: the threads currently on screen. */
+    /** For the "seen" and "parked" actions: the threads currently on screen. */
     external_ids?: string[];
+    /** A reminder to set alongside the job being created. */
+    reminder?: { due_at?: string | null; note?: string | null } | null;
+    /** For the "park" action: when to come back to this thread. */
+    due_at?: string | null;
+    note?: string | null;
     jobs?: { job_id: string; changes: Change[] }[];
     // What the parser originally offered, sent back so the difference between
     // it and what the reader approved can be kept. This is the correction.
@@ -99,6 +105,96 @@ Deno.serve(async (req) => {
   const body = String(thread.body ?? "").slice(0, MAX_CHARS);
   const subject = thread.subject ?? null;
   const sender = thread.from ?? user.email ?? "unknown";
+
+  // -------------------------------------------------------------------------
+  // The actions that are not about reading a thread
+  // -------------------------------------------------------------------------
+  // These come first, ABOVE the "nothing to read" guard, because they do not
+  // read anything. "seen" sat below it and asked about a list of conversation
+  // ids with no thread attached - so it was answered with
+  // {"error":"Nothing to read in that thread."} every single time, and the
+  // strip, which treats a reply with no `done` in it as "no opinion", said
+  // nothing and carried on. The whole server half of thread memory was a quiet
+  // no-op, and nothing anywhere said so.
+  //
+  // They also skip the vocabulary lookups below, which they never needed.
+
+  // ---- seen ---------------------------------------------------------------
+  // "Which of these threads already have jobs?" Asked once per scan, for
+  // everything on screen. The browser remembers its own decisions, but only
+  // the server knows what another machine, a colleague, or a forwarded mail
+  // already dealt with.
+  if (payload.action === "seen") {
+    const ids = (payload.external_ids ?? [])
+      .filter((x): x is string => typeof x === "string" && !!x)
+      .slice(0, 100);
+    if (!ids.length) return json({ ok: true, done: {} });
+
+    const { data, error } = await sb.rpc("threads_with_jobs", { p_ids: ids });
+    // Never fatal: not knowing is the state the strip was already in, and a
+    // failure here must not stop somebody creating a job.
+    if (error) {
+      console.warn("suggest-job: seen lookup failed:", error.message);
+      return json({ ok: true, done: {} });
+    }
+    const done: Record<string, string> = {};
+    for (const r of (data ?? []) as { external_id: string; job_ref: string }[]) {
+      if (r.external_id) done[r.external_id] = r.job_ref;
+    }
+    return json({ ok: true, done });
+  }
+
+  // ---- park ---------------------------------------------------------------
+  // "Later" meaning something.
+  //
+  // Later used to hide a thread until the next load and then show it again,
+  // which is forgetting with extra steps. What a person means by it is "come
+  // back to this on Thursday" - so it becomes a reminder, with no job behind
+  // it. There is deliberately no empty job standing in for the thread: a
+  // placeholder on the board looks like work that exists, and work that does
+  // not exist is how a crate goes missing on paper.
+  if (payload.action === "park") {
+    const out = await parkThread(sb, {
+      tenantId,
+      userId: user.id,
+      due_at: payload.due_at,
+      subject: subject ?? payload.note ?? null,
+      externalId: typeof payload.external_id === "string" && payload.external_id
+        ? payload.external_id.slice(0, 400) : null,
+      note: payload.note ?? null,
+      source: "extension_later",
+    });
+    if (!out.ok) return json({ error: out.error ?? "Could not set that reminder." }, 400);
+    return json({ ok: true, at: out.at });
+  }
+
+  // ---- parked -------------------------------------------------------------
+  // Which of the threads on screen am I coming back to later? Asked alongside
+  // "seen", so a thread parked until Thursday can be shown as parked rather
+  // than offered again every time the inbox redraws.
+  if (payload.action === "parked") {
+    const ids = (payload.external_ids ?? [])
+      .filter((x): x is string => typeof x === "string" && !!x)
+      .slice(0, 100);
+    if (!ids.length) return json({ ok: true, parked: {} });
+
+    const { data, error } = await sb.rpc("threads_parked", { p_ids: ids });
+    if (error) {
+      // Never fatal, for the same reason "seen" is not: not knowing is where
+      // the strip already stood, and it must not stop anybody making a job.
+      console.warn("suggest-job: parked lookup failed:", error.message);
+      return json({ ok: true, parked: {} });
+    }
+    const parked: Record<string, { due_at: string; note: string | null }> = {};
+    for (const r of (data ?? []) as { external_id: string; due_at: string; note: string | null }[]) {
+      if (r.external_id) parked[r.external_id] = { due_at: r.due_at, note: r.note ?? null };
+    }
+    return json({ ok: true, parked });
+  }
+
+  // -------------------------------------------------------------------------
+  // Everything past here is about reading a thread
+  // -------------------------------------------------------------------------
 
   if (!body.trim()) return json({ error: "Nothing to read in that thread." }, 400);
 
@@ -139,12 +235,21 @@ Deno.serve(async (req) => {
       ...jobs.flatMap((j) => (Array.isArray(j.missing) ? j.missing as string[] : [])),
     ].filter((v, i, a) => a.indexOf(v) === i);
 
+    // What this workspace has learned about chasing jobs of this kind, and the
+    // instant it points at for this one. The strip offers it; nothing is set
+    // without somebody saying so. An alarm that books itself is an alarm
+    // people turn off.
+    const firstType = (jobs[0]?.type as string | undefined) ?? null;
+    const rHint = await reminderHint(sb, firstType);
+    const rWhen = hintedWhen(rHint, (jobs[0]?.scheduled_date as string | undefined) ?? null);
+
     return json({
       ok: true,
       isJob,
       confidence: ex.confidence ?? 0,
       jobCount: jobs.length,
       missing,
+      reminder_hint: { ...rHint, suggested_at: rWhen },
       // The pane renders this; the extraction round-trips back on create.
       //
       // Sent WHATEVER the verdict. It used to be withheld unless the parser
@@ -156,31 +261,6 @@ Deno.serve(async (req) => {
       extraction: ex,
       summary: isJob ? summarise(jobs) : null,
     });
-  }
-
-  // ---- seen ---------------------------------------------------------------
-  // "Which of these threads already have jobs?" Asked once per scan, for
-  // everything on screen. The browser remembers its own decisions, but only
-  // the server knows what another machine, a colleague, or a forwarded mail
-  // already dealt with.
-  if (payload.action === "seen") {
-    const ids = (payload.external_ids ?? [])
-      .filter((x): x is string => typeof x === "string" && !!x)
-      .slice(0, 100);
-    if (!ids.length) return json({ ok: true, done: {} });
-
-    const { data, error } = await sb.rpc("threads_with_jobs", { p_ids: ids });
-    // Never fatal: not knowing is the state the strip was already in, and a
-    // failure here must not stop somebody creating a job.
-    if (error) {
-      console.warn("suggest-job: seen lookup failed:", error.message);
-      return json({ ok: true, done: {} });
-    }
-    const done: Record<string, string> = {};
-    for (const r of (data ?? []) as { external_id: string; job_ref: string }[]) {
-      if (r.external_id) done[r.external_id] = r.job_ref;
-    }
-    return json({ ok: true, done });
   }
 
   // ---- create -------------------------------------------------------------
@@ -221,7 +301,26 @@ Deno.serve(async (req) => {
         approvedBy: user.id,
       });
 
-      return json({ ok: true, reply, refs });
+      // A reminder the reader asked for, alongside the job. Deliberately AFTER
+      // the job exists and deliberately unable to throw: a thread that
+      // produced no job because a date was malformed would be the worst
+      // trade this system could make.
+      let reminder: { set: boolean; at?: string; why?: string } = { set: false };
+      if (payload.reminder?.due_at && refs.length) {
+        const { data: made } = await sb.from("jobs")
+          .select("id").eq("tenant_id", tenantId).eq("ref", refs[0]).maybeSingle();
+        if (made?.id) {
+          reminder = await attachReminder(sb, {
+            tenantId, jobId: made.id, userId: user.id,
+            reminder: payload.reminder, source: "extension_card",
+          });
+          if (!reminder.set) {
+            console.warn("suggest-job: reminder not set:", reminder.why);
+          }
+        }
+      }
+
+      return json({ ok: true, reply, refs, reminder });
     } catch (e) {
       console.error("suggest-job: create failed:", e instanceof Error ? e.message : String(e));
       return json({ error: "Could not create the job. Nothing was saved." }, 500);

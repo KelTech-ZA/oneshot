@@ -49,24 +49,40 @@ Deno.serve(async (req) => {
 
   if (kind === "reminder") {
     const { data: r } = await admin.from("job_reminders")
-      .select("id, tenant_id, job_id, user_id, note, acked_at").eq("id", id).maybeSingle();
+      .select("id, tenant_id, job_id, user_id, note, acked_at, subject, external_id")
+      .eq("id", id).maybeSingle();
     if (!r) return json({ error: "reminder not found" }, 404);
     // Acknowledged between the sweep claiming it and this running. Nothing to
     // say any more.
     if (r.acked_at) return json({ ok: true, sent: 0, reason: "already acknowledged" });
 
-    const { data: job } = await admin.from("jobs")
-      .select("ref, scheduled_date, status").eq("id", r.job_id).maybeSingle();
+    // A reminder may have no job: a mail thread somebody parked from the
+    // Outlook strip with "remind me to deal with this on Thursday". There is
+    // deliberately no empty job standing in for it, so the notification has to
+    // be able to speak for itself.
+    const { data: job } = r.job_id
+      ? await admin.from("jobs")
+        .select("ref, scheduled_date, status").eq("id", r.job_id).maybeSingle()
+      : { data: null };
 
     reminderId = r.id;
     tenantId   = r.tenant_id;
     only       = [r.user_id];
-    title      = `Reminder — ${job?.ref ?? "job"}`;
-    // The person's own words first; they wrote them to be read at this moment.
-    body       = r.note
-      ? r.note
-      : `${job?.ref ?? "This job"} · ${job?.scheduled_date ?? "no date"}`;
-    url        = `/job/${r.job_id}`;
+
+    if (r.job_id) {
+      title = `Reminder — ${job?.ref ?? "job"}`;
+      // The person's own words first; they wrote them to be read at this moment.
+      body  = r.note
+        ? r.note
+        : `${job?.ref ?? "This job"} · ${job?.scheduled_date ?? "no date"}`;
+      url   = `/job/${r.job_id}`;
+    } else {
+      // Said plainly, because this one is asking for something to be done
+      // rather than telling somebody about work already on the board.
+      title = "Come back to this";
+      body  = [r.note, r.subject].filter(Boolean).join(" — ") || "A thread you parked";
+      url   = "/";
+    }
   } else if (kind === "event") {
     const { data: ev } = await admin.from("custody_events")
       .select("id, tenant_id, job_id, type, user_id, photo_path").eq("id", id).maybeSingle();

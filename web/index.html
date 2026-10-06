@@ -462,6 +462,12 @@
       color: var(--ink-soft); cursor: pointer; padding: 0 2px;
     }
     .rem-x:hover { color: var(--warn); }
+    /* What the workspace has learned, offered. Marked out from the reminders
+       themselves - this is the app saying something, not a record of what
+       somebody decided, and the two must not be mistaken for each other. */
+    .rem-learned { border-left: 3px solid var(--accent); }
+    .rem-learned-say { font-weight: 600; font-size: 14px; }
+    .rem-take { margin-top: 10px; }
     .rem-past { margin-bottom: 12px; }
     .rem-past summary { font-size: 13px; cursor: pointer; }
     .rem-done { font-size: 13px; padding: 3px 0 0 4px; }

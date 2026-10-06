@@ -122,8 +122,11 @@ function Wheel({ values, value, onChange, label, pick }) {
 
 // ---------------------------------------------------------------------------
 
-export default function JobReminders({ jobId, tenantId, jobRef, profile, names }) {
+export default function JobReminders({ jobId, tenantId, jobRef, jobType, scheduledDate, profile, names }) {
   const [list, setList] = useState([]);
+  // What this workspace has learned about chasing jobs of this kind. Asked
+  // once, and only used to OFFER - see the block further down.
+  const [hint, setHint] = useState(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -147,6 +150,19 @@ export default function JobReminders({ jobId, tenantId, jobRef, profile, names }
   };
 
   useEffect(() => { load(); }, [jobId]);
+
+  // Jobs like this one: how many got chased, and how far ahead. Derived from
+  // the reminders the workspace has already set, so it costs nothing to keep
+  // up to date and cannot disagree with them.
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      const { data, error } = await supabase.rpc("reminder_hint", { p_type: jobType ?? "" });
+      if (stop || error) return;
+      setHint(Array.isArray(data) ? data[0] ?? null : data ?? null);
+    })();
+    return () => { stop = true; };
+  }, [jobType]);
 
   // Asking again when the tab is returned to, and on a slow clock while it is
   // being looked at. Two jobs at once: a reminder a colleague set on another
@@ -192,6 +208,37 @@ export default function JobReminders({ jobId, tenantId, jobRef, profile, names }
 
   const due = instant(day, hh, mm);
   const past = due <= new Date();
+
+  // The instant the hint points at for THIS job: its scheduled day, less the
+  // lead the workspace usually leaves, at the hour it usually picks. Null when
+  // the job has no date to count back from, or when that moment has gone -
+  // offering a time in the past is worse than offering nothing.
+  const suggestedAt = (() => {
+    if (!hint?.suggest || !scheduledDate) return null;
+    const when = instant(shiftKey(scheduledDate, -Number(hint.lead_days || 0)),
+                         Number(hint.at_hour || 8), 0);
+    return when > new Date() ? when : null;
+  })();
+
+  const takeSuggestion = async () => {
+    if (!suggestedAt) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("job_reminders").insert({
+        tenant_id: tenantId, job_id: jobId,
+        user_id: profile.id, created_by: profile.id,
+        due_at: suggestedAt.toISOString(),
+        note: null,
+        // Kept apart from one somebody typed out, so the console can tell an
+        // offer that was taken from a decision made from scratch - and so a
+        // suggestion accepted does not look like independent evidence for
+        // making the same suggestion again.
+        source: "suggested",
+      });
+      if (error) { setErr(error.message); return; }
+      await load();
+    } finally { setBusy(false); }
+  };
 
   const save = async () => {
     setErr("");
@@ -296,6 +343,26 @@ export default function JobReminders({ jobId, tenantId, jobRef, profile, names }
 
           <button className="btn btn-primary" disabled={busy || past} onClick={save}>
             {busy ? "Saving…" : "Set reminder"}
+          </button>
+        </div>
+      )}
+
+      {/* What the workspace does with jobs like this one.
+          Offered, never set. An app that books its own notifications is one
+          people turn off, and the moment that happens the reminders somebody
+          DID ask for stop arriving too. */}
+      {!open && !waiting.length && hint?.suggest && suggestedAt && (
+        <div className="card rem-learned">
+          <div className="rem-learned-say">
+            Jobs of this kind usually get a reminder — {hint.reminded} of the last {hint.jobs}.
+          </div>
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+            Usually {hint.lead_days === 0 ? "on the day" : hint.lead_days === 1
+              ? "the day before" : `${hint.lead_days} days before`}, around {pad(hint.at_hour)}:00.
+          </div>
+          <button className="btn btn-ghost rem-take" disabled={busy}
+            onClick={takeSuggestion}>
+            Set it for {spell(suggestedAt)}
           </button>
         </div>
       )}

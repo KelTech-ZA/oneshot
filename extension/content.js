@@ -205,6 +205,24 @@
     border-radius: 6px; padding: 5px 8px; font: inherit; min-width: 210px;
   }
   .oneshot-warn { color: #e0a33e; }
+  /* Reminders. Two shapes: a pair of fields inside the job card, and the
+     little "come back to this?" step the Later button opens. */
+  .oneshot-rem { grid-column: 1 / -1; border-top: 1px solid #2b3033; padding-top: 8px; margin-top: 2px; }
+  .oneshot-rem-head { display: flex; align-items: center; gap: 8px; }
+  .oneshot-rem-head span { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8d979b; }
+  .oneshot-rem-when { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+  .oneshot-rem-when input {
+    background: #1c2123; border: 1px solid #343a3d; color: #eef1f2;
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px;
+  }
+  .oneshot-rem-says { font-size: 12px; color: #8d979b; margin-top: 6px; }
+  .oneshot-rem-says.on { color: #cdd5d8; }
+  .oneshot-learned { color: #7fb7e8; }
+  .oneshot-rowcol { flex-direction: column; align-items: stretch; }
+  .oneshot-rowtop { display: flex; gap: 10px; align-items: flex-start; }
+  .oneshot-later { margin-top: 8px; padding: 8px 10px; background: #1c2123;
+    border: 1px solid #2b3033; border-radius: 8px; }
+  .oneshot-later-q { color: #eef1f2; font-size: 13px; margin-bottom: 8px; }
   #oneshot-auth { padding: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   #oneshot-auth input {
     background: #1c2123; border: 1px solid #343a3d; color: #eef1f2;
@@ -471,10 +489,60 @@
   // The row id stays as the fallback for anything that has no conversation id.
   const keyOf = (m) => (m && (m.convId || m.id)) || "";
 
+  // -------------------------------------------------------------------------
+  // Saying a time
+  // -------------------------------------------------------------------------
+  // Native date and time inputs, not the wheel the web app uses: the strip is
+  // a cramped overlay sitting on top of somebody's mail, and sixty scrolling
+  // cells in it would be absurd. On a phone these ARE the wheel; on a desktop
+  // they are two fields you can type into. Both of the person's ways in, with
+  // no code of our own to get wrong.
+  //
+  // Built in local time on purpose. `new Date(y, m-1, d, hh, mm)` is the
+  // constructor that means "here"; `new Date("2026-10-07")` is the one that
+  // means UTC midnight and lands a reminder on the wrong day for anyone west
+  // of Greenwich.
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dateVal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const timeVal = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+
+  function whenISO(dateStr, timeStr) {
+    const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || "").trim());
+    const t = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr || "").trim());
+    if (!d || !t) return null;
+    if (+t[1] > 23 || +t[2] > 59) return null;
+    const when = new Date(+d[1], +d[2] - 1, +d[3], +t[1], +t[2], 0, 0);
+    if (!(when.getTime() > Date.now())) return null;
+    return when.toISOString();
+  }
+
+  /** "Wed 7 Oct at 09:30", for reading a picked time back before it is set. */
+  const spellWhen = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })
+      + ` at ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  };
+
+  const inDays = (n, hour) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    d.setHours(hour, 0, 0, 0);
+    return d;
+  };
+
   // Threads the SERVER says already produced a job, keyed the same way as
   // decisions. Held separately so a withdrawn job on the server can bring a
   // thread back, which clearing a local decision never would.
   let serverDone = {};
+  // conversation -> { due_at, note }: threads this person has parked until
+  // later. Kept apart from decisions for the same reason serverDone is - it is
+  // the server's answer, and un-parking somewhere else has to bring the thread
+  // back here.
+  let parkedThreads = {};
+  // conversation -> { stage, date, time, note, busy, error }: the Later step,
+  // held in state rather than in the DOM so a republishing inbox cannot wipe a
+  // half-filled answer out from under somebody.
+  const laterAsk = new Map();
   let askingSeen = false;
 
   /**
@@ -491,20 +559,34 @@
     if (!ids.length) return;
     askingSeen = true;
     try {
-      const out = await api("suggest-job", { action: "seen", external_ids: ids });
-      if (out && out.done && typeof out.done === "object") {
+      // Two questions, one round trip each, asked together: which of these
+      // already produced a job, and which have I parked until later. Both are
+      // reasons not to offer a thread, and asking for one without the other
+      // would leave the strip right about half of the threads on screen.
+      const [doneOut, parkOut] = await Promise.all([
+        api("suggest-job", { action: "seen", external_ids: ids }),
+        api("suggest-job", { action: "parked", external_ids: ids }),
+      ]);
+
+      let moved = false;
+      if (doneOut && doneOut.done && typeof doneOut.done === "object") {
         // Compared by content, not by size. {conv-a: ...} and {conv-b: ...}
         // are the same length and a completely different answer.
-        const same = JSON.stringify(out.done) === JSON.stringify(serverDone);
-        serverDone = out.done;
-        // sift(), not render(): the answer has to go back through the FILTER,
-        // which is what decides whether a thread is offered. render() only
-        // redraws the list scan() had already worked out, so the server's
-        // answer arrived one scan late - a thread a colleague had already
-        // dealt with was offered once more before disappearing. Not scan()
-        // either, or asking would ask again, for ever.
-        if (!same) sift();
+        if (JSON.stringify(doneOut.done) !== JSON.stringify(serverDone)) moved = true;
+        serverDone = doneOut.done;
       }
+      if (parkOut && parkOut.parked && typeof parkOut.parked === "object") {
+        if (JSON.stringify(parkOut.parked) !== JSON.stringify(parkedThreads)) moved = true;
+        parkedThreads = parkOut.parked;
+      }
+
+      // sift(), not render(): the answer has to go back through the FILTER,
+      // which is what decides whether a thread is offered. render() only
+      // redraws the list scan() had already worked out, so the server's
+      // answer arrived one scan late - a thread a colleague had already
+      // dealt with was offered once more before disappearing. Not scan()
+      // either, or asking would ask again, for ever.
+      if (moved) sift();
     } catch { /* leave it as it was */ } finally { askingSeen = false; }
   }
 
@@ -516,9 +598,14 @@
     flagged = recent
       .map(m => ({ m, g: gate(m, { clientDomains, ownDomains: [], sensitivity: 0 }) }))
       .filter(x => x.g.pass && !laterThisLoad.has(keyOf(x.m))
-                && (justDone.has(keyOf(x.m))
+                // A thread with the Later question open stays on screen, or
+                // the question disappears as it is being answered.
+                && (laterAsk.has(keyOf(x.m))
+                    || justDone.has(keyOf(x.m))
                     || (decisions[keyOf(x.m)] !== "no" && decisions[keyOf(x.m)] !== "done"
-                        && !serverDone[keyOf(x.m)])))
+                        && !serverDone[keyOf(x.m)]
+                        // Parked until Thursday: not undealt-with, just not now.
+                        && !parkedThreads[keyOf(x.m)])))
       .sort((a, b) => b.g.score - a.g.score);
     refresh();
     return recent;
@@ -550,6 +637,10 @@
     // A card being filled in, or an amendment being read. Neither is finished.
     if (manual && !manual.done && !manual.error) return true;
     if (amend && !amend.error) return true;
+    // A Later question part-answered. The state survives a redraw, but the
+    // caret does not, and having the cursor jump out of a date field while
+    // somebody is typing into it is its own kind of broken.
+    if (laterAsk.size) return true;
     // Anything else with the caret in it, including a row's own fields.
     const a = document.activeElement;
     return !!(a && strip.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
@@ -756,6 +847,73 @@
     const hard = el("input", { type: "checkbox" });
     hard.checked = f.hard;
 
+    // ---- the reminder on the card ------------------------------------------
+    // The second half of "build the reminder feature into the extensions": a
+    // job made from a mail can carry one, set at the same moment, without
+    // going to the app to do it.
+    //
+    // What the workspace has learned decides what is offered. reminder_hint
+    // says whether jobs of this type usually get chased and how far ahead, so
+    // the fields arrive filled in for the kinds of job that always need it and
+    // empty for the kinds that never do. Filled in, never ticked: an alarm
+    // that books itself is an alarm people turn off.
+    const hint = (manual.out && manual.out.reminder_hint) || null;
+    if (!manual.rem) {
+      const sug = hint && hint.suggest && hint.suggested_at ? new Date(hint.suggested_at) : null;
+      manual.rem = sug
+        ? { on: false, date: dateVal(sug), time: timeVal(sug), note: "" }
+        : { on: false, date: "", time: "", note: "" };
+    }
+    const rem = manual.rem;
+
+    const remOn = el("input", { type: "checkbox" });
+    remOn.checked = !!rem.on;
+    const remDate = el("input", { type: "date", value: rem.date });
+    const remTime = el("input", { type: "time", value: rem.time });
+    const remNote = el("input", { type: "text", value: rem.note,
+      placeholder: "What to chase (optional)" });
+    const remSays = el("div", { className: "oneshot-rem-says" });
+
+    const remRefresh = () => {
+      rem.on = remOn.checked;
+      rem.date = remDate.value; rem.time = remTime.value; rem.note = remNote.value;
+      const iso = whenISO(rem.date, rem.time);
+      for (const n of [remDate, remTime, remNote]) n.disabled = !rem.on;
+      if (!rem.on) {
+        remSays.className = "oneshot-rem-says";
+        remSays.textContent = hint && hint.suggest
+          ? `Jobs of this kind usually get one - ${hint.reminded} of the last ${hint.jobs}.`
+          : hint && hint.jobs
+            ? `${hint.reminded} of the last ${hint.jobs} jobs of this kind had one.`
+            : "";
+        if (hint && hint.suggest) remSays.className = "oneshot-rem-says oneshot-learned";
+        return;
+      }
+      remSays.className = iso ? "oneshot-rem-says on" : "oneshot-rem-says oneshot-warn";
+      remSays.textContent = iso
+        ? `You will be reminded ${spellWhen(iso)}.`
+        : "Pick a day and a time that has not already gone.";
+    };
+    remOn.onchange = () => {
+      // Ticking it with nothing in the fields offers tomorrow morning rather
+      // than an empty pair of boxes and a complaint.
+      if (remOn.checked && !whenISO(remDate.value, remTime.value)) {
+        const d = inDays(1, 8);
+        remDate.value = dateVal(d); remTime.value = timeVal(d);
+      }
+      remRefresh();
+    };
+    for (const n of [remDate, remTime, remNote]) n.oninput = remRefresh;
+    remRefresh();
+
+    const remBlock = el("div", { className: "oneshot-rem" }, [
+      el("label", { className: "oneshot-rem-head" }, [
+        remOn, el("span", { textContent: "Remind me about this job" }),
+      ]),
+      el("div", { className: "oneshot-rem-when" }, [remDate, remTime, remNote]),
+      remSays,
+    ]);
+
     const go = el("button", { className: "primary", textContent: "Create job" });
     const cancel = el("button", { className: "ghost", textContent: "Cancel" });
     const acts = again ? [again, cancel, go] : [cancel, go];
@@ -773,12 +931,16 @@
       // difference between them can be kept. That difference is the only
       // labelled correction this system ever gets, and it was being thrown
       // away every time anyone fixed a field before pressing Create.
+      const remAt = rem.on ? whenISO(rem.date, rem.time) : null;
       const done = await api("suggest-job", {
         action: "create", thread: manual.thread, extraction: ex,
         proposed: (manual.out && manual.out.extraction) || null,
         // So the server knows which thread this job came from, and can say so
         // to any other browser that asks.
         external_id: keyOf(manual.msg) || null,
+        // Attached after the job exists, server side, and unable to stop it
+        // being made - see _shared/reminders.ts.
+        reminder: remAt ? { due_at: remAt, note: rem.note.trim() || null } : null,
       });
       if (done.error) { msg.textContent = done.error; go.disabled = false; go.textContent = "Create job"; return; }
 
@@ -791,7 +953,20 @@
         store.save({ decisions });
         justDone.set(key, { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
       }
-      manual = { done: { text: done.reply || "Created.", ref: (done.refs || [])[0] || null, subject: manual.msg.subject } };
+      // Said out loud either way. A reminder silently not set is the failure
+      // this whole feature cannot afford.
+      let text = done.reply || "Created.";
+      if (remAt) {
+        text += done.reminder && done.reminder.set
+          ? `  -  reminder set for ${spellWhen(remAt)}.`
+          : "  -  the job was made but the reminder was NOT set.";
+      } else if (rem.on) {
+        // Ticked, but the day and time did not add up to a future instant. The
+        // job is fine; saying nothing would leave somebody believing an alarm
+        // exists that does not.
+        text += "  -  no reminder was set: that day and time had already gone.";
+      }
+      manual = { done: { text, ref: (done.refs || [])[0] || null, subject: manual.msg.subject } };
       scan();
     };
 
@@ -807,6 +982,7 @@
           el("label", { className: "oneshot-f oneshot-hard" }, [
             el("span", { textContent: "Hard deadline" }), hard,
           ]),
+          remBlock,
         ]),
         el("div", { className: "oneshot-acts", style: "margin-top:10px" }, acts),
         msg,
@@ -1158,9 +1334,20 @@
       proposals.delete(keyOf(m));
       decisions[keyOf(m)] = "no"; store.save({ decisions }); scan();
     };
+    // "Later" now means something.
+    //
+    // It used to hide the row until the next load and then show it again,
+    // which is forgetting with extra steps - and it is the exact complaint
+    // that started all of this: the same threads, over and over, every reload.
+    // What a person means by Later is "come back to this on Thursday", so it
+    // asks, and if they say yes it becomes a reminder with no job behind it.
+    //
+    // Saying no still does the old thing, because sometimes later really does
+    // just mean not in the next ten minutes.
     later.onclick = () => {
       proposals.delete(keyOf(m));
-      laterThisLoad.add(keyOf(m)); scan();
+      laterAsk.set(keyOf(m), { stage: "ask" });
+      render();
     };
 
     const main = el("div", { className: "oneshot-main oneshot-goto", title: "Show me this one in the list" }, [subj, meta]);
@@ -1186,8 +1373,124 @@
       window.postMessage({ __oneshot: "reveal", id: m.id, bottomInset: stripInset() }, "*");
       setTimeout(() => { window.removeEventListener("message", h); if (meta.textContent === "Finding it...") meta.textContent = held; }, 6000);
     };
-    return el("div", { className: "oneshot-row" }, [
-      main, el("div", { className: "oneshot-acts" }, [later, not, make]),
+    const ask = laterAsk.get(keyOf(m));
+    const acts = el("div", { className: "oneshot-acts" }, [later, not, make]);
+    // With the Later question open the row becomes a column: the question goes
+    // UNDER the subject and buttons rather than inside the clickable area, or
+    // tapping a date field would also ask Outlook to scroll to the mail.
+    if (!ask) return el("div", { className: "oneshot-row" }, [main, acts]);
+    return el("div", { className: "oneshot-row oneshot-rowcol" }, [
+      el("div", { className: "oneshot-rowtop" }, [main, acts]),
+      laterStep(m, ask),
+    ]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Later -> "come back to this?" -> when -> set
+  // -------------------------------------------------------------------------
+  // Two steps rather than one, because the question and the answer are
+  // different decisions: most of the time somebody just wants the row gone,
+  // and putting a date picker in front of them for that is a tax. The ones who
+  // do want reminding get the full date and time on the second step.
+  //
+  // Every bit of state is in `laterAsk`, never in the DOM. The panel is
+  // rebuilt whenever the inbox republishes, and a half-filled answer living in
+  // input values would be wiped by a mail arriving.
+  function laterStep(m, ask) {
+    const key = keyOf(m);
+    const close = () => { laterAsk.delete(key); };
+
+    if (ask.stage === "ask") {
+      const yes = el("button", { className: "primary", textContent: "Yes, remind me" });
+      const no = el("button", { className: "ghost", textContent: "No, just hide it" });
+      yes.onclick = () => {
+        // Tomorrow morning, because that is what Later means most of the time.
+        const d = inDays(1, 8);
+        laterAsk.set(key, { stage: "when", date: dateVal(d), time: timeVal(d), note: "" });
+        render();
+      };
+      no.onclick = () => { close(); laterThisLoad.add(key); scan(); };
+      return el("div", { className: "oneshot-later" }, [
+        el("div", { className: "oneshot-later-q",
+          textContent: "Set a reminder to come back and make a job from this?" }),
+        el("div", { className: "oneshot-acts" }, [no, yes]),
+      ]);
+    }
+
+    const date = el("input", { type: "date", value: ask.date || "" });
+    const time = el("input", { type: "time", value: ask.time || "" });
+    const note = el("input", { type: "text", value: ask.note || "",
+      placeholder: "What for (optional)" });
+    const says = el("div", { className: "oneshot-rem-says" });
+    const set = el("button", { className: "primary",
+      textContent: ask.busy ? "Setting..." : "Set reminder" });
+    const cancel = el("button", { className: "ghost", textContent: "Cancel" });
+    cancel.onclick = () => { close(); render(); };
+
+    // The sentence and the button are recomputed IN PLACE as the fields
+    // change, not on the next render. Re-rendering would take the caret out of
+    // the field being typed in; not recomputing at all left the readback
+    // showing the time that was there before - so "You will be reminded
+    // tomorrow at 08:00" sat under a date of 2020, and Set stayed live. The
+    // readback is the only thing standing between a person and a reminder
+    // quietly set for the wrong day, so it has to follow the fields.
+    const sayIt = () => {
+      const cur = laterAsk.get(key) || {};
+      const iso = whenISO(cur.date, cur.time);
+      if (cur.error) {
+        says.className = "oneshot-rem-says oneshot-warn";
+        says.textContent = cur.error;
+      } else if (iso) {
+        says.className = "oneshot-rem-says on";
+        says.textContent = `You will be reminded ${spellWhen(iso)}.`;
+      } else {
+        says.className = "oneshot-rem-says oneshot-warn";
+        says.textContent = "Pick a day and a time that has not already gone.";
+      }
+      set.disabled = !iso || !!cur.busy;
+    };
+
+    // Typing is kept in state as it happens, so a redraw does not lose it.
+    const keep = () => {
+      laterAsk.set(key, {
+        ...laterAsk.get(key), date: date.value, time: time.value, note: note.value,
+      });
+      sayIt();
+    };
+    date.oninput = keep; time.oninput = keep; note.oninput = keep;
+    date.onchange = keep; time.onchange = keep;
+    sayIt();
+
+    set.onclick = async () => {
+      const at = whenISO(laterAsk.get(key)?.date, laterAsk.get(key)?.time);
+      if (!at) return;
+      laterAsk.set(key, { ...laterAsk.get(key), busy: true, error: null });
+      render();
+      const out = await api("suggest-job", {
+        action: "park",
+        external_id: key || null,
+        due_at: at,
+        note: (laterAsk.get(key)?.note || "").trim() || null,
+        thread: { subject: m.subject, from: m.from, body: m.body, received_at: m.received },
+      });
+      if (out.error) {
+        laterAsk.set(key, { ...laterAsk.get(key), busy: false, error: out.error });
+        render();
+        return;
+      }
+      // Remembered locally as well as on the server, so the row goes away now
+      // rather than on whatever scan next happens to ask.
+      parkedThreads[key] = { due_at: at, note: null };
+      close();
+      scan();
+    };
+
+    return el("div", { className: "oneshot-later" }, [
+      el("div", { className: "oneshot-later-q", textContent: "When should it come back?" }),
+      el("div", { className: "oneshot-rem-when" }, [date, time]),
+      el("div", { className: "oneshot-rem-when" }, [note]),
+      says,
+      el("div", { className: "oneshot-acts", style: "margin-top:8px" }, [cancel, set]),
     ]);
   }
 

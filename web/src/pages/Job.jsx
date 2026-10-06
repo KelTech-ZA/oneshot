@@ -325,6 +325,7 @@ export default function Job() {
       {/* Directly under the dates, because that is what a reminder is about and
           where the eye already is. The job card is the only place this lives. */}
       <JobReminders jobId={id} tenantId={job.tenant_id} jobRef={job.ref}
+        jobType={job.type} scheduledDate={job.scheduled_date}
         profile={profile} names={names} />
 
       {stops.length > 2 && (
