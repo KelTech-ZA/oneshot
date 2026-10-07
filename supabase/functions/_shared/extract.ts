@@ -10,6 +10,7 @@ import { planBilling, planCharges } from "./billing.ts";
 import type { ChargeType, ClientRow } from "./billing.ts";
 import { noteVocab, recordFeedback } from "./learn.ts";
 import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
+import { dedupeJobs } from "./dedupe.ts";
 import { checkYear, todayInZA, weekdayOf } from "./dates.ts";
 import { describeFailure, explainFailure } from "./failure.ts";
 import type { Hint } from "./hints.ts";
@@ -60,6 +61,16 @@ ONE JOB OR SEVERAL — decide this first:
 - Split when activities differ in DATE, TIME, JOB TYPE or CLIENT. Building
   crates for one client and delivering another client's case are separate jobs
   even at the same hour of the same day.
+- NEVER SPLIT PER ITEM. Those four things are the ONLY reasons to split. Three
+  artworks that all need a crate built, for one client, on one day, are ONE
+  "fabrication" job carrying THREE ITEMS - not three jobs. The same goes for
+  packing six frames or delivering four crates. If two entries you are about to
+  write would have the same type, the same client_ref, the same scheduled_date
+  and the same time_window, they are the same job and you have split wrongly:
+  write one entry and put the pieces in its "items".
+  A message about one consignment that is built, then packed, then exported is
+  still THREE jobs, because the TYPE differs each time. That is correct. What
+  is wrong is the same type appearing twice.
 - A heading like "Friday, 25 Sept 2026:" sets the date for every activity
   beneath it until the next date heading. Each job carries its own
   scheduled_date — never two dates in one job.
@@ -394,7 +405,12 @@ export function amendmentsOf(ex: Extraction): AmendmentIn[] {
 
 export function jobsOf(ex: Extraction): Record<string, unknown>[] {
   const list = Array.isArray(ex.jobs) ? ex.jobs : (ex.job ? [ex.job] : []);
-  return list.filter((j) => j && typeof j === "object").slice(0, MAX_JOBS);
+  const kept = list.filter((j) => j && typeof j === "object").slice(0, MAX_JOBS);
+  // One choke point, so the count the extension shows, the jobs the board gets
+  // and the diff the learning module keeps can never disagree about how many
+  // jobs a message held. A rule applied in three places is a rule that holds in
+  // two of them.
+  return dedupeJobs(kept);
 }
 
 /**
@@ -875,6 +891,11 @@ export async function materialise(
   const makeJob = async (j: Record<string, unknown>): Promise<{ ok: boolean; line: string }> => {
     const perJobMissing = Array.isArray(j.missing) ? j.missing as string[] : [];
     const flags = [...(ex.missing ?? []), ...perJobMissing].map((m) => `missing_info:${m}`);
+    // Anything the reading already attached to this job - today only the note
+    // left by dedupeJobs when it folded indistinguishable entries together.
+    for (const f of (Array.isArray(j.flags) ? j.flags as string[] : [])) {
+      if (typeof f === "string" && f) flags.push(f);
+    }
 
     // A date the model wrote in words - "Monday 7 September" - is rejected by
     // Postgres and used to take the entire job down with it. Anything that is

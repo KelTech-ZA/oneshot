@@ -138,7 +138,16 @@ Deno.test("a message with no quote writes no money at all", async () => {
 });
 
 Deno.test("the rate card is read once however many jobs there are", async () => {
-  const many: Extraction = { ...EX, jobs: [EX.jobs![0], EX.jobs![0], EX.jobs![0]] };
+  // Three jobs on three days. They used to be the SAME object three times,
+  // which stopped being three jobs the moment dedupeJobs started reading
+  // indistinguishable entries as one - correctly, since that is exactly the
+  // over-splitting this fixture had accidentally been modelling. The point of
+  // the test is the rate-card lookup, so the jobs only need to be distinct.
+  const many: Extraction = { ...EX, jobs: [
+    { ...(EX.jobs![0]), scheduled_date: "2026-10-12" },
+    { ...(EX.jobs![0]), scheduled_date: "2026-10-13" },
+    { ...(EX.jobs![0]), scheduled_date: "2026-10-14" },
+  ] };
   const { sb, calls } = stub(SEED);
   await materialise(sb, "tenant-1", { id: "msg-1" }, many);
   // Only inserts/updates are recorded, so count the charge inserts instead:
