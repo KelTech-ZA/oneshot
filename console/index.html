@@ -79,11 +79,20 @@
     border-radius: 7px; background: #0b0e10;
   }
   .decide .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 9px; }
+  /* `hidden` only works while nothing else sets display. `.decide .row` does,
+     so the "Means" dropdown sat on screen on every row whatever was chosen -
+     a dead control reading "Pick a workspace first…" next to a question about
+     teaching. Stated once, for every hidden thing on the page. */
+  [hidden] { display: none !important; }
   .decide label {
     font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
     color: var(--muted); font-weight: 600; min-width: 76px;
   }
   .decide .hint { font-size: 12px; color: var(--muted); max-width: 62ch; margin: 2px 0 9px; }
+  /* A question, asked in full and in sentence case - the uppercase labels
+     beside the dropdowns name a field, and this is not a field, it is a
+     question with a blank space under it. */
+  .ask { font-size: 14px; margin: 2px 0 4px; }
   .scope-warn { color: var(--warn); font-size: 12px; }
   .pill {
     display: inline-block; font-size: 11px; border: 1px solid var(--line);
@@ -91,6 +100,18 @@
   }
   .pill.global { border-color: var(--accent); color: var(--accent); }
   .act-map { color: var(--good); } .act-teach { color: var(--accent); } .act-ignore { color: var(--muted); }
+  /* A row has to say what went wrong before it asks for a decision. Without
+     this line the screen is a list of words with no reason to touch it. */
+  .says { font-size: 13px; line-height: 1.5; margin-bottom: 4px; }
+  .says b { color: var(--ink, #eef1f2); }
+  .cost { color: var(--accent); }
+  /* What the chosen option will actually do, in the same words the person
+     would use. Shown before saving, because a rule is easier to avoid than to
+     undo. */
+  .preview { font-size: 13px; line-height: 1.5; margin-top: 10px;
+             padding: 8px 10px; border-left: 2px solid var(--accent); }
+  .preview.off { border-left-color: var(--muted); color: var(--muted); }
+  .why { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
   #signin { max-width: 340px; margin: 60px auto; }
   #signin .panel > * + * { margin-top: 10px; }
@@ -293,6 +314,49 @@ let openKey = null;
 
 const rowKey = (r) => `${r.kind}::${r.normalised}`;
 
+// What this row IS, in a sentence, and what not deciding it has cost.
+//
+// The screen used to show the word and the subject line it came from and
+// nothing else, which reads as a list of words rather than a list of problems.
+// For a client-name row that is actively misleading: the unrecognised word IS
+// a customer's name, so it looks like the row is telling you who the customer
+// was, rather than that nobody could place them.
+function says(r) {
+  const seen = Array.isArray(r.where_seen) ? r.where_seen : [];
+  // Subject and verb have to agree, or the sentence reads as a glitch and
+  // undoes the point of writing one: "2 workspaces has no job type by that
+  // name" is not a sentence anybody trusts.
+  const one = seen.length === 1;
+  const who = one ? esc(seen[0].workspace)
+            : seen.length > 1 ? `None of the ${seen.length} workspaces that saw it`
+            : "This workspace";
+  const has = one || seen.length === 0 ? "has no" : "has a";
+  const none = one || seen.length === 0;
+  const where = one ? esc(seen[0].workspace) : "their";
+  const term = `<b>“${esc(r.term)}”</b>`;
+  const times = Number(r.seen_total) > 1 ? ` Seen ${r.seen_total} times.` : "";
+
+  switch (r.kind) {
+    case "client_name":
+      return `A message named ${term} as the customer. ${who} ${
+        none ? "has no" : "has a"} customer by that name, so `
+        + `<span class="cost">the jobs it made carry no customer and will not `
+        + `appear on anybody's statement</span>.${times}`;
+    case "job_type":
+      return `A message asked for work called ${term}. ${who} ${
+        none ? "has no" : "has a"} job type by that name, so `
+        + `<span class="cost">the job carries a type the rest of the app does `
+        + `not recognise</span>.${times}`;
+    case "charge_type":
+      return `A quote carried a line called ${term}. It is not on ${
+        one ? where + "'s" : "their"} rate card, so `
+        + `<span class="cost">the job was flagged as needing a price</span>.${times}`;
+    default:
+      return `The parser met the phrase ${term} and had nothing to do with it.`
+        + `${times}`;
+  }
+}
+
 function renderVocab(d) {
   vocabRows = d.rows;
   const rows = d.rows.map((r) => {
@@ -303,8 +367,9 @@ function renderVocab(d) {
 
     return `<tr>
       <td>
-        <div class="term">${esc(r.term)}</div>
-        ${ex.map((e) => `<div class="ex">“${esc(String(e).slice(0, 140))}”</div>`).join("")}
+        <div class="says">${says(r)}</div>
+        ${ex.length ? `<div class="ex">Last seen in: ${
+          ex.map((e) => `“${esc(String(e).slice(0, 140))}”`).join(", ")}</div>` : ""}
         <div class="ex">${seen.map((w) =>
           `<span class="pill">${esc(w.workspace)} · ${w.seen}${
             w.status !== "new" ? " · " + esc(w.status) : ""}</span>`).join("")}</div>
@@ -322,52 +387,83 @@ function renderVocab(d) {
 
   return `<section>
     <h2>Vocabulary</h2>
-    <p class="lede">Everything the parser has met and could not place, most seen
-      first. A decision here reaches the parser on the next message it reads:
-      mapping and ignoring take effect by lookup, teaching goes into the prompt.</p>
+    <p class="lede">Every <em>word</em> the parser has met and could not place in a
+      workspace's own lists, most seen first. Each row is one word, not one
+      email — the quoted subject beside it is only where that word turned up.
+      A decision reaches the parser on the very next message it reads, and
+      applies from then on; messages already read keep whatever they got.</p>
     <div class="panel">${table(
-      [{label:"Term"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},
+      [{label:"What happened"},{label:"Kind"},{label:"Seen",num:1},{label:"Workspaces",num:1},
        {label:"Rule",num:1},{label:""}],
       rows, "Nothing unrecognised yet.")}
     </div>
   </section>`;
 }
 
+// What "Map" points at, named in the words of the thing it points at rather
+// than in the words of the database.
+const MAP_LABEL = {
+  client_name: "It is one of your customers",
+  job_type:    "It is one of your job types",
+  charge_type: "It is a line on your rate card",
+};
+const MEANS_LABEL = {
+  client_name: "Which customer",
+  job_type:    "Which job type",
+  charge_type: "Which rate-card line",
+};
+
 function decideForm(r) {
   const seen = Array.isArray(r.where_seen) ? r.where_seen : [];
   // A plain term has nothing to point at: it is taught or ignored, never mapped.
   const mappable = r.kind !== "term";
+  // The ordinary case is a word seen in one workspace. Choosing it for them
+  // means the real list below can load immediately - the dropdown used to say
+  // "Pick a workspace first…", so the one question this screen was meant to
+  // answer ("is there something existing to connect this to?") had no visible
+  // answer at all until you had already guessed your way past it.
+  const only = seen.length === 1 ? seen[0] : null;
 
   return `<div class="decide" data-form="${esc(rowKey(r))}">
     <div class="row">
-      <label>Reading</label>
+      <label>This word</label>
       <select data-f="action">
-        ${mappable ? '<option value="map">Map — it means something we already have</option>' : ""}
-        <option value="teach"${mappable ? "" : " selected"}>Teach — a sentence for the parser</option>
-        <option value="ignore">Ignore — it is not vocabulary</option>
+        ${mappable ? `<option value="map">${esc(MAP_LABEL[r.kind] || "Means something we already have")} — point it at the record</option>` : ""}
+        <option value="teach"${mappable ? "" : " selected"}>Needs explaining — write the parser a sentence</option>
+        <option value="ignore">Is not vocabulary — stop asking me about it</option>
       </select>
     </div>
+    ${mappable ? "" : `<div class="why">There is nothing to point a plain phrase at,
+      so this one can only be explained or ignored.</div>`}
 
     <div class="row">
       <label>Applies to</label>
       <select data-f="tenant">
-        <option value="">Every workspace</option>
-        ${seen.map((w) => `<option value="${esc(w.tenant_id)}">${esc(w.workspace)} only</option>`).join("")}
+        <option value=""${only ? "" : " selected"}>Every workspace</option>
+        ${seen.map((w) => `<option value="${esc(w.tenant_id)}"${
+          only && only.tenant_id === w.tenant_id ? " selected" : ""
+        }>${esc(w.workspace)} only</option>`).join("")}
       </select>
-      <span class="scope-warn" data-f="scopewarn" hidden>A mapping has to name one
-        workspace — it points at that workspace's own list.</span>
+      <span class="scope-warn" data-f="scopewarn" hidden>Pointing a word at a record
+        has to name one workspace — the record lives in that workspace's own list.</span>
     </div>
 
     <div class="row" data-f="maprow" hidden>
-      <label>Means</label>
-      <select data-f="maps_to"><option value="">Pick a workspace first…</option></select>
+      <label>${esc(MEANS_LABEL[r.kind] || "Means")}</label>
+      <select data-f="maps_to"><option value="">Reading your list…</option></select>
     </div>
 
     <div data-f="teachrow" hidden>
-      <p class="hint">One sentence, as you would tell a new reader. “A stack date
-        is the container cut-off — treat it as the scheduled date.”</p>
-      <textarea data-f="note" placeholder="What does this term mean, and what should the parser do with it?"></textarea>
+      <div class="ask">What do you want to teach it about <b>“${esc(r.term)}”</b>?</div>
+      <p class="hint">One sentence, as you would tell somebody new to the job.
+        Say what the word means and what the parser should do about it —
+        “a stack date is the container cut-off, so treat it as the scheduled
+        date”. It is read before every message from then on.</p>
+      <textarea data-f="note" rows="3"
+        placeholder="e.g. “${esc(r.term)}” means …, so the parser should …"></textarea>
     </div>
+
+    <div class="preview" data-f="preview"></div>
 
     <div class="row" style="margin-top:10px">
       <button class="on" data-f="save">Save rule</button>
@@ -466,6 +562,59 @@ function wireForm() {
   const row = vocabRows.find((r) => rowKey(r) === form.dataset.form);
   if (!row) return;
 
+  // What saving will actually do, said before it is done. A rule is a lot
+  // easier to avoid than to undo, and "Save rule" on its own tells nobody what
+  // they are about to change.
+  const preview = () => {
+    const el = f("preview");
+    const action = f("action").value;
+    const tenSel = f("tenant");
+    const where = tenSel.value
+      ? tenSel.options[tenSel.selectedIndex].text.replace(/ only$/, "")
+      : "every workspace";
+    const word = `“${row.term}”`;
+    el.className = "preview";
+
+    if (action === "map") {
+      const mSel = f("maps_to");
+      const target = mSel.value ? mSel.options[mSel.selectedIndex].text : null;
+      if (!tenSel.value) {
+        el.className = "preview off";
+        el.textContent = "Choose the workspace whose record this points at.";
+        return;
+      }
+      if (!target) {
+        el.className = "preview off";
+        el.textContent = `Choose what ${word} means in ${where}.`;
+        return;
+      }
+      el.innerHTML = `From the next message on, ${esc(word)} in <b>${esc(where)}</b> `
+        + `will be read as <b>${esc(target)}</b>.`
+        + (row.kind === "client_name"
+          ? ` It is also added to that customer's other names, so the matcher uses `
+            + `it everywhere — not only here.`
+          : "");
+      return;
+    }
+
+    if (action === "teach") {
+      const note = (f("note").value || "").trim();
+      if (!note) {
+        el.className = "preview off";
+        el.textContent = "Write the sentence the parser should read.";
+        return;
+      }
+      el.innerHTML = `This sentence goes into the parser's instructions for `
+        + `<b>${esc(where)}</b>, and it will read it before every message from now on. `
+        + `It is guidance, not a lookup — it holds most of the time rather than every time.`;
+      return;
+    }
+
+    el.innerHTML = `${esc(word)} stops being queued here for <b>${esc(where)}</b>. `
+      + `Nothing already read changes, and the parser carries on treating it `
+      + `exactly as it does now.`;
+  };
+
   const sync = () => {
     const action = f("action").value;
     const tenant = f("tenant").value;
@@ -475,6 +624,7 @@ function wireForm() {
     // saying so here means nobody has to find that out by being refused.
     f("scopewarn").hidden = !(action === "map" && !tenant);
     f("save").disabled = action === "map" && !tenant;
+    preview();
   };
 
   // Targets are fetched only when they are needed, and only for the workspace
@@ -490,7 +640,9 @@ function wireForm() {
       sel.innerHTML = targets.length
         ? `<option value="">Pick one…</option>` + targets.map((t) =>
             `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join("")
-        : `<option value="">That workspace has nothing to map onto</option>`;
+        : `<option value="">That workspace has no ${
+            row.kind === "client_name" ? "customers" :
+            row.kind === "job_type" ? "job types" : "rate-card lines"} yet — add one first</option>`;
     } catch (e) {
       sel.innerHTML = `<option value="">${esc(e.message)}</option>`;
     }
@@ -498,7 +650,17 @@ function wireForm() {
 
   f("action").onchange = () => { sync(); loadTargets(); };
   f("tenant").onchange = () => { sync(); loadTargets(); };
+  f("maps_to").onchange = preview;
+  f("note").oninput = preview;
   f("cancel").onclick = () => { openKey = null; show(); };
+
+  // Straight away, not on the first change: when the word was seen in one
+  // workspace that workspace is already chosen, so the real customers or job
+  // types are on screen the moment the form opens. That is the answer to
+  // "is this connecting to something that already exists?" - showing the list
+  // answers it better than any amount of wording.
+  sync();
+  loadTargets();
 
   f("save").onclick = async () => {
     const action = f("action").value;
