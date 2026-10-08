@@ -17,6 +17,7 @@ import { Resend } from "npm:resend";
 import { Image } from "https://deno.land/x/imagescript@1.2.17/mod.ts";
 import { BlobReader, BlobWriter, ZipReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.45/index.js";
 import { ingest } from "../_shared/extract.ts";
+import { sayRepeat, seenBefore } from "../_shared/once.ts";
 import type { InboundImage, InboundDoc } from "../_shared/extract.ts";
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY")!);
@@ -387,6 +388,36 @@ Deno.serve(async (req) => {
           { onConflict: "tenant_id,email" });
       console.log(`intake-email: ${from} opted out of progress emails`);
     }
+    return new Response("ok");
+  }
+
+  // ---- the same mail, again -----------------------------------------------
+  // One crate ended up with eleven jobs because this exact email reached
+  // intake eight times over two days and every arrival built another full set.
+  // A forward carries a new Message-ID, so the header alone does not catch it;
+  // the body does. See _shared/once.ts.
+  //
+  // The message is still RECORDED - "this mail arrived four times" is a fact
+  // somebody may need - only the job-building is skipped.
+  const prior = await seenBefore(sb, tenant.id, body, messageId);
+  if (prior) {
+    const note = sayRepeat(prior);
+    const row = {
+      tenant_id: tenant.id, channel: "email",
+      sender, subject, body,
+      raw: { subject, sender, email_id: emailId, message_id: messageId,
+             cc, to: toList, duplicate_of: prior.messageId,
+             duplicate_because: prior.how, already_made: prior.jobRefs },
+      parse_error: note,
+    };
+    // kind is an enum, and 'duplicate' is added by sql/50. On a database where
+    // 50 has not been run the insert is refused, so it falls back rather than
+    // losing the record - the job-skipping above has already done the part
+    // that matters.
+    const { error: dupErr } = await sb.from("messages")
+      .insert({ ...row, kind: "duplicate" });
+    if (dupErr) await sb.from("messages").insert({ ...row, kind: "unknown" });
+    console.log(`intake-email: SKIPPED - ${note}`);
     return new Response("ok");
   }
 
