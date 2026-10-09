@@ -11,11 +11,12 @@ import type { ChargeType, ClientRow } from "./billing.ts";
 import { noteVocab, recordFeedback } from "./learn.ts";
 import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
 import { dedupeJobs } from "./dedupe.ts";
+import { diaryBlock } from "./diary.ts";
 import { checkYear, todayInZA, weekdayOf } from "./dates.ts";
 import { describeFailure, explainFailure } from "./failure.ts";
 import type { Hint } from "./hints.ts";
 
-const buildSystem = (jobTypes: string, hints = "") => `You are the intake parser for OneShot, a logistics job system.
+const buildSystem = (jobTypes: string, hints = "", diary = "") => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
 {
  "kind": "request" | "amendment" | "status_query" | "chatter",
@@ -133,7 +134,7 @@ verbatim. Do not invent one.
 
 Rules: identity_tier 1 = visually unique (artworks, antiques, custom furniture);
 2 = has serial/label/barcode; 3 = commodity/identical units.
-kind=chatter for greetings, logistics banter, anything that is not a work request.
+kind=chatter for greetings, logistics banter, anything that is not a work request.${diary}
 
 AMENDMENTS - changing jobs that already exist:
 - kind=amendment when the sender is altering work already in hand rather than
@@ -641,7 +642,7 @@ export async function extractAmendments(
   return list.filter((a: unknown) => a && typeof a === "object") as AmendmentIn[];
 }
 
-export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = [], hints = ""): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = [], hints = "", diary = ""): Promise<Extraction> {
   const content = [
     ...docs.map((d, i) => ([
       { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
@@ -658,7 +659,7 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
   // because the model opened with "I need to ..." and the whole mail went
   // nowhere; holding it to JSON from the first character is the cheapest way
   // that cannot happen again.
-  const text = await callModel(buildSystem(jobTypes, hints), content, "{");
+  const text = await callModel(buildSystem(jobTypes, hints, diary), content, "{");
   return readJson(text) as Extraction;
 }
 
@@ -681,6 +682,13 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // better caught with an explanation.
   const legalTypes = ((types ?? []) as { key: string }[]).map((t) => t.key);
 
+  // The paragraph about meetings, conferences and calls - and an empty string
+  // for a workspace that runs none of them, which leaves the prompt exactly as
+  // it was. See diary.ts: the type existed for months and was never once
+  // chosen, because nothing told the parser a diary entry was a job at all.
+  const diary = diaryBlock(legalTypes);
+  if (diary) console.log("ingest: diary job types in play");
+
   // What this workspace has already been taught. Loaded BEFORE the parse, so a
   // correction somebody made last week is in front of the model this morning.
   // An empty list leaves the prompt exactly as it was before any of this
@@ -698,7 +706,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // how "Monday, 5 Oct" became October 2025.
   const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`
     + `. Received: ${todayInZA()} (${weekdayOf(todayInZA())}), Africa/Johannesburg`;
-  try { ex = await extract(body, meta, typeList, images, docs, hints); }
+  try { ex = await extract(body, meta, typeList, images, docs, hints, diary); }
   catch (e) {
     parseError = e instanceof Error ? e.message : String(e);
     console.error("ingest: extraction failed:", parseError);
@@ -712,10 +720,10 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     if (images.length || docs.length) {
       attempts.push({
         why: `without ${images.length} image(s) and ${docs.length} document(s)`,
-        run: () => extract(body, meta, typeList, [], [], hints),
+        run: () => extract(body, meta, typeList, [], [], hints, diary),
       });
     }
-    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs, hints) });
+    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs, hints, diary) });
 
     ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
     for (const attempt of attempts) {

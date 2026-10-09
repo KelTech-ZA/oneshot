@@ -27,6 +27,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { extract, materialise, jobsOf, refineAmendments } from "../_shared/extract.ts";
 import { diffChanges, diffJobs, recordFeedback } from "../_shared/learn.ts";
 import { loadHints, renderHints } from "../_shared/hints.ts";
+import { diaryBlock } from "../_shared/diary.ts";
 import { attachReminder, hintedWhen, parkThread, reminderHint } from "../_shared/reminders.ts";
 import type { Extraction } from "../_shared/extract.ts";
 import { applyPlanned, describe, nameJob, planAmendments } from "../_shared/amend.ts";
@@ -210,13 +211,18 @@ Deno.serve(async (req) => {
   // drift apart in what they have been taught.
   const vocabHints = renderHints(await loadHints(sb, tenantId));
 
+  // And the same diary paragraph. This is the exact drift the comment above
+  // warns about: without it the extension would read an invitation as chatter
+  // while the inbox read it as a meeting, for the identical mail.
+  const diary = diaryBlock(((types ?? []) as { key: string }[]).map((t) => t.key));
+
   const meta = `Channel: email thread. Sender: ${sender}. Subject: ${subject ?? "-"}`
     + (thread.received_at ? `. Received: ${thread.received_at}` : "");
 
   // ---- suggest ------------------------------------------------------------
   if ((payload.action ?? "suggest") === "suggest") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList, [], [], vocabHints); }
+    try { ex = await extract(body, meta, typeList, [], [], vocabHints, diary); }
     catch (e) {
       // A parse failure here is not an error the reader should see as a
       // failure of theirs - it is simply "no suggestion". Logged, not shown.
@@ -335,7 +341,7 @@ Deno.serve(async (req) => {
   // one of them is how two jobs get forgotten.
   if (payload.action === "amend") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList, [], [], vocabHints); }
+    try { ex = await extract(body, meta, typeList, [], [], vocabHints, diary); }
     catch (e) {
       console.warn("suggest-job: amend parse failed:", e instanceof Error ? e.message : String(e));
       return json({ ok: true, outcomes: [], reason: "I couldn't read this thread." });
