@@ -12,11 +12,12 @@ import { noteVocab, recordFeedback } from "./learn.ts";
 import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
 import { dedupeJobs } from "./dedupe.ts";
 import { diaryBlock } from "./diary.ts";
+import { loadCorrections, renderCorrections } from "./corrections.ts";
 import { checkYear, todayInZA, weekdayOf } from "./dates.ts";
 import { describeFailure, explainFailure } from "./failure.ts";
 import type { Hint } from "./hints.ts";
 
-const buildSystem = (jobTypes: string, hints = "", diary = "") => `You are the intake parser for OneShot, a logistics job system.
+const buildSystem = (jobTypes: string, hints = "", diary = "", corrections = "") => `You are the intake parser for OneShot, a logistics job system.
 Given an inbound message (email or WhatsApp), respond ONLY with JSON, no prose, no markdown fences:
 {
  "kind": "request" | "amendment" | "status_query" | "chatter",
@@ -334,7 +335,7 @@ created twelve months in the past, where nobody looks for them.
   the year. The weekday and the date only line up in some years, and that is
   the most reliable signal in the whole message.
 - Work already done, being written up afterwards, is the one case that may be
-  in the past. It will say so.${hints}`;
+  in the past. It will say so.${hints}${corrections}`;
 
 
 export interface InboundDoc {
@@ -642,7 +643,7 @@ export async function extractAmendments(
   return list.filter((a: unknown) => a && typeof a === "object") as AmendmentIn[];
 }
 
-export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = [], hints = "", diary = ""): Promise<Extraction> {
+export async function extract(body: string, meta: string, jobTypes: string, images: InboundImage[] = [], docs: InboundDoc[] = [], hints = "", diary = "", corrections = ""): Promise<Extraction> {
   const content = [
     ...docs.map((d, i) => ([
       { type: "text", text: `[DOCUMENT ${i + 1}: ${d.filename}]` },
@@ -659,7 +660,7 @@ export async function extract(body: string, meta: string, jobTypes: string, imag
   // because the model opened with "I need to ..." and the whole mail went
   // nowhere; holding it to JSON from the first character is the cheapest way
   // that cannot happen again.
-  const text = await callModel(buildSystem(jobTypes, hints, diary), content, "{");
+  const text = await callModel(buildSystem(jobTypes, hints, diary, corrections), content, "{");
   return readJson(text) as Extraction;
 }
 
@@ -697,6 +698,12 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   const hints = renderHints(hintRows);
   if (hintRows.length) console.log(`ingest: ${hintRows.length} vocabulary rule(s) in force`);
 
+  // And what people here have actually corrected lately. Loaded at the same
+  // moment and for the same reason: a lesson somebody taught the app on
+  // Tuesday is worth nothing if the parser does not see it on Thursday.
+  const corrections = renderCorrections(await loadCorrections(sb, tenantId));
+  if (corrections) console.log("ingest: recent corrections in front of the parser");
+
   let ex: Extraction;
   // Kept so the failure can be written onto the message. An email that arrived
   // and produced nothing must be visible in the app, not only in the logs.
@@ -706,7 +713,7 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
   // how "Monday, 5 Oct" became October 2025.
   const meta = `Channel: ${channel}. Sender: ${sender}. Subject: ${subject ?? "-"}`
     + `. Received: ${todayInZA()} (${weekdayOf(todayInZA())}), Africa/Johannesburg`;
-  try { ex = await extract(body, meta, typeList, images, docs, hints, diary); }
+  try { ex = await extract(body, meta, typeList, images, docs, hints, diary, corrections); }
   catch (e) {
     parseError = e instanceof Error ? e.message : String(e);
     console.error("ingest: extraction failed:", parseError);
@@ -720,10 +727,10 @@ export async function ingest(sb: any, tenantId: string, channel: string, sender:
     if (images.length || docs.length) {
       attempts.push({
         why: `without ${images.length} image(s) and ${docs.length} document(s)`,
-        run: () => extract(body, meta, typeList, [], [], hints, diary),
+        run: () => extract(body, meta, typeList, [], [], hints, diary, corrections),
       });
     }
-    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs, hints, diary) });
+    attempts.push({ why: "a second time", run: () => extract(body, meta, typeList, images, docs, hints, diary, corrections) });
 
     ex = { kind: "unknown", confidence: 0, existing_job_ref: null, job: null, missing: [], amendment_changes: null, amendments: null } as Extraction;
     for (const attempt of attempts) {
@@ -952,13 +959,52 @@ export async function materialise(
       console.log(`ingest: job type "${String(j.type)}" read as "${ruledType.type}" by rule`);
     }
 
-    const { data: job, error: jobErr } = await sb.from("jobs").insert({
+    // What the parser proposed for THIS job, kept alongside it.
+    //
+    // An email makes jobs with nobody watching, so the correction does not
+    // happen here - it happens days later when somebody opens the job and
+    // fixes it. Without this there is nothing for that edit to be a correction
+    // OF, which is why email intake has never produced a single row of
+    // feedback while the extension has produced seven.
+    //
+    // The parser's own JSON, as it stood at this moment. Not re-read from the
+    // message later: that would answer as the parser is tomorrow, and a
+    // correction is only a correction relative to what was actually proposed.
+    const parsedAs = {
+      type: ruledType.type ?? j.type ?? null,
+      client_ref: j.client_ref ?? null,
+      scheduled_date: isoDate,
+      time_window: timeWindow,
+      hard_deadline: !!j.hard_deadline,
+      stops: parsedStops,
+      items: Array.isArray(j.items) ? j.items : [],
+      charges: Array.isArray(j.charges) ? j.charges : [],
+      billing: j.billing ?? null,
+    };
+
+    const row = {
       tenant_id: tenantId, type: ruledType.type ?? j.type ?? "move",
       origin: legacyOrigin, destination: legacyDest,
       client_ref: j.client_ref ?? null,
       scheduled_date: isoDate, time_window: timeWindow,
       hard_deadline: !!j.hard_deadline, source_message_id: msg.id, flags,
-    }).select().single();
+    };
+
+    // The snapshot is written if the column is there and skipped if it is not.
+    //
+    // This is not defensiveness for its own sake. If this function is deployed
+    // before sql/53 is run - and the two are separate acts, done by a person,
+    // in an order nobody enforces - then an unconditional parsed_as would make
+    // every single job insert fail with "column does not exist", and email
+    // intake would stop producing jobs entirely until somebody noticed. A
+    // feature for reading the parser's homework must not be able to stop the
+    // parser working.
+    let { data: job, error: jobErr } = await sb.from("jobs")
+      .insert({ ...row, parsed_as: parsedAs }).select().single();
+    if (jobErr && /parsed_as/.test(jobErr.message ?? "")) {
+      console.warn("ingest: jobs.parsed_as missing - run sql/53; job saved without the snapshot");
+      ({ data: job, error: jobErr } = await sb.from("jobs").insert(row).select().single());
+    }
 
     // Never let this fail silently: the message is already saved, so a failure
     // here means part of an email that reached us and produced nothing visible.

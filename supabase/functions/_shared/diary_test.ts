@@ -124,7 +124,10 @@ Deno.test("THE EXTENSION GETS THE SAME PARAGRAPH AS THE INBOX", () => {
     const calls = [...src.matchAll(/\bextract\(body, meta, typeList[^)]*\)/g)].map((m) => m[0]);
     assert(calls.length > 0, `no extract() call found in ${name} - has it been renamed?`);
     for (const c of calls) {
-      assert(/,\s*diary\s*\)$/.test(c), `${name} calls extract without diary: ${c}`);
+      // Present as an argument, not necessarily the last one - the prompt has
+      // since grown a corrections slot after it, and this test is about the
+      // paragraph reaching both paths, not about argument order.
+      assert(/\bdiary\b/.test(c), `${name} calls extract without diary: ${c}`);
     }
   }
 });

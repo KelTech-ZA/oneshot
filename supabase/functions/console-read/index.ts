@@ -107,6 +107,17 @@ Deno.serve(async (req) => {
       return json({ ok: true, rows: data ?? [] });
     }
 
+    // What the parser keeps getting wrong, as a pattern rather than a list.
+    // A count says a field is weak; the example beside it says why, and the
+    // two together are what somebody needs to decide whether the fix is the
+    // prompt, the rate card, or nothing at all.
+    case "patterns": {
+      const { data, error } = await admin.from("console_parse_patterns")
+        .select("*").limit(limit);
+      if (error) return json({ error: error.message }, 500);
+      return json({ ok: true, rows: data ?? [] });
+    }
+
     default:
       return json({ error: `Unknown view "${body.view}".` }, 400);
   }

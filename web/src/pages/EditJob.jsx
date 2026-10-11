@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import ClashWarning from "./ClashWarning";
 import ItemDocuments from "./ItemDocuments";
 import FileDrop from "./FileDrop";
@@ -103,6 +103,30 @@ export default function EditJob() {
       taken_at: new Date().toISOString(), user_id: session.user.id,
       notes: "Edited in Office", payload: { changes: patch },
     });
+
+    // Tell the backend what was corrected, so the parser reads the next mail
+    // knowing it. This screen is where a job that arrived wrong gets put
+    // right, and until now every one of those corrections was thrown away -
+    // the loop recorded only what the Outlook pane caught, which is a
+    // fraction of it.
+    //
+    // Deliberately NOT awaited into the save, and deliberately silent. The job
+    // is already saved; this is bookkeeping. If the function is not deployed,
+    // or the network drops, the person must still get to their job.
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      if (s?.access_token) {
+        // The job id and nothing else. The function reads the job itself -
+        // a page that could tell it what changed could also tell it the
+        // parser was wrong about something nobody touched.
+        fetch(`${FUNCTIONS_URL}/record-correction`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+          body: JSON.stringify({ job_id: id }),
+        }).catch(() => {});
+      }
+    } catch { /* never block the save */ }
+
     nav(`/job/${id}`);
   };
 

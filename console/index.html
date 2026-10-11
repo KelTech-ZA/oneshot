@@ -525,13 +525,124 @@ function renderRules(d, log) {
   </section>`;
 }
 
-function renderEdits(d) {
+// What a field is, in the words of somebody who runs a logistics company
+// rather than somebody who wrote the database. "items.dimensions" means
+// nothing to anyone; "The size of an item" is the thing that was wrong.
+const FIELD_SAYS = {
+  "type":                  ["The kind of job",            "a job type, or a vocabulary rule pointing at one"],
+  "client_ref":            ["The customer's own reference for the job", "usually nothing - people write these differently every time"],
+  "scheduled_date":        ["The date",                   "the prompt's date rules"],
+  "time_window":           ["The time",                   "the prompt's date rules"],
+  "hard_deadline":         ["Whether the deadline is hard", "the prompt"],
+  "items.description":     ["What an item is called",     "the prompt's item rules"],
+  "items.dimensions":      ["The size of an item",        "the prompt's item rules"],
+  "items.quantity":        ["How many there are",         "the prompt's item rules"],
+  "items.special_handling":["Handling instructions",      "the prompt's item rules"],
+  "items.declared_value":  ["An item's declared value",   "the prompt's item rules"],
+  "charges.description":   ["What a quoted line is called", "your rate card"],
+  "charges.unit_price":    ["A price",                    "your rate card"],
+  "charges.quantity":      ["A quantity on the quote",    "your rate card"],
+  "charges.unit":          ["What a price is per",        "your rate card"],
+  "billing.bill_to_name":  ["Who the invoice goes to",    "a customer alias"],
+  "billing.vat_number":    ["A VAT number",               "the customer's record"],
+  "billing.payment_terms": ["Payment terms",              "the customer's record"],
+  "stops.collection.address": ["Where something is collected", "the prompt's address rules"],
+  "stops.delivery.address":   ["Where something is delivered",  "the prompt's address rules"],
+  "stops.site.address":       ["Where the work happens",        "the prompt's address rules"],
+};
+
+// The same normalisation edit_field() does in sql/53, because the per-row
+// table reads the RAW edit keys straight off the record - "items[0].dimensions"
+// - while the grouped table above it reads keys the database has already
+// normalised. Without this, half the screen says "The size of an item" and the
+// other half says "items[0].dimensions", which is precisely the complaint this
+// screen was rebuilt to answer.
+const normField = (f) =>
+  String(f ?? "").replace(/\[[0-9]+\]/g, "").replace(/^jobs\./, "");
+
+function fieldSays(rawField) {
+  const field = normField(rawField);
+  if (FIELD_SAYS[field]) return FIELD_SAYS[field];
+  if (field === "jobs.count") return ["How many jobs the email held", "the prompt's splitting rules"];
+  if (field.endsWith(".added")) return ["Things people added that were not read", "the prompt"];
+  if (field.endsWith(".removed")) return ["Things people removed that should not have been read", "the prompt"];
+  if (field.startsWith("rejected.")) return ["A proposed change somebody refused", "the prompt"];
+  if (field.startsWith("stops.")) return ["An address", "the prompt's address rules"];
+  if (field.startsWith("items.")) return ["Something about an item", "the prompt's item rules"];
+  if (field.startsWith("charges.") || field.startsWith("billing.")) return ["Something about the money", "your rate card"];
+  return [field, "the prompt"];
+}
+
+// The sentence that decides whether a row is worth acting on at all.
+//
+// A correction made within an hour of the job arriving is the parser being
+// wrong. One made a fortnight later is almost certainly the world moving - a
+// delivery rescheduled, a crate added - and is not a lesson about reading mail.
+// No rule separates these reliably, so the screen says which it looks like and
+// lets a person decide.
+function whenSays(hours) {
+  if (hours == null) return ["corrected before the job was even created", "parser"];
+  const h = Number(hours);
+  if (h < 2)  return ["corrected within the hour", "parser"];
+  if (h < 24) return [`corrected about ${Math.round(h)} hours later`, "parser"];
+  if (h < 24 * 7) return [`changed about ${Math.round(h / 24)} days later`, "mixed"];
+  return [`changed about ${Math.round(h / 24)} days later`, "world"];
+}
+
+function renderPatterns(rows) {
+  if (!rows.length) {
+    return `<div class="panel"><div class="empty">
+      Nothing corrected yet. This fills up on its own as people fix jobs —
+      there is nothing to set up and nothing to go back and do.
+    </div></div>`;
+  }
+
+  const body = rows.slice(0, 10).map((r) => {
+    const [what, fix] = fieldSays(r.field);
+    const [when, kind] = whenSays(r.settled_in_hours);
+    const n = Number(r.corrections);
+    const over = Number(r.proposals);
+
+    // One sentence, and it has to carry the whole row: what was wrong, how
+    // often, and whether it looks like a misreading or life happening.
+    const verdict = kind === "parser"
+      ? `<span class="warn">looks like the parser getting it wrong</span>`
+      : kind === "world"
+      ? `<span class="muted">looks like plans changing, not a misreading</span>`
+      : `<span class="muted">could be either — worth a look</span>`;
+
+    const example = (r.example_to || "").trim()
+      ? `<div class="diff">
+           <span class="from">${esc(r.example_from || "(nothing)")}</span>
+           <span class="arrow">&rarr;</span>
+           <span class="to">${esc(r.example_to)}</span>
+         </div>`
+      : "";
+
+    return `<tr>
+      <td>
+        <div class="term">${esc(what)}</div>
+        <div class="ex">${n} correction${n === 1 ? "" : "s"} across ${over} email${over === 1 ? "" : "s"}, ${esc(when)} — ${verdict}</div>
+        ${example}
+      </td>
+      <td class="num">${n}</td>
+      <td class="muted">${kind === "parser" ? esc(fix) : "—"}</td>
+    </tr>`;
+  });
+
+  return `<div class="panel">${table(
+    [{label:"What keeps being wrong"},{label:"Times",num:1},{label:"Where the fix lives"}],
+    body, "")}
+  </div>`;
+}
+
+function renderEdits(d, patterns) {
   const rows = d.rows.map((r) => {
     const lines = Object.entries(r.edits || {}).map(([field, v]) => `
-      <div class="diff"><span class="muted">${esc(field)}</span>
-        <span class="from">${esc(JSON.stringify(v.from))}</span>
+      <div class="diff"><span class="muted">${esc(fieldSays(field)[0])}</span>
+        <span class="from">${esc(v.from === null ? "(nothing)" : String(v.from))}</span>
         <span class="arrow">&rarr;</span>
-        <span class="to">${esc(JSON.stringify(v.to))}</span></div>`).join("");
+        <span class="to">${esc(v.to === null ? "(nothing)" : String(v.to))}</span></div>`).join("");
     return `<tr>
       <td class="muted">${esc(String(r.created_at).slice(0, 16).replace("T", " "))}</td>
       <td>${esc(r.workspace)}<div class="ex">${esc(r.channel)} · ${esc(r.surface)}</div></td>
@@ -542,8 +653,17 @@ function renderEdits(d) {
       <td class="num muted">${r.confidence ?? "—"}</td>
     </tr>`;
   });
+
   return `<section>
-    <h2>What people corrected</h2>
+    <h2>What the parser keeps getting wrong</h2>
+    <p class="lede">The last 90 days, grouped. The parser already reads its own
+      recent corrections before every message, so the ones it can learn from on
+      its own are being handled. This screen is for the ones it cannot — a price
+      that is wrong because the rate card has no line for it, a customer written
+      three ways — which are fixes only a person can make.</p>
+    ${renderPatterns(patterns?.rows ?? [])}
+
+    <h2 style="margin-top:26px">Every correction, one by one</h2>
     <p class="lede">The actual before and after. A count tells you a field is
       weak; only this tells you why.</p>
     <div class="panel">${table(
@@ -738,7 +858,11 @@ async function show() {
       ]);
       $("body").innerHTML = renderRules(rules, log);
     } else {
-      $("body").innerHTML = renderEdits(await read("edits", { limit: 100 }));
+      const [edits, patterns] = await Promise.all([
+        read("edits", { limit: 100 }),
+        read("patterns", { limit: 60 }),
+      ]);
+      $("body").innerHTML = renderEdits(edits, patterns);
     }
     wireButtons();
     wireForm();
