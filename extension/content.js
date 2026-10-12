@@ -26,6 +26,24 @@
   // behind: no scanning, no list, no timer.
   const CHAT = /(^|\.)web\.whatsapp\.com$/.test(location.host);
 
+  // What gets sent to the parser for one thread or chat.
+  //
+  // Was written out by hand in three places, which is how `source` and the
+  // photographs came to be read by the reader and then dropped on the floor
+  // before they ever left the browser: the WhatsApp reader has always
+  // reported which app it was, and every call site forgot to pass it on, so
+  // every WhatsApp conversation was filed as an email.
+  const threadOf = (m) => ({
+    subject: m.subject,
+    from: m.from,
+    body: m.body,
+    received_at: m.received,
+    source: m.source || (CHAT ? "whatsapp" : "email"),
+    // Capped in the reader; sent only when there are any, so an Outlook
+    // thread's payload is exactly the shape it was before.
+    ...(Array.isArray(m.images) && m.images.length ? { images: m.images } : {}),
+  });
+
   const gate = window.OneShotGate.gate;
   const signals = window.OneShotGate.signals;
 
@@ -333,7 +351,7 @@
     manual = { msg, state: "suggesting" };
     openPanel = true;
     render();
-    const thread = { subject: msg.subject, from: msg.from, body: msg.body, received_at: msg.received };
+    const thread = threadOf(msg);
     const out = await api("suggest-job", { action: "suggest", thread });
     // Even a refusal opens the form. The click was the decision; the parser
     // only gets to pre-fill.
@@ -374,7 +392,7 @@
   // a reference the parser could not. `hints` maps how the parser read a
   // reference to the job the reader chose instead.
   async function proposeAmendment(msg, hints) {
-    const thread = { subject: msg.subject, from: msg.from, body: msg.body, received_at: msg.received };
+    const thread = threadOf(msg);
     const out = await api("suggest-job", { action: "amend", thread, hints: hints || {} });
     if (out.error) { amend = { msg, thread, hints, outcomes: [], reason: out.error }; render(); return; }
     amend = { msg, thread, hints: hints || {}, ...out };
@@ -1324,7 +1342,7 @@
         return;
       }
       make.disabled = true; make.textContent = "Reading...";
-      const thread = { subject: m.subject, from: m.from, body: m.body, received_at: m.received };
+      const thread = threadOf(m);
       const out = await api("suggest-job", { action: "suggest", thread });
       if (out.error) { meta.textContent = out.error; make.disabled = false; make.textContent = "Make job"; return; }
       proposals.set(keyOf(m), { thread, out });

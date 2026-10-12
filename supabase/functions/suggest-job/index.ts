@@ -208,6 +208,36 @@ Deno.serve(async (req) => {
         .map((t) => `"${t.key}" (${t.label})`).join(" | ") + " | null"
     : '"pickup"|"delivery"|"move"|"storage_in"|"storage_out"|null';
 
+  // Which app this came from. The reader has always known - the WhatsApp one
+  // reports source:"whatsapp" - and nothing ever asked, so every chat was
+  // filed as email and the per-channel accuracy figures counted them as mail.
+  // msg_channel has had a 'whatsapp' value since the schema was written.
+  const chanRaw = String((thread as { source?: unknown }).source ?? "").toLowerCase();
+  const channel = chanRaw === "whatsapp" ? "whatsapp" : "email";
+
+  // Photographs out of the chat, as bytes. A WhatsApp logistics conversation
+  // is half pictures - the work, the crate, a scribbled dimension - and this
+  // path has never sent one, for Outlook either. Validated here rather than
+  // trusted: this arrives from a browser.
+  const images: { media_type: string; data: string }[] = [];
+  {
+    const raw = (thread as { images?: unknown }).images;
+    const OK = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    let total = 0;
+    for (const im of (Array.isArray(raw) ? raw : []).slice(0, 3)) {
+      const o = im as { media_type?: unknown; data?: unknown };
+      const type = String(o?.media_type ?? "").toLowerCase();
+      const data = typeof o?.data === "string" ? o.data : "";
+      if (!OK.includes(type) || !data) continue;
+      // Base64 of roughly 1.5MB. Past this the model call is slower than the
+      // reader is willing to wait and the payload starts failing outright.
+      if (data.length > 2_000_000 || total + data.length > 4_500_000) continue;
+      total += data.length;
+      images.push({ media_type: type, data });
+    }
+    if (images.length) console.log(`suggest-job: ${images.length} photo(s) from ${channel}`);
+  }
+
   // Same rules the email path reads, so the extension and the inbox cannot
   // drift apart in what they have been taught.
   const vocabHints = renderHints(await loadHints(sb, tenantId));
@@ -221,13 +251,13 @@ Deno.serve(async (req) => {
   // about what this workspace has been taught.
   const corrections = renderCorrections(await loadCorrections(sb, tenantId));
 
-  const meta = `Channel: email thread. Sender: ${sender}. Subject: ${subject ?? "-"}`
+  const meta = `Channel: ${channel === "whatsapp" ? "WhatsApp conversation" : "email thread"}. Sender: ${sender}. Subject: ${subject ?? "-"}`
     + (thread.received_at ? `. Received: ${thread.received_at}` : "");
 
   // ---- suggest ------------------------------------------------------------
   if ((payload.action ?? "suggest") === "suggest") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList, [], [], vocabHints, diary, corrections); }
+    try { ex = await extract(body, meta, typeList, images, [], vocabHints, diary, corrections); }
     catch (e) {
       // A parse failure here is not an error the reader should see as a
       // failure of theirs - it is simply "no suggestion". Logged, not shown.
@@ -284,7 +314,7 @@ Deno.serve(async (req) => {
     // a forwarded email does. Without this the board cannot answer "where did
     // this come from" six weeks later, which is the whole point of OneShot.
     const { data: msg, error: msgErr } = await sb.from("messages").insert({
-      tenant_id: tenantId, channel: "email", kind: "request",
+      tenant_id: tenantId, channel, kind: "request",
       sender, subject, body,
       // The mail client's own id for this thread, so every browser can be told
       // it has already been dealt with - not just the one that did it.
@@ -346,7 +376,7 @@ Deno.serve(async (req) => {
   // one of them is how two jobs get forgotten.
   if (payload.action === "amend") {
     let ex: Extraction;
-    try { ex = await extract(body, meta, typeList, [], [], vocabHints, diary, corrections); }
+    try { ex = await extract(body, meta, typeList, images, [], vocabHints, diary, corrections); }
     catch (e) {
       console.warn("suggest-job: amend parse failed:", e instanceof Error ? e.message : String(e));
       return json({ ok: true, outcomes: [], reason: "I couldn't read this thread." });
@@ -401,7 +431,7 @@ Deno.serve(async (req) => {
     // Provenance: the amendment traces back to the thread that asked for it,
     // the same way a created job does.
     const { data: msg } = await sb.from("messages").insert({
-      tenant_id: tenantId, channel: "email", kind: "amendment",
+      tenant_id: tenantId, channel, kind: "amendment",
       sender, subject, body,
       raw: { source: "mail add-in", received_at: thread.received_at ?? null,
              approved_by: user.id, approved_at: new Date().toISOString() },
