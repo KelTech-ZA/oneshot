@@ -70,6 +70,8 @@
   const proposals = new Map();
   let manual = null;                 // the "this mail" flow, when it is running
   let amend = null;                  // the "change a job" flow, when it is running
+  // Which taskbar button was pressed: what the card is going to end in.
+  let intent = "job";                // job | quote | invoice
   let heartbeat = null;              // the three-hour clock, stoppable
 
   // -------------------------------------------------------------------------
@@ -145,7 +147,15 @@
     font-size: 13px; line-height: 1.4;
     box-shadow: 0 -2px 18px rgba(0,0,0,.28);
   }
-  #oneshot-bar { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; }
+  /* Five task buttons and a status line. The buttons keep their size and the
+     status gives way, because a truncated sentence is readable and a button
+     pushed off the end of the bar is not. */
+  #oneshot-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; }
+  #oneshot-bar > button { flex: none; }
+  #oneshot-status {
+    flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
   #oneshot-dot { width: 7px; height: 7px; border-radius: 50%; background: #3a4145; flex: none; }
   #oneshot-dot.live { background: #4ea373; }
   #oneshot-dot.hot  { background: #e0a33e; }
@@ -316,15 +326,22 @@
 
   const dot = el("span", { id: "oneshot-dot" });
   const status = el("span", { id: "oneshot-status", textContent: "OneShot - reading your inbox..." });
-  const mkBtn = el("button", { id: "oneshot-make",
-    className: CHAT ? "primary" : "",
-    textContent: CHAT ? "Create job from this chat" : "Create job from this mail" });
-  // Changing an existing job is a different intent from creating one, so it is
-  // its own button. WhatsApp does not get it: that reader deliberately runs a
-  // capability behind, and an amendment needs a job reference a chat rarely
-  // states.
+  // The taskbar.
+  //
+  // One row, one question: what do you want to do with what is on screen?
+  // Every answer is a button here, and they read the same on mail and on
+  // WhatsApp - the surface changes what can be read, not what a person is
+  // trying to do.
+  //
+  // These used to differ: WhatsApp had one button and mail had three, and the
+  // quote and invoice buttons were put on the CARD instead, where they sat
+  // below the fold of a scrolling panel. Choosing the task is the first
+  // decision, so it belongs where the eye already is.
+  const mkBtn = el("button", { id: "oneshot-make", textContent: "Create job" });
   const amBtn = el("button", { id: "oneshot-amend", textContent: "Amend job" });
-  const btn = el("button", { className: "primary", textContent: "Suggestions" });
+  const quoteBtn = el("button", { id: "oneshot-quote", textContent: "Create quote" });
+  const invBtn = el("button", { id: "oneshot-inv", textContent: "Create invoice" });
+  const btn = el("button", { id: "oneshot-jobs", textContent: "Show jobs" });
   // Shown INSTEAD of the usual bar contents while one mail is being looked at.
   const showingLbl = el("span", { id: "oneshot-showing" });
   const showMake = el("button", { className: "primary", textContent: "Make job" });
@@ -332,7 +349,7 @@
   const showDone = el("button", { className: "ghost", textContent: "\u00d7", title: "Stop showing this one" });
 
   const bar = el("div", { id: "oneshot-bar" },
-    CHAT ? [dot, status, mkBtn] : [dot, status, mkBtn, amBtn, btn]);
+    [dot, status, mkBtn, amBtn, quoteBtn, invBtn, btn]);
   const grip = el("div", { id: "oneshot-grip", title: "Drag to resize the list" });
   const panel = el("div", { id: "oneshot-panel" });
   strip.append(bar, grip, panel);
@@ -376,6 +393,11 @@
   showDone.onclick = () => { stopShowing(); render(); };
 
   btn.onclick = () => {
+    // On WhatsApp there is no list to show. The reader only ever reads the
+    // chat that is open, so there is nothing for this to toggle - it opens
+    // the board instead, which is what somebody pressing "Show jobs" in a
+    // chat window actually wants to see.
+    if (CHAT) { window.open(APP + "/dashboard", "_blank"); return; }
     // Deliberately does NOT stop showing. Closing the list while still working
     // through one mail is the normal case, and throwing away which mail that
     // is would put them right back where they started. The "x" is how you say
@@ -388,13 +410,40 @@
   // The deliberate route: whatever is open in the reading pane, right now.
   // Unlike a list row this carries the whole thread, so the parser gets the
   // real text rather than a preview line.
-  mkBtn.onclick = async () => {
+  //
+  // Three buttons share it, because reading the thread is the same work
+  // whatever is going to be made from it. Which one was pressed is kept in
+  // `intent`, and the card ends in that one decision rather than offering all
+  // three again at the bottom.
+  const TASKS = { job: mkBtn, quote: quoteBtn, invoice: invBtn };
+  const TASK_WORD = { job: "job", quote: "quote", invoice: "invoice" };
+
+  const markIntent = () => {
+    const live = !!(manual && !manual.error && !manual.done);
+    for (const k of Object.keys(TASKS)) TASKS[k].classList.toggle("primary", live && k === intent);
+    // Nothing read yet: "Create job" is the ordinary thing to want, so it is
+    // the one that looks pressable.
+    if (!live) mkBtn.classList.add("primary");
+  };
+
+  const startTask = async (which) => {
+    intent = which;
     if (!session) { openPanel = true; render(); return; }
-    mkBtn.disabled = true;
-    const was = mkBtn.textContent;
-    mkBtn.textContent = "Reading this mail...";
+
+    // The thread has already been read and is sitting on screen. Changing
+    // your mind about what to make of it is not a reason to read it again:
+    // another parse costs money, takes seconds, and could come back saying
+    // something different from what is being looked at.
+    if (manual && !manual.error && !manual.done && manual.state === "proposed") {
+      openPanel = true; render(); return;
+    }
+
+    const btnFor = TASKS[which];
+    btnFor.disabled = true;
+    const was = btnFor.textContent;
+    btnFor.textContent = CHAT ? "Reading this chat..." : "Reading this mail...";
     const msg = await askReader();
-    mkBtn.disabled = false; mkBtn.textContent = was;
+    btnFor.disabled = false; btnFor.textContent = was;
     if (!msg || !msg.body || msg.body.length < 40) {
       openPanel = true;
       manual = { error: CHAT
@@ -420,6 +469,10 @@
                failed: out.error || null, state: "proposed" };
     render();
   };
+
+  mkBtn.onclick = () => startTask("job");
+  quoteBtn.onclick = () => startTask("quote");
+  invBtn.onclick = () => startTask("invoice");
 
   // Re-reads the open thread and asks which job it changes. Like the create
   // button, the click is the decision: it always opens, and a parser that
@@ -760,7 +813,8 @@
       : n
         ? `${n} of the last ${Math.min(messages.length, HOW_MANY)} look like they need a job`
         : `Nothing in the last ${Math.min(messages.length, HOW_MANY)} needs a job`;
-    btn.textContent = n ? `Show ${n}` : "Suggestions";
+    btn.textContent = n ? `Show ${n}` : "Show jobs";
+    markIntent();
 
     // While one mail is being looked at, the bar is about that mail. Anything
     // else there is just competing for the one line they are reading.
@@ -771,7 +825,7 @@
                         document.createTextNode(showing.subject));
       bar.append(dot, showingLbl, showDone, showBack, showMake);
     } else {
-      bar.append(dot, status, mkBtn, amBtn, btn);
+      bar.append(dot, status, mkBtn, amBtn, quoteBtn, invBtn, btn);
     }
   }
 
@@ -1215,13 +1269,15 @@
     const charges = chargeBlock(f);
     charges.ask();
 
-    const go = el("button", { className: "primary", textContent: "Create job" });
-    const quoteBtn = el("button", { textContent: "Create quote" });
-    const invBtn = el("button", { textContent: "Create invoice" });
+    // One button, saying what the taskbar was asked for. The three live up
+    // there; repeating them down here would be asking the same question
+    // twice and would put the answer below the fold of a scrolling panel.
+    const go = el("button", { className: "primary",
+      textContent: `Create ${TASK_WORD[intent]}` });
     const cancel = el("button", { className: "ghost", textContent: "Cancel" });
-    const acts = again ? [again, cancel, quoteBtn, invBtn, go] : [cancel, quoteBtn, invBtn, go];
+    const acts = again ? [again, cancel, go] : [cancel, go];
     const msg = el("div", { className: "oneshot-meta" });
-    cancel.onclick = () => { manual = null; scan(); };
+    cancel.onclick = () => { manual = null; intent = "job"; scan(); };
 
     const fields = () => ({
       type: typeSel.value, date: date.value, window: win.value,
@@ -1229,21 +1285,21 @@
       ref: ref.value, hard: hard.checked, extra: f.extra,
       charges: f.charges, billing: f.billing,
     });
-    const busy = (on, who, label) => {
-      for (const b of [go, quoteBtn, invBtn]) b.disabled = on;
-      who.textContent = on ? label : who._was;
+    const was = go.textContent;
+    const busy = (on, label) => {
+      go.disabled = on; cancel.disabled = on;
+      go.textContent = on ? label : was;
     };
-    for (const b of [go, quoteBtn, invBtn]) b._was = b.textContent;
 
     // ---- a quote -----------------------------------------------------------
     // No job. Most quotes are for work that never happens, and a board full of
     // maybes is no use to whoever reads it at seven in the morning. The job as
     // it stands on the card travels with the quote, so accepting it later has
     // something to build from.
-    quoteBtn.onclick = async () => {
+    async function makeQuote() {
       const lines = (f.charges || []).filter((c) => String(c.description || "").trim());
       if (!lines.length) { msg.textContent = "Add a line before quoting."; return; }
-      busy(true, quoteBtn, "Quoting...");
+      busy(true, "Quoting...");
       const ex = buildExtraction(fields(), manual.thread);
       const out = await api("suggest-job", {
         action: "quote",
@@ -1254,7 +1310,7 @@
         job_draft: (ex.jobs || [])[0] ?? null,
         their_reference: ref.value || null,
       });
-      busy(false, quoteBtn);
+      busy(false);
       if (!out || out.error) { msg.textContent = (out && out.error) || "Could not make that quote."; return; }
       // Same shape the create path leaves behind, so the panel renders it
       // without knowing which of the two made it.
@@ -1269,20 +1325,24 @@
       // The thread is NOT marked done. A quote is an offer, and the work it
       // offers has not been taken on - so the thread is still something
       // somebody has to come back to.
+      intent = "job";
       scan();
+    }
+
+    // Whichever task the taskbar was asked for.
+    //
+    // An invoice makes the job and its charges, then opens the costs sheet
+    // with the lines on it. It stops there rather than issuing: an invoice
+    // number is permanent and sequential, so a mis-parse that takes one has to
+    // be voided and the void stays on the record for good. One press, one
+    // look, one click - and the look is the part that cannot be skipped.
+    go.onclick = () => {
+      if (intent === "quote") return makeQuote();
+      return create(intent === "invoice" ? "Invoicing..." : "Creating...", intent === "invoice");
     };
 
-    // ---- an invoice --------------------------------------------------------
-    // Makes the job and its charges, then opens the costs sheet with the lines
-    // on it. It stops there rather than issuing: an invoice number is
-    // permanent and sequential, so a mis-parse that takes one has to be voided
-    // and the void stays on the record for good. One press, one look, one
-    // click - and the look is the part that cannot be skipped.
-    invBtn.onclick = () => create(invBtn, "Invoicing...", true);
-    go.onclick = () => create(go, "Creating...", false);
-
-    async function create(btn, label, thenInvoice) {
-      busy(true, btn, label);
+    async function create(label, thenInvoice) {
+      busy(true, label);
       const ex = buildExtraction(fields(), manual.thread);
       // The parser's original proposal travels with the edited one, so the
       // difference between them can be kept. That difference is the only
@@ -1299,8 +1359,8 @@
         // being made - see _shared/reminders.ts.
         reminder: remAt ? { due_at: remAt, note: rem.note.trim() || null } : null,
       });
-      if (done.error) { busy(false, btn); msg.textContent = done.error; return; }
-      busy(false, btn);
+      if (done.error) { busy(false); msg.textContent = done.error; return; }
+      busy(false);
 
       // Mark the THREAD dealt with. This was missing entirely: a job created
       // from the reading pane recorded nothing, so the same thread kept being
@@ -1310,6 +1370,11 @@
         decisions[key] = "done";
         store.save({ decisions });
         justDone.set(key, { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
+        // The card may have been opened FROM a row, which left a parsed
+        // proposal behind. Leaving it there would offer the same thread for
+        // review again, with a reading of a mail that has already become a
+        // job.
+        proposals.delete(key);
       }
       // Said out loud either way. A reminder silently not set is the failure
       // this whole feature cannot afford.
@@ -1340,6 +1405,7 @@
       }
 
       manual = { done: { text, ref: firstRef, subject: manual.msg.subject } };
+      intent = "job";
       scan();
     }
 
@@ -1372,9 +1438,17 @@
     status.textContent = manual && manual.msg
       ? `Read ${manual.msg.messageCount} message${manual.msg.messageCount > 1 ? "s" : ""} from ${manual.msg.fromName || "this chat"}`
       : session
-        ? "OneShot - open a chat, then create a job from it"
+        ? "OneShot - open a chat, then pick a task"
         : "OneShot - sign in to create jobs";
+    markIntent();
+    // panel-open is what the stylesheet hangs the drag handle off, and
+    // applyPanelH is what makes the stored height mean anything. renderChat
+    // set neither, so the panel could not be pulled up or down on WhatsApp -
+    // it worked on mail only because render() does both and returns here
+    // before reaching them.
+    strip.classList.toggle("panel-open", openPanel);
     panel.classList.toggle("open", openPanel);
+    applyPanelH();
     if (!openPanel) { panel.textContent = ""; return; }
     panel.textContent = "";
     if (!session) { panel.append(authRow()); return; }
@@ -1672,36 +1746,43 @@
     const prop = proposals.get(keyOf(m));
     if (prop) meta.textContent = proposalText(prop.out, prop.thread.body);
 
+    // A row picks the THREAD. The taskbar picks what to do with it.
+    //
+    // This used to be the whole job in two clicks: press once to parse, press
+    // again and the parser's output went straight onto the board. No fields to
+    // correct, no charges to look at, no price to change - a second way in
+    // that skipped the review the card exists to provide. It also had no way
+    // to reach a quote or an invoice, because those are decided on the
+    // taskbar and the row never went near it.
+    //
+    // So it hands off instead. Both routes now end at the same card, and the
+    // question "what am I making" is asked in exactly one place.
     const make = el("button", { className: "primary",
-      textContent: prop ? (prop.out.isJob ? "Create in OneShot" : "Nothing to create") : "Make job" });
+      textContent: prop ? (prop.out.isJob ? "Review" : "Nothing to create") : "Review" });
     if (prop && !prop.out.isJob) make.disabled = true;
     const not  = el("button", { className: "ghost", textContent: "Not this one" });
     const later= el("button", { className: "ghost", textContent: "Later" });
 
     make.onclick = async () => {
-      // Second click, and only the second click, writes anything.
-      if (prop && prop.out.isJob) {
-        make.disabled = true; make.textContent = "Creating...";
-        const done = await api("suggest-job", {
-          action: "create", thread: prop.thread, extraction: prop.out.extraction,
-          external_id: keyOf(m) || null,
-        });
-        if (done.error) {
-          meta.textContent = done.error;
-          make.disabled = false; make.textContent = "Create in OneShot";
-          return;
-        }
-        proposals.delete(keyOf(m));
-        decisions[keyOf(m)] = "done"; store.save({ decisions });
-        justDone.set(keyOf(m), { text: done.reply || "Created.", ref: (done.refs || [])[0] || null });
+      // Already parsed once: open it rather than paying for the same answer
+      // twice. The proposal cache exists because this panel is rebuilt from
+      // scratch every time the inbox republishes.
+      if (prop) {
+        manual = { msg: m, thread: prop.thread, out: prop.out,
+                   failed: null, state: "proposed" };
+        openPanel = true;
         render();
         return;
       }
       make.disabled = true; make.textContent = "Reading...";
       const thread = threadOf(m);
       const out = await api("suggest-job", { action: "suggest", thread });
-      if (out.error) { meta.textContent = out.error; make.disabled = false; make.textContent = "Make job"; return; }
+      if (out.error) { meta.textContent = out.error; make.disabled = false; make.textContent = "Review"; return; }
       proposals.set(keyOf(m), { thread, out });
+      // Straight onto the card. The click said "this one"; making them press
+      // a second button to see it would be asking the same question twice.
+      manual = { msg: m, thread, out, failed: null, state: "proposed" };
+      openPanel = true;
       render();
     };
     not.onclick   = () => {
