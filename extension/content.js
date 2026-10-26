@@ -190,6 +190,20 @@
   .oneshot-subj { font-weight: 600; color: #eef1f2; }
   .oneshot-meta { color: #8d979b; font-size: 12px; margin-top: 2px; }
   .oneshot-acts { display: flex; gap: 6px; flex: none; }
+  /* The buttons do not scroll away.
+     The panel is a fixed-height scroller - 38vh by default - and the card
+     inside it is taller than that: job fields, then the charges, then the
+     reminder. Before the charges were added the actions were already below
+     the fold; afterwards they sat 715px down a 292px window, which reads
+     exactly like a feature that was never built. A decision is not something
+     to go hunting for, so the row carrying it is pinned to the bottom of the
+     scroller with the panel's own background behind it. */
+  .oneshot-row .oneshot-acts {
+    position: sticky; bottom: 0; z-index: 2;
+    background: #101314; padding: 8px 0 2px;
+    margin-top: 10px; border-top: 1px solid #2b3033;
+    flex-wrap: wrap;
+  }
   .oneshot-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-top: 10px; }
   .oneshot-f { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #8d979b; }
   .oneshot-f > span { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
