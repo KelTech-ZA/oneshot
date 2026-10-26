@@ -1,5 +1,5 @@
-import React, { useContext, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import React, { useContext, useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { JobStamp } from "./Today";
 import JobFlags from "./JobFlags";
@@ -30,6 +30,13 @@ export default function Job() {
   const { id } = useParams();
   const { session, profile } = useContext(Ctx);
   const nav = useNavigate();
+  // ?costs=1 means somebody arrived here to deal with the money - from the
+  // extension's "Create invoice", which makes the job and then sends them
+  // straight at the charges rather than issuing anything itself. There are no
+  // tabs on this page, so the panel is scrolled to rather than switched to.
+  const [params] = useSearchParams();
+  const wantCosts = params.get("costs") === "1";
+  const costsRef = useRef(null);
   const [job, setJob] = useState(null);
   const [items, setItems] = useState([]);
   const [thumbs, setThumbs] = useState({});
@@ -224,6 +231,13 @@ export default function Job() {
   };
 
   useEffect(() => { load(); sessionStorage.setItem("oneshot_app", "1"); }, [id]);
+
+  // After the job has loaded, not before: the panel does not exist until then,
+  // and scrolling to something that is not on the page does nothing silently.
+  useEffect(() => {
+    if (!wantCosts || !job || !costsRef.current) return;
+    costsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [wantCosts, job]);
 
   useEffect(() => {
     let timeout;
@@ -668,7 +682,7 @@ export default function Job() {
         </div>
 
         {isOps && (
-          <aside className="charges-panel">
+          <aside className="charges-panel" ref={costsRef}>
             <JobCharges jobId={id} tenantId={job.tenant_id} job={job} onJobChange={load} />
 
             <div className="no-print" style={{ marginTop: 16 }}>

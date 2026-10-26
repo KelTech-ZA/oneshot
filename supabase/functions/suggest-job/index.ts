@@ -99,6 +99,16 @@ Deno.serve(async (req) => {
     proposed_changes?: Change[];
     // The single-job shape, still accepted.
     hint?: string; job_id?: string; changes?: Change[];
+    // Charge lines as the person edited them on the card, for "price" and
+    // "quote". Deliberately not the parser's own: the whole point of showing
+    // them is that what gets priced and quoted is what was on screen.
+    lines?: { description?: string; unit?: string | null;
+              quantity?: number | string | null;
+              unit_price?: number | string | null }[];
+    client_id?: string | null;
+    job_draft?: unknown;
+    their_reference?: string | null;
+    notes?: string | null;
   };
   try { payload = await req.json(); }
   catch { return json({ error: "Malformed request." }, 400); }
@@ -192,6 +202,58 @@ Deno.serve(async (req) => {
       if (r.external_id) parked[r.external_id] = { due_at: r.due_at, note: r.note ?? null };
     }
     return json({ ok: true, parked });
+  }
+
+  // ---- price --------------------------------------------------------------
+  // "What do we usually charge for these?" Asked by the card once it has lines
+  // on it, so the prices are on screen BEFORE anybody presses a button rather
+  // than appearing on an invoice afterwards.
+  //
+  // price_lines reads this workspace's own charge history and rate card and
+  // says where each figure came from. A line the message already priced comes
+  // back marked 'stated' and unchanged - see rule 1 in _shared/billing.ts.
+  //
+  // Never fatal, for the same reason "seen" is not: not knowing a price is
+  // where the card already stood, and it must not stop anybody quoting.
+  if (payload.action === "price") {
+    const lines = Array.isArray(payload.lines) ? payload.lines.slice(0, 60) : [];
+    if (!lines.length) return json({ ok: true, prices: [] });
+
+    const { data, error } = await sb.rpc("price_lines", { p_lines: lines });
+    if (error) {
+      console.warn("suggest-job: pricing failed:", error.message);
+      return json({ ok: true, prices: [] });
+    }
+    return json({ ok: true, prices: data ?? [] });
+  }
+
+  // ---- quote --------------------------------------------------------------
+  // A quote, from the lines as the person edited them. No job: most quotes are
+  // for work that never happens, and a job list full of maybes is no use to
+  // the people reading it at seven in the morning. The parsed job travels with
+  // the quote in job_draft, so accepting it has something to build from.
+  if (payload.action === "quote") {
+    const lines = Array.isArray(payload.lines) ? payload.lines.slice(0, 200) : [];
+    if (!lines.length) {
+      return json({ error: "A quote needs at least one line." }, 400);
+    }
+
+    const { data, error } = await sb.rpc("create_quote", {
+      p_lines:     lines,
+      p_client_id: payload.client_id ?? null,
+      p_job_id:    payload.job_id ?? null,
+      p_job_draft: payload.job_draft ?? null,
+      p_their_ref: payload.their_reference ?? null,
+      p_notes:     payload.notes ?? null,
+    });
+    if (error) {
+      // is_ops() and the RLS policy both raise readable messages. Passing them
+      // through beats "something went wrong" on a card with no console.
+      console.error("suggest-job: quote failed:", error.message);
+      return json({ error: error.message }, 400);
+    }
+    const q = Array.isArray(data) ? data[0] : data;
+    return json({ ok: true, quote: q });
   }
 
   // -------------------------------------------------------------------------
@@ -331,6 +393,17 @@ Deno.serve(async (req) => {
       const reply = await materialise(sb, tenantId, msg, pruneMissing(ex));
       const refs = [...reply.matchAll(/JOB-\d{4}-\d+/g)].map((m) => m[0]);
 
+      // The ids behind those refs. "Create invoice" on the card has to land
+      // somebody on the job's costs sheet, and a reference is not a URL. One
+      // query however many jobs the thread made, and it replaces the lookup
+      // the reminder used to do on its own.
+      const ids: Record<string, string> = {};
+      if (refs.length) {
+        const { data: rows } = await sb.from("jobs")
+          .select("id, ref").eq("tenant_id", tenantId).in("ref", refs);
+        for (const r of (rows ?? []) as { id: string; ref: string }[]) ids[r.ref] = r.id;
+      }
+
       // What the parser offered against what the reader actually approved.
       // Recorded after the job exists, so a failure here can never cost a job.
       await recordFeedback(sb, {
@@ -347,21 +420,17 @@ Deno.serve(async (req) => {
       // produced no job because a date was malformed would be the worst
       // trade this system could make.
       let reminder: { set: boolean; at?: string; why?: string } = { set: false };
-      if (payload.reminder?.due_at && refs.length) {
-        const { data: made } = await sb.from("jobs")
-          .select("id").eq("tenant_id", tenantId).eq("ref", refs[0]).maybeSingle();
-        if (made?.id) {
-          reminder = await attachReminder(sb, {
-            tenantId, jobId: made.id, userId: user.id,
-            reminder: payload.reminder, source: "extension_card",
-          });
-          if (!reminder.set) {
-            console.warn("suggest-job: reminder not set:", reminder.why);
-          }
+      if (payload.reminder?.due_at && refs.length && ids[refs[0]]) {
+        reminder = await attachReminder(sb, {
+          tenantId, jobId: ids[refs[0]], userId: user.id,
+          reminder: payload.reminder, source: "extension_card",
+        });
+        if (!reminder.set) {
+          console.warn("suggest-job: reminder not set:", reminder.why);
         }
       }
 
-      return json({ ok: true, reply, refs, reminder });
+      return json({ ok: true, reply, refs, job_ids: ids, reminder });
     } catch (e) {
       console.error("suggest-job: create failed:", e instanceof Error ? e.message : String(e));
       return json({ error: "Could not create the job. Nothing was saved." }, 500);

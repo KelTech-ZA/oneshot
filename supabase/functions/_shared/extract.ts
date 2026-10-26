@@ -6,8 +6,8 @@ import {
   readJobStates, renderJobStates, resolveJob,
 } from "./amend.ts";
 import type { JobMatch } from "./amend.ts";
-import { planBilling, planCharges } from "./billing.ts";
-import type { ChargeType, ClientRow } from "./billing.ts";
+import { applyPriceHints, planBilling, planCharges, pricingFlags } from "./billing.ts";
+import type { ChargeType, ClientRow, HintedPlan, PriceHint } from "./billing.ts";
 import { noteVocab, recordFeedback } from "./learn.ts";
 import { ignoredTerms, loadHints, mapJobType, normaliseTerm, renderHints, ruleMap } from "./hints.ts";
 import { dedupeJobs } from "./dedupe.ts";
@@ -1046,9 +1046,37 @@ export async function materialise(
         await note("client_name", String(billing.row.bill_to_name));
       }
 
-      const { rows: chargeRows, unpriced } = planCharges(
+      const planned = planCharges(
         tenantId, job.id, j.charges, chargeTypes, null, chargeRules,
       );
+
+      // Lines the message described but did not price. The rate card has
+      // always been allowed to price those; this also asks what the workspace
+      // actually charged last time, which matters because most workspaces
+      // never fill the rate card in. Rule 1 in billing.ts sets the terms: the
+      // message always wins, the number arrives with its provenance, and the
+      // job is flagged check_price so nobody invoices it unseen.
+      //
+      // A failure here is not a failure of the job. The hint is a convenience
+      // and the line is already correct at zero, so the error is logged and
+      // the unhinted plan is used.
+      let priced: HintedPlan = { ...planned, guessed: [] };
+      if (planned.unpriced.length && planned.rows.length) {
+        try {
+          const { data: hints, error: hintErr } = await sb.rpc("price_lines_in", {
+            p_tenant: tenantId,
+            p_lines: planned.rows.map((r) => ({
+              description: r.description, unit: r.unit, quantity: r.quantity,
+            })),
+          });
+          if (hintErr) console.error("price hints failed:", hintErr.message);
+          else priced = applyPriceHints(planned, (hints ?? []) as PriceHint[]);
+        } catch (e) {
+          console.error("price hints threw:", (e as Error).message);
+        }
+      }
+
+      const chargeRows = priced.rows;
       for (const row of chargeRows) {
         // A priced line matching nothing on the rate card is either a new kind
         // of work or a wording the rate card should recognise. Either way a
@@ -1062,10 +1090,14 @@ export async function materialise(
       }
       // Quoted work with no figure against it is flagged on the job, so the
       // board shows it rather than it surfacing when the invoice goes out.
-      if (unpriced.length) {
-        const extra = unpriced.map((d) => `missing_info:pricing — ${d}`.slice(0, 180));
-        await sb.from("jobs")
-          .update({ flags: [...flags, ...extra] }).eq("id", job.id);
+      // Two flags now, because they need different actions: missing_info
+      // means fill this in, check_price means agree with this.
+      {
+        const extra = pricingFlags(priced);
+        if (extra.length) {
+          await sb.from("jobs")
+            .update({ flags: [...flags, ...extra] }).eq("id", job.id);
+        }
       }
     }
 

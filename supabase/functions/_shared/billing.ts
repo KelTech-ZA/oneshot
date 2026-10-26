@@ -12,6 +12,18 @@
 //      the job is flagged. A blank gets queried before it goes out; a guessed
 //      number gets paid, and then it is your word against their quote.
 //
+//      A price taken from THIS WORKSPACE'S OWN CHARGE HISTORY is not an
+//      invention and is allowed - see applyPriceHints below - but only on
+//      these terms, which are what keep it from becoming one:
+//        - it never overrides a figure the message stated;
+//        - it carries where it came from, in words a person can argue with
+//          ("last crate build was R3 135.00 on SEC-0142"), never a bare number;
+//        - the job is flagged check_price, so the line is looked at before
+//          anybody issues an invoice off the back of it.
+//      The rate card was always allowed to price a line this way. The only
+//      change is that a workspace which has never filled its rate card in can
+//      now be asked what it actually charged instead.
+//
 //   2. THE RATE CARD IS NOT EDITED FROM A MAIL. A quote line is attached to an
 //      existing charge type when its name matches one, so reporting by type
 //      keeps working. When nothing matches, the line stands on its own rather
@@ -305,4 +317,101 @@ export function planBilling(
   }
 
   return { row: any ? row : null, job };
+}
+
+// ---------------------------------------------------------------------------
+// Filling in prices the message did not state
+// ---------------------------------------------------------------------------
+// planCharges leaves those lines at zero and names them in `unpriced`. That is
+// still the right answer when nothing is known. But a workspace that has
+// quoted crates forty times does know roughly what a crate costs, and making
+// somebody type it again - from a number they would have to go and look up -
+// is work the app can save them.
+//
+// The source is price_lines_in in the database, which reads this workspace's
+// own job_charges and rate card and returns what it found along with where it
+// found it. Applying the answers is kept here, as a plain function over plain
+// data, because it decides what goes on an invoice and that is worth being
+// able to test without a database.
+
+/** One row of price_lines_in. */
+export interface PriceHint {
+  idx: number;
+  unit_price: number | string | null;
+  source: string | null;
+  seen: string | null;
+}
+
+/** A line this function priced, and what it priced it from. */
+export interface GuessedPrice {
+  description: string;
+  unit_price: number;
+  seen: string;
+}
+
+export interface HintedPlan {
+  rows: ChargeRow[];
+  /** Still unpriced after hinting: nothing was known about these at all. */
+  unpriced: string[];
+  /** Priced from history rather than from the message. Needs a human eye. */
+  guessed: GuessedPrice[];
+}
+
+/**
+ * Fill zero-priced lines from what this workspace has charged before.
+ *
+ * Hints are matched to rows by position, which is how price_lines_in returns
+ * them - idx is the index of the line as it was sent. A hint for a row that
+ * already has a price is ignored rather than preferred: rule 1.
+ */
+export function applyPriceHints(plan: ChargePlan, hints: PriceHint[]): HintedPlan {
+  const unpriced = new Set(plan.unpriced);
+  const byIdx = new Map<number, PriceHint>();
+  for (const h of hints ?? []) {
+    if (h && Number.isInteger(h.idx)) byIdx.set(h.idx, h);
+  }
+
+  const rows: ChargeRow[] = [];
+  const guessed: GuessedPrice[] = [];
+  const stillUnpriced: string[] = [];
+
+  plan.rows.forEach((row, i) => {
+    // Only a line the MESSAGE did not price is open to a hint. A line the
+    // message priced at zero - "no charge", "waived" - said zero on purpose.
+    if (!unpriced.has(row.description)) { rows.push(row); return; }
+
+    const hint = byIdx.get(i);
+    const price = hint == null ? null : money(hint.unit_price);
+
+    // 'stated' means the hint only handed back the figure already in the
+    // message. That cannot happen for a line in `unpriced`, but if it ever
+    // did it would not be new information, so it is not treated as one.
+    if (price == null || price <= 0 || hint?.source === "stated") {
+      stillUnpriced.push(row.description);
+      rows.push(row);
+      return;
+    }
+
+    rows.push({ ...row, unit_price: price });
+    guessed.push({
+      description: row.description,
+      unit_price: price,
+      seen: hint?.seen ?? hint?.source ?? "charged before",
+    });
+  });
+
+  return { rows, unpriced: stillUnpriced, guessed };
+}
+
+/**
+ * The flags a hinted plan puts on the job.
+ *
+ * Two different things, kept apart because they need different actions: a
+ * blank has to be filled in before invoicing, a guess has to be agreed with.
+ */
+export function pricingFlags(plan: HintedPlan): string[] {
+  const out: string[] = [];
+  for (const d of plan.unpriced) out.push(`missing_info:pricing — ${d}`.slice(0, 180));
+  for (const g of plan.guessed) out.push(`check_price — ${g.description} (${g.seen})`.slice(0, 180));
+  return out;
 }

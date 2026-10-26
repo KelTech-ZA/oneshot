@@ -223,6 +223,47 @@
     border-radius: 6px; padding: 5px 8px; font: inherit; min-width: 210px;
   }
   .oneshot-warn { color: #e0a33e; }
+  /* The money on the card.
+     A table rather than a stack of labelled fields, because the thing being
+     checked is a column of figures and a column is what people add up. The
+     description takes the room it needs; quantity, unit and price are narrow
+     and fixed, so the decimal points line up down the card.
+     Each line carries a line of grey under it saying where its price came
+     from. That line is the whole reason this is editable here: a number with
+     no provenance is one somebody has to go and verify elsewhere. */
+  .oneshot-money { grid-column: 1 / -1; border-top: 1px solid #2b3033; padding-top: 8px; margin-top: 2px; }
+  .oneshot-money-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #8d979b;
+  }
+  .oneshot-lines { display: flex; flex-direction: column; gap: 6px; margin-top: 7px; }
+  .oneshot-line { display: grid; grid-template-columns: 1fr 48px 56px 78px 20px; gap: 5px; align-items: center; }
+  .oneshot-line input {
+    background: #1c2123; border: 1px solid #343a3d; color: #eef1f2;
+    border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 13px; min-width: 0; width: 100%;
+  }
+  .oneshot-line input.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* A price nobody knows is left empty and marked, never filled with a zero.
+     Zero is a price; blank is a question. */
+  .oneshot-line input.blank { border-color: #6a5422; background: #241f14; }
+  .oneshot-x {
+    background: none; border: none; color: #8d979b; cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 2px 4px;
+  }
+  .oneshot-x:hover { color: #e0a33e; }
+  .oneshot-from { grid-column: 1 / -1; font-size: 11px; color: #8d979b; margin: -2px 0 2px; }
+  .oneshot-from.guess { color: #9a8a5e; }
+  .oneshot-sum {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-top: 8px; padding-top: 7px; border-top: 1px solid #2b3033;
+    font-variant-numeric: tabular-nums;
+  }
+  .oneshot-sum b { color: #eef1f2; font-size: 15px; }
+  .oneshot-addline {
+    background: none; border: 1px dashed #343a3d; color: #8d979b;
+    border-radius: 6px; padding: 4px 9px; font: inherit; font-size: 12px; cursor: pointer; margin-top: 7px;
+  }
+  .oneshot-addline:hover { color: #eef1f2; border-color: #4a5255; }
   /* Reminders. Two shapes: a pair of fields inside the job card, and the
      little "come back to this?" step the Later button opens. */
   .oneshot-rem { grid-column: 1 / -1; border-top: 1px solid #2b3033; padding-top: 8px; margin-top: 2px; }
@@ -475,15 +516,42 @@
   async function loadClients() {
     if (!session) return;
     try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/clients?select=email,name`, {
+      // billing_email, NOT email. There is no `email` column on clients and
+      // never has been - this asked for one, PostgREST answered 400 every time
+      // the strip loaded, and the catch below ate it. The visible effect was
+      // not an error but an absence: clientsByName stayed empty, so no thread
+      // and no chat was ever matched to a customer anybody already had.
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/clients?select=name,legal_name,aliases,billing_email`, {
         headers: { apikey: ANON, authorization: `Bearer ${session.access_token}` },
       });
+      if (!res.ok) {
+        // Said out loud. A silent catch is what hid the last one for weeks.
+        console.warn("OneShot: could not load clients -", res.status, await res.text());
+        return;
+      }
       const rows = await res.json();
-      clientDomains = [...new Set(rows.map(r => String(r.email || "").split("@")[1]).filter(Boolean))];
-      clientsByName = new Map(rows.filter(r => r.name && r.email)
-        .map(r => [String(r.name).trim().toLowerCase(), String(r.email).toLowerCase()]));
+      if (!Array.isArray(rows)) return;
+
+      clientDomains = [...new Set(
+        rows.map((r) => String(r.billing_email || "").split("@")[1]).filter(Boolean))];
+
+      // Every name a customer goes by, not just the one on the record. A
+      // gallery writes itself three ways and signs mail a fourth.
+      clientsByName = new Map();
+      for (const r of rows) {
+        const mail = String(r.billing_email || "").toLowerCase();
+        if (!mail) continue;
+        for (const n of [r.name, r.legal_name, ...(Array.isArray(r.aliases) ? r.aliases : [])]) {
+          const k = String(n || "").trim().toLowerCase();
+          if (k && !clientsByName.has(k)) clientsByName.set(k, mail);
+        }
+      }
       store.save({ clientDomains });
-    } catch { /* scoring still works without it */ }
+      console.log(`OneShot: ${clientsByName.size} client name(s) known`);
+    } catch (e) {
+      console.warn("OneShot: could not load clients -", e && e.message);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -773,6 +841,27 @@
         [i.description, i.dimensions].filter(Boolean).join(" - ")).join("\n"),
       ref: j.client_ref || "",
       hard: !!j.hard_deadline,
+      // The priced lines the parser read out of the body or an attachment.
+      // These used to stop here: prefill never picked them up and
+      // buildExtraction never put them back, so every price in a mail was
+      // silently dropped the moment anybody pressed Create on the card. Jobs
+      // beyond the first kept theirs, because those travel whole in `extra`,
+      // which is why it looked like it worked.
+      charges: (Array.isArray(j.charges) ? j.charges : []).map((c) => ({
+        description: String(c.description ?? "").trim(),
+        unit: c.unit ? String(c.unit) : "",
+        quantity: c.quantity == null || c.quantity === "" ? 1 : Number(c.quantity) || 1,
+        // null, not 0. A line the parser could not price is a question, and a
+        // zero would answer it with "free".
+        unit_price: c.unit_price == null || c.unit_price === "" ? null : Number(c.unit_price),
+        // Filled in by the price lookup once the card is on screen.
+        from: c.unit_price == null ? null : "from the message",
+        stated: c.unit_price != null,
+      })).filter((c) => c.description),
+      // Who gets billed. Carried through untouched for the same reason, and
+      // not shown on the card: it is not a decision anybody makes while
+      // reading a mail, and the costs sheet shows it afterwards.
+      billing: j.billing ?? null,
       extra: out && out.extraction && (out.extraction.jobs || []).length > 1
         ? (out.extraction.jobs || []).slice(1) : [],
     };
@@ -788,10 +877,25 @@
     for (const a of lines(f.delivery)) stops.push({ kind: "delivery", address: a, label: null });
     const items = lines(f.items).map((d) => ({ description: d, quantity: 1, identity_tier: 1 }));
     if (!items.length) items.push({ description: "Consignment", quantity: 1, identity_tier: 3 });
+    // Lines as they stand on the card, which is not the same thing as lines as
+    // the parser read them - the whole point of showing them is that what gets
+    // written is what was looked at. A line still without a price goes through
+    // as null so that planCharges records it at zero AND flags it, rather than
+    // a zero that looks like a decision.
+    const charges = (f.charges || [])
+      .filter((c) => String(c.description || "").trim())
+      .map((c) => ({
+        description: String(c.description).trim(),
+        quantity: Number(c.quantity) > 0 ? Number(c.quantity) : 1,
+        unit: c.unit || null,
+        unit_price: c.unit_price == null || c.unit_price === "" ? null : Number(c.unit_price),
+      }));
+
     const job = {
       type: f.type || null, client_ref: f.ref || null, stops,
       scheduled_date: f.date || null, time_window: f.window || null,
       hard_deadline: !!f.hard, items, missing,
+      charges, billing: f.billing ?? null,
     };
     // Jobs beyond the first that the parser found are carried through as-is,
     // so a schedule mail still creates all of them.
@@ -805,8 +909,158 @@
     ]);
   }
 
+  // ---------------------------------------------------------------------------
+  // The money, on the card, before anything is written
+  // ---------------------------------------------------------------------------
+  // Three things happen here and they are all the same thing: the figures that
+  // will end up on an invoice are put in front of a person while they can
+  // still be changed.
+  //
+  //   - every line is editable - description, quantity, unit, price
+  //   - every price says where it came from
+  //   - nothing is written until a button is pressed
+  //
+  // It edits `f.charges` in place rather than keeping its own copy, so
+  // whichever of the three buttons gets pressed sends what is on screen. A
+  // second copy would be a second thing to keep in step, and the thing it
+  // would get wrong is money.
+  const money2 = (n) => (n == null || n === "" || isNaN(Number(n)))
+    ? "" : Number(n).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  function chargeBlock(f, onTotal) {
+    const list = el("div", { className: "oneshot-lines" });
+    const sum = el("div", { className: "oneshot-sum" });
+    const head = el("div", { className: "oneshot-meta" });
+
+    const total = () => (f.charges || []).reduce((t, c) =>
+      t + (Number(c.quantity) || 0) * (Number(c.unit_price) || 0), 0);
+
+    const retotal = () => {
+      const blanks = (f.charges || []).filter((c) => c.unit_price == null).length;
+      sum.replaceChildren(
+        el("span", { className: "oneshot-meta",
+          textContent: blanks
+            ? `${blanks} line${blanks > 1 ? "s" : ""} with no price yet`
+            : `${(f.charges || []).length} line${(f.charges || []).length === 1 ? "" : "s"}` }),
+        el("b", { textContent: money2(total()) || "0.00" }),
+      );
+      if (onTotal) onTotal(total());
+    };
+
+    const draw = () => {
+      list.replaceChildren();
+      (f.charges || []).forEach((c, i) => {
+        const from = el("div", {
+          className: c.stated || c.from === "yours" ? "oneshot-from" : "oneshot-from guess",
+          textContent: c.from || "",
+        });
+        const desc = el("input", { type: "text", value: c.description,
+          placeholder: "What is being charged for" });
+        const qty = el("input", { type: "number", className: "num", value: String(c.quantity ?? 1),
+          step: "0.01", min: "0" });
+        const unit = el("input", { type: "text", value: c.unit || "", placeholder: "unit" });
+        const price = el("input", { type: "number", className: "num", step: "0.01", min: "0",
+          value: c.unit_price == null ? "" : String(c.unit_price),
+          placeholder: "price" });
+        if (c.unit_price == null) price.classList.add("blank");
+
+        desc.oninput = () => { c.description = desc.value; };
+        qty.oninput = () => { c.quantity = qty.value === "" ? 1 : Number(qty.value); retotal(); };
+        unit.oninput = () => { c.unit = unit.value; };
+        price.oninput = () => {
+          // Typing a price makes it the person's own figure, so whatever the
+          // line said about where the number came from stops being true.
+          //
+          // Updated in place rather than by redrawing: a redraw replaces the
+          // input the person is typing into, which takes the caret with it.
+          // Every keystroke would land in a new empty box.
+          c.unit_price = price.value === "" ? null : Number(price.value);
+          c.from = price.value === "" ? null : "yours";
+          c.stated = price.value !== "";
+          price.classList.toggle("blank", c.unit_price == null);
+          from.textContent = c.from || "";
+          from.className = "oneshot-from";
+          retotal();
+        };
+
+        const x = el("button", { className: "oneshot-x", textContent: "×",
+          title: "Remove this line" });
+        x.onclick = () => { f.charges.splice(i, 1); draw(); };
+
+        list.append(el("div", { className: "oneshot-line" }, [desc, qty, unit, price, x]), from);
+      });
+      retotal();
+    };
+
+    const add = el("button", { className: "oneshot-addline", textContent: "+ Add a line" });
+    add.onclick = () => {
+      (f.charges = f.charges || []).push({
+        description: "", unit: "", quantity: 1, unit_price: null, from: null, stated: false,
+      });
+      draw();
+    };
+
+    draw();
+
+    // What the workspace usually charges, for the lines the message left
+    // blank. Asked once, when the card opens. A failure is silent: the lines
+    // are already correct at blank, and a card that refuses to appear because
+    // a price lookup timed out would be a bad trade.
+    const ask = async () => {
+      // Once per card, not once per redraw. manualForm() runs again on every
+      // scan, and without this the workspace would be asked what it charges
+      // every time anything on screen changed.
+      if (f.asked) return;
+      const blanks = (f.charges || []).some((c) => c.unit_price == null);
+      if (!blanks) { f.asked = true; return; }
+      f.asked = true;
+      head.textContent = "Checking what you usually charge…";
+      let out = null;
+      try {
+        out = await api("suggest-job", {
+          action: "price",
+          lines: (f.charges || []).map((c) => ({
+            description: c.description, unit: c.unit || null, quantity: c.quantity,
+          })),
+        });
+      } catch { /* silent, see above */ }
+      head.textContent = "";
+      const prices = (out && out.prices) || [];
+      let filled = 0;
+      for (const p of prices) {
+        const c = (f.charges || [])[p.idx];
+        if (!c || c.unit_price != null) continue;      // never over a price already there
+        const v = Number(p.unit_price);
+        if (!p.unit_price || isNaN(v) || v <= 0) continue;
+        c.unit_price = v;
+        c.from = p.seen || p.source || "charged before";
+        c.stated = false;
+        filled++;
+      }
+      if (filled) draw();
+    };
+
+    return {
+      node: el("div", { className: "oneshot-money" }, [
+        el("div", { className: "oneshot-money-head" }, [
+          el("span", { textContent: "Charges" }),
+          el("span", { textContent: "qty / unit / price" }),
+        ]),
+        head, list, add, sum,
+      ]),
+      ask,
+      total,
+    };
+  }
+
   function manualForm() {
-    const f = prefill(manual.out);
+    // Kept on `manual` rather than rebuilt from the parse each time, because
+    // the charge lines below are EDITED here. prefill() returns the parser's
+    // reading, and reading it again would quietly undo whatever somebody had
+    // typed into the table the moment anything redrew the card. The plain
+    // fields above get away with being rebuilt because their values live in
+    // the DOM inputs and are only read when a button is pressed.
+    const f = (manual.form = manual.form || prefill(manual.out));
     const note = el("div", { className: "oneshot-meta" });
     // A retry only exists when the attempt FAILED. Offering one after the
     // parser read the mail and found no job would just invite the same answer.
@@ -820,7 +1074,9 @@
       again.onclick = async () => {
         again.disabled = true; again.textContent = "Reading...";
         const out = await api("suggest-job", { action: "suggest", thread: manual.thread });
-        manual = { ...manual, out: out.error ? null : out,
+        // form dropped deliberately: this is a fresh reading of the thread, so
+        // the lines on the card should be the new ones rather than a mix.
+        manual = { ...manual, out: out.error ? null : out, form: null,
                    failed: out.error || null, state: "proposed" };
         render();
       };
@@ -840,6 +1096,16 @@
       note.textContent = notJobText(manual.out || {}, manual.msg.body)
         + "  -  fill in what you know and create it anyway.";
     }
+    // What the reader KNOWS it did not get. This goes first and in the warning
+    // colour, because the failure it describes is invisible otherwise: a card
+    // built from one message of forty has the same fields filled in, in the
+    // same way, as a card built from all forty.
+    for (const lim of (manual.msg.limits || [])) {
+      const warn = el("div", { textContent: lim });
+      warn.style.cssText = "margin-top:6px;font-weight:600;color:#f0a500";
+      note.append(warn);
+    }
+
     // A chat is rarely all text. Say what was left out rather than let a
     // half-read conversation produce a confident-looking card.
     const m = manual.msg.media;
@@ -932,19 +1198,78 @@
       remSays,
     ]);
 
+    const charges = chargeBlock(f);
+    charges.ask();
+
     const go = el("button", { className: "primary", textContent: "Create job" });
+    const quoteBtn = el("button", { textContent: "Create quote" });
+    const invBtn = el("button", { textContent: "Create invoice" });
     const cancel = el("button", { className: "ghost", textContent: "Cancel" });
-    const acts = again ? [again, cancel, go] : [cancel, go];
+    const acts = again ? [again, cancel, quoteBtn, invBtn, go] : [cancel, quoteBtn, invBtn, go];
     const msg = el("div", { className: "oneshot-meta" });
     cancel.onclick = () => { manual = null; scan(); };
 
-    go.onclick = async () => {
-      go.disabled = true; go.textContent = "Creating...";
-      const ex = buildExtraction({
-        type: typeSel.value, date: date.value, window: win.value,
-        collection: coll.value, delivery: del.value, items: items.value,
-        ref: ref.value, hard: hard.checked, extra: f.extra,
-      }, manual.thread);
+    const fields = () => ({
+      type: typeSel.value, date: date.value, window: win.value,
+      collection: coll.value, delivery: del.value, items: items.value,
+      ref: ref.value, hard: hard.checked, extra: f.extra,
+      charges: f.charges, billing: f.billing,
+    });
+    const busy = (on, who, label) => {
+      for (const b of [go, quoteBtn, invBtn]) b.disabled = on;
+      who.textContent = on ? label : who._was;
+    };
+    for (const b of [go, quoteBtn, invBtn]) b._was = b.textContent;
+
+    // ---- a quote -----------------------------------------------------------
+    // No job. Most quotes are for work that never happens, and a board full of
+    // maybes is no use to whoever reads it at seven in the morning. The job as
+    // it stands on the card travels with the quote, so accepting it later has
+    // something to build from.
+    quoteBtn.onclick = async () => {
+      const lines = (f.charges || []).filter((c) => String(c.description || "").trim());
+      if (!lines.length) { msg.textContent = "Add a line before quoting."; return; }
+      busy(true, quoteBtn, "Quoting...");
+      const ex = buildExtraction(fields(), manual.thread);
+      const out = await api("suggest-job", {
+        action: "quote",
+        lines: lines.map((c) => ({
+          description: c.description, unit: c.unit || null,
+          quantity: c.quantity, unit_price: c.unit_price,
+        })),
+        job_draft: (ex.jobs || [])[0] ?? null,
+        their_reference: ref.value || null,
+      });
+      busy(false, quoteBtn);
+      if (!out || out.error) { msg.textContent = (out && out.error) || "Could not make that quote."; return; }
+      // Same shape the create path leaves behind, so the panel renders it
+      // without knowing which of the two made it.
+      const n = (out.quote.lines || []).length;
+      manual = { done: {
+        subject: `Quote ${out.quote.number}`,
+        text: `${out.quote.number} - ${n} line${n === 1 ? "" : "s"}, `
+            + `${money2(out.quote.total)} ${out.quote.currency || ""}`.trim()
+            + "  -  no job was made. Accepting it on the quote is what makes one.",
+        ref: null,
+      } };
+      // The thread is NOT marked done. A quote is an offer, and the work it
+      // offers has not been taken on - so the thread is still something
+      // somebody has to come back to.
+      scan();
+    };
+
+    // ---- an invoice --------------------------------------------------------
+    // Makes the job and its charges, then opens the costs sheet with the lines
+    // on it. It stops there rather than issuing: an invoice number is
+    // permanent and sequential, so a mis-parse that takes one has to be voided
+    // and the void stays on the record for good. One press, one look, one
+    // click - and the look is the part that cannot be skipped.
+    invBtn.onclick = () => create(invBtn, "Invoicing...", true);
+    go.onclick = () => create(go, "Creating...", false);
+
+    async function create(btn, label, thenInvoice) {
+      busy(true, btn, label);
+      const ex = buildExtraction(fields(), manual.thread);
       // The parser's original proposal travels with the edited one, so the
       // difference between them can be kept. That difference is the only
       // labelled correction this system ever gets, and it was being thrown
@@ -960,7 +1285,8 @@
         // being made - see _shared/reminders.ts.
         reminder: remAt ? { due_at: remAt, note: rem.note.trim() || null } : null,
       });
-      if (done.error) { msg.textContent = done.error; go.disabled = false; go.textContent = "Create job"; return; }
+      if (done.error) { busy(false, btn); msg.textContent = done.error; return; }
+      busy(false, btn);
 
       // Mark the THREAD dealt with. This was missing entirely: a job created
       // from the reading pane recorded nothing, so the same thread kept being
@@ -984,9 +1310,24 @@
         // exists that does not.
         text += "  -  no reminder was set: that day and time had already gone.";
       }
-      manual = { done: { text, ref: (done.refs || [])[0] || null, subject: manual.msg.subject } };
+      // Straight to the costs sheet when that is what was asked for, with the
+      // lines already on it. Opened here rather than server side because the
+      // job exists either way and a popup blocker must not be able to undo a
+      // job that was made.
+      const firstRef = (done.refs || [])[0] || null;
+      const firstId = firstRef && done.job_ids ? done.job_ids[firstRef] : null;
+      if (thenInvoice) {
+        if (firstId) {
+          window.open(`${APP}/job/${firstId}?costs=1`, "_blank");
+          text += "  -  opening the costs sheet. Check the lines, then Issue invoice.";
+        } else {
+          text += "  -  made, but the costs sheet could not be opened. Find it on the board.";
+        }
+      }
+
+      manual = { done: { text, ref: firstRef, subject: manual.msg.subject } };
       scan();
-    };
+    }
 
     return el("div", { className: "oneshot-row oneshot-formrow" }, [
       el("div", { className: "oneshot-main" }, [
@@ -1000,6 +1341,7 @@
           el("label", { className: "oneshot-f oneshot-hard" }, [
             el("span", { textContent: "Hard deadline" }), hard,
           ]),
+          charges.node,
           remBlock,
         ]),
         el("div", { className: "oneshot-acts", style: "margin-top:10px" }, acts),
