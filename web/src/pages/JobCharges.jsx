@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
 import BillTo from "./BillTo";
 import Letterhead from "./Letterhead";
+import JobReminders from "./JobReminders";
 import { CURRENCIES, amount, amountWithCode, jobCurrency, money } from "../lib/money";
 
 // What the job costs. Ops only - the database enforces that too, so this is
@@ -434,10 +435,17 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
           <div className="row" style={{ alignItems: "flex-start" }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 16 }}>Invoice {invoice.number}</div>
+              {/* Late is the one thing on this line somebody needs to see from
+                  across the room, and only while the money is still out: a
+                  paid invoice that settled late is history, not a task. */}
               <div className="muted" style={{ fontSize: 12 }}>
                 Issued {invoice.invoice_date}
                 {invoice.due_date ? ` · due ${invoice.due_date}` : ""}
-                {invoice.days_overdue > 0 ? ` · ${invoice.days_overdue} days late` : ""}
+                {invoice.days_overdue > 0 && Number(invoice.balance) > 0 && (
+                  <span style={{ color: "var(--warn)", fontWeight: 600 }}>
+                    {` · ${invoice.days_overdue} ${invoice.days_overdue === 1 ? "day" : "days"} late`}
+                  </span>
+                )}
               </div>
             </div>
             <button className="btn btn-ghost" disabled={busy} onClick={voidInvoice}
@@ -522,6 +530,21 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
                 <button className="btn btn-ghost" onClick={() => setPay(null)}
                   style={{ marginTop: 0 }}>Cancel</button>
               </div>
+            </div>
+          )}
+
+          {/* Chasing it. The automatic one is already here, raised at the due
+              date when the invoice was issued; this is where another gets
+              added. Hidden once there is nothing left to chase - a settled
+              invoice has no follow-up to arrange. */}
+          {Number(invoice.balance) > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <JobReminders
+                invoiceId={invoice.id}
+                tenantId={tenantId}
+                what={`invoice ${invoice.number}`}
+                profile={profile}
+              />
             </div>
           )}
         </div>

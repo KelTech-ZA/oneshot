@@ -27,6 +27,21 @@ import {
 // can SEE what has been set, so two people do not set the same one, but nobody
 // else's phone goes off. Telling a colleague to do something at ten is a
 // different thing with different manners.
+//
+// ON INVOICES TOO (54)
+//
+// The same card, hung on an invoice instead of a job, because chasing payment
+// is the same act as chasing a collection: a time, a note, and one person's
+// phone. Pass invoiceId instead of jobId and everything below works unchanged
+// except for the two things that are genuinely about jobs - the suggestion
+// drawn from past jobs of this type, and the empty-state line.
+//
+// One of the reminders listed may not have been set by anybody: 54 raises an
+// `invoice_due` reminder on every issued invoice, at its due date. It is shown
+// alongside the rest because it is one of the rest, and marked, because a
+// reminder you do not remember setting is unnerving. It cannot be deleted -
+// only marked done - since the trigger would put it straight back and leave
+// the person wondering what they did wrong.
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
@@ -122,7 +137,15 @@ function Wheel({ values, value, onChange, label, pick }) {
 
 // ---------------------------------------------------------------------------
 
-export default function JobReminders({ jobId, tenantId, jobRef, jobType, scheduledDate, profile, names }) {
+export default function JobReminders({
+  jobId, invoiceId, tenantId, jobRef, jobType, scheduledDate, profile, names, what,
+}) {
+  // What this card is hung on. Everything below reads these two rather than
+  // asking again, so there is one place where "job or invoice" is decided.
+  const onInvoice = !!invoiceId;
+  const about = onInvoice ? { invoice_id: invoiceId } : { job_id: jobId };
+  const subject = what ?? jobRef;
+
   const [list, setList] = useState([]);
   // What this workspace has learned about chasing jobs of this kind. Asked
   // once, and only used to OFFER - see the block further down.
@@ -143,18 +166,21 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
 
   const load = async () => {
     const { data } = await supabase.from("job_reminders")
-      .select("id, user_id, due_at, note, sent_at, acked_at, last_error")
-      .eq("job_id", jobId)
+      .select("id, user_id, due_at, note, sent_at, acked_at, last_error, source")
+      .eq(onInvoice ? "invoice_id" : "job_id", invoiceId ?? jobId)
       .order("due_at");
     setList(data ?? []);
   };
 
-  useEffect(() => { load(); }, [jobId]);
+  useEffect(() => { load(); }, [jobId, invoiceId]);
 
   // Jobs like this one: how many got chased, and how far ahead. Derived from
   // the reminders the workspace has already set, so it costs nothing to keep
   // up to date and cannot disagree with them.
   useEffect(() => {
+    // Only jobs. What a workspace does about invoices is already decided by
+    // the due date, and a second opinion drawn from job types would be noise.
+    if (onInvoice) return undefined;
     let stop = false;
     (async () => {
       const { data, error } = await supabase.rpc("reminder_hint", { p_type: jobType ?? "" });
@@ -162,7 +188,7 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
       setHint(Array.isArray(data) ? data[0] ?? null : data ?? null);
     })();
     return () => { stop = true; };
-  }, [jobType]);
+  }, [jobType, onInvoice]);
 
   // Asking again when the tab is returned to, and on a slow clock while it is
   // being looked at. Two jobs at once: a reminder a colleague set on another
@@ -225,7 +251,7 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
     setBusy(true);
     try {
       const { error } = await supabase.from("job_reminders").insert({
-        tenant_id: tenantId, job_id: jobId,
+        tenant_id: tenantId, ...about,
         user_id: profile.id, created_by: profile.id,
         due_at: suggestedAt.toISOString(),
         note: null,
@@ -247,7 +273,7 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
     try {
       const { error } = await supabase.from("job_reminders").insert({
         tenant_id: tenantId,
-        job_id: jobId,
+        ...about,
         user_id: profile.id,
         created_by: profile.id,
         due_at: due.toISOString(),
@@ -328,7 +354,9 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
 
           <label className="rem-label" htmlFor="rem-note">What for (optional)</label>
           <input id="rem-note" type="text" value={note} maxLength={500}
-            placeholder="Chase Blank Projects for the collection address"
+            placeholder={onInvoice
+              ? "Ring the gallery about payment"
+              : "Chase Blank Projects for the collection address"}
             onChange={(e) => setNote(e.target.value)} />
 
           {/* The whole point of this block: read the instant back before saving. */}
@@ -351,7 +379,7 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
           Offered, never set. An app that books its own notifications is one
           people turn off, and the moment that happens the reminders somebody
           DID ask for stop arriving too. */}
-      {!open && !waiting.length && hint?.suggest && suggestedAt && (
+      {!open && !onInvoice && !waiting.length && hint?.suggest && suggestedAt && (
         <div className="card rem-learned">
           <div className="rem-learned-say">
             Jobs of this kind usually get a reminder — {hint.reminded} of the last {hint.jobs}.
@@ -369,7 +397,7 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
 
       {!waiting.length && !open && (
         <div className="muted" style={{ marginBottom: 12 }}>
-          Nothing set for {jobRef}.
+          Nothing set for {subject}.
         </div>
       )}
 
@@ -377,6 +405,10 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
         const at = new Date(r.due_at);
         const ripe = at <= now;
         const mineToo = r.user_id === profile.id;
+        // Raised by the due date rather than by a person. Deleting it would
+        // only invite the trigger to put it back, so this one is marked done
+        // and not crossed out.
+        const automatic = r.source === "invoice_due";
         return (
           <div key={r.id} className={`card rem-row${ripe ? " ripe" : ""}`}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -386,7 +418,9 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
               </div>
               {r.note && <div className="rem-note">{r.note}</div>}
               <div className="muted rem-for">
-                {mineToo ? "yours" : `for ${names?.[r.user_id] ?? "a colleague"}`}
+                {automatic
+                  ? "set from the due date"
+                  : mineToo ? "yours" : `for ${names?.[r.user_id] ?? "a colleague"}`}
                 {r.last_error && mineToo ? ` · ${r.last_error}` : ""}
               </div>
             </div>
@@ -394,8 +428,10 @@ export default function JobReminders({ jobId, tenantId, jobRef, jobType, schedul
               {ripe && mineToo && (
                 <button className="rem-chip" disabled={busy} onClick={() => ack(r.id)}>Done</button>
               )}
-              <button className="rem-x" aria-label="Delete reminder"
-                disabled={busy} onClick={() => drop(r.id)}>×</button>
+              {!automatic && (
+                <button className="rem-x" aria-label="Delete reminder"
+                  disabled={busy} onClick={() => drop(r.id)}>×</button>
+              )}
             </div>
           </div>
         );
