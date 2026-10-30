@@ -84,6 +84,23 @@ export async function seenBefore(
 }
 
 /**
+ * A repeat is not a failure, and the two must not be told apart by reading
+ * the English.
+ *
+ * Both end up in messages.parse_error, and the dashboard was showing every
+ * row in that column under "Couldn't be read" - in orange, saying it produced
+ * no job, inviting somebody to create it by hand. For a repeat all three are
+ * wrong: it DID produce jobs, and accepting that invitation makes them twice.
+ * Six of seventeen notes in this workspace were repeats.
+ *
+ * So the line carries a marker the UI can test for. It is stripped before
+ * display, the sentence underneath is unchanged, and nothing needs migrating:
+ * notes written before this exist without it and are matched on their wording
+ * instead - see isRepeat in Dashboard.jsx.
+ */
+export const REPEAT_TAG = "[repeat] ";
+
+/**
  * The line written to the log and to the message's own record.
  *
  * Says which mail it repeats and what that one already built, because the
@@ -95,5 +112,5 @@ export function sayRepeat(prior: SeenBefore): string {
   const made = prior.jobRefs.length
     ? `already made ${prior.jobRefs.join(", ")}`
     : "was already read";
-  return `the same mail arrived before (${prior.how}, ${when} UTC) and ${made}; nothing new was created`;
+  return `${REPEAT_TAG}the same mail arrived before (${prior.how}, ${when} UTC) and ${made}; nothing new was created`;
 }

@@ -10,11 +10,27 @@ import ClashWarning from "./ClashWarning";
 import JobSearch from "./JobSearch";
 import JobFlags from "./JobFlags";
 
+// A mail that arrived twice, told apart from one that could not be read.
+//
+// The marker is written by sayRepeat in _shared/once.ts and stripped before
+// anything is shown. Notes written before that marker existed are matched on
+// their wording instead, which is why the second test is here: six such rows
+// already exist and migrating them would mean rewriting evidence.
+export const REPEAT_TAG = "[repeat] ";
+export const isRepeat = (m) => {
+  const t = m?.parse_error ?? "";
+  return t.startsWith(REPEAT_TAG) || /\bthe same mail arrived before\b/i.test(t);
+};
+export const withoutTag = (t) => (t ?? "").startsWith(REPEAT_TAG) ? t.slice(REPEAT_TAG.length) : (t ?? "");
+/** The job references a repeat says the first copy already made. */
+export const refsIn = (t) => [...String(t ?? "").matchAll(/JOB-\d{4}-\d+/g)].map((x) => x[0]);
+
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
   const [unread, setUnread] = useState([]);
+  const [repeats, setRepeats] = useState([]);
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "" });
 
@@ -47,8 +63,12 @@ export default function Dashboard() {
     // Same rule as the banners: once you have dealt with an unreadable email,
     // it does not reappear every time you come back to this screen. A NEW
     // failure has a new message id, so it still shows.
-    const failures = (data ?? []).filter((m) => m.parse_error || m.kind === "unknown");
-    setUnread(keepUndismissed(failures, (m) => `msg-${m.id}`));
+    const noted = (data ?? []).filter((m) => m.parse_error || m.kind === "unknown");
+    // A mail that arrived twice is not a mail that could not be read, and the
+    // difference matters more than it looks: this panel tells you to create
+    // the thing by hand, which for a repeat makes the job a second time.
+    setUnread(keepUndismissed(noted.filter((m) => !isRepeat(m)), (m) => `msg-${m.id}`));
+    setRepeats(keepUndismissed(noted.filter(isRepeat), (m) => `rep-${m.id}`));
   };
 
   // Dismissing is per-browser and deliberately not a database write: the
@@ -62,6 +82,11 @@ export default function Dashboard() {
   const dismissAllUnread = () => {
     remember(unread.map((m) => `msg-${m.id}`));
     setUnread([]);
+  };
+
+  const dismissRepeats = () => {
+    remember(repeats.map((m) => `rep-${m.id}`));
+    setRepeats([]);
   };
 
   const confirm = async (job) => {
@@ -311,6 +336,60 @@ export default function Dashboard() {
                 maxHeight: 140, overflow: "auto" }}>{m.body}</div>
             </div>
           ))}
+        </>
+      )}
+
+      {/* Mail that arrived more than once.
+          Kept on screen rather than hidden, because "this email came in four
+          times" is a fact somebody may need - it is usually a provider
+          retrying, and a run of them means intake is answering too slowly.
+          But it is stated, not raised: grey, no warning rule, and no offer to
+          create anything, since the work was already done by the first copy.
+          It used to sit under "Couldn't be read" recommending exactly the one
+          action that would have duplicated the jobs. */}
+      {repeats.length > 0 && (
+        <>
+          <div className="row" style={{ alignItems: "baseline" }}>
+            <h2 style={{ marginBottom: 0 }}>Arrived more than once</h2>
+            <button onClick={dismissRepeats}
+              style={{ background: "none", border: "none", color: "var(--accent)",
+                cursor: "pointer", font: "inherit", fontSize: 13, padding: 0 }}>
+              {repeats.length === 1 ? "Dismiss" : "Dismiss all"}
+            </button>
+          </div>
+          <p className="muted" style={{ marginBottom: 10 }}>
+            {repeats.length === 1 ? "An email" : `${repeats.length} emails`} reached intake
+            twice. The first copy was used; the repeat was ignored. Nothing to do.
+          </p>
+          {repeats.map((m) => {
+            const refs = refsIn(m.parse_error);
+            return (
+              <div className="card" key={m.id}>
+                <div className="row">
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {m.sender} · {new Date(m.created_at).toLocaleString()}
+                  </span>
+                  <button onClick={() => { remember(`rep-${m.id}`);
+                    setRepeats((cur) => cur.filter((x) => x.id !== m.id)); }}
+                    aria-label="Dismiss"
+                    style={{ background: "none", border: "none", color: "var(--muted, #8b9498)",
+                      cursor: "pointer", font: "inherit" }}>×</button>
+                </div>
+                {m.subject && <div style={{ fontWeight: 600, marginTop: 4 }}>{m.subject}</div>}
+                <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                  {withoutTag(m.parse_error)}
+                </div>
+                {refs.length > 0 && (
+                  <div style={{ fontSize: 13, marginTop: 6, display: "flex",
+                    gap: 8, flexWrap: "wrap" }}>
+                    {refs.map((r) => (
+                      <span key={r} className="muted">{r}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </>
       )}
 
