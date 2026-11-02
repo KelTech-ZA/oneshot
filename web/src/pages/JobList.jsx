@@ -129,7 +129,19 @@ export default function JobList({ jobs, canDelete = false }) {
           `${j.ref} has ${evidence} custody event(s) — photos and timestamps that may be your proof of handling.\n\n` +
           `Deleting is permanent. The record of the deletion is kept, the evidence is not.\n\n` +
           `Type ${j.ref} to confirm:`);
-        if (typed?.trim().toUpperCase() !== j.ref.toUpperCase()) return;
+        // Cancel means they changed their mind: nothing to explain.
+        if (typed === null) return;
+        // Anything else that does not match used to return in silence. From
+        // the outside that is indistinguishable from the button being broken -
+        // you answer the question, press OK, and the app does nothing and says
+        // nothing. Most jobs here carry custody events, so this is the path
+        // almost every real deletion takes.
+        if (typed.trim().toUpperCase() !== j.ref.toUpperCase()) {
+          window.alert(
+            `That didn't match, so nothing was deleted.\n\n` +
+            `To delete this job, type its reference exactly: ${j.ref}`);
+          return;
+        }
       } else if (!window.confirm(`Delete ${j.ref}? This cannot be undone.`)) {
         return;
       }

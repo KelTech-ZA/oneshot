@@ -43,7 +43,12 @@ export default function Today() {
   return (
     <div className="page">
       <h1>Today</h1>
-      <JobList jobs={jobs} />
+      {/* canDelete, because the calendar lives inside JobList and this is the
+          page people actually land on. Without it the calendar is here but
+          the delete it sits above is not, which reads as the button being
+          broken rather than absent. Crew are unaffected: JobList gates the
+          control on isOps regardless of what this passes. */}
+      <JobList jobs={jobs} canDelete />
       {profile.role === "ops" && (
         <Link to="/dashboard" className="btn btn-ghost" style={{ marginTop: 16, textDecoration: "none" }}>
           Office view: pending &amp; all jobs
