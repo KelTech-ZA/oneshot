@@ -76,6 +76,8 @@ export default function JobList({ jobs, canDelete = false }) {
   const listRef = useRef(null);
   const { profile } = useContext(Ctx);
   const [removed, setRemoved] = useState(new Set());
+  // job id -> status, for a cancel or reinstate this screen has just done.
+  const [statusNow, setStatusNow] = useState(new Map());
   const [busyId, setBusyId] = useState(null);
   const [typeLabels, setTypeLabels] = useState({});
   // Pointer-based so it works with a finger as well as a mouse. HTML5 drag
@@ -162,6 +164,48 @@ export default function JobList({ jobs, canDelete = false }) {
     } finally {
       setBusyId(null);
     }
+  };
+
+  // Calling a job off.
+  //
+  // Everything the job holds stays: items, custody events, charges, the link
+  // to its invoice. Only the status changes, and the reason is written onto
+  // the job rather than asked for and dropped - the same mistake the delete
+  // prompt used to make with its reason.
+  //
+  // Through cancel_job rather than a direct update, because jobs_update is
+  // only (tenant_id = my_tenant()) - every crew member can write to every job
+  // - and deciding a booking is off is not a crew decision.
+  const cancelJob = async (e, j) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const reason = window.prompt(
+      `Cancel ${j.ref}?\n\n` +
+      `The job, its items and its custody record are all kept — it will read CANCELLED.\n` +
+      `Use delete instead only if the job should never have existed.\n\n` +
+      `Why is it being cancelled?`);
+    if (reason === null) return;      // changed their mind
+    setBusyId(j.id);
+    try {
+      const { error } = await supabase.rpc("cancel_job", { p_job: j.id, p_reason: reason || null });
+      if (error) { window.alert("Could not cancel: " + error.message); return; }
+      setStatusNow((prev) => new Map(prev).set(j.id, "cancelled"));
+    } finally { setBusyId(null); }
+  };
+
+  // Cancelling the wrong job is the obvious mistake to make, so there is a way
+  // back that does not involve somebody writing SQL against production.
+  const reinstateJob = async (e, j) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm(
+      `Reinstate ${j.ref}?\n\nIt comes back as CONFIRMED. Any crew who had accepted it will need to accept again.`)) return;
+    setBusyId(j.id);
+    try {
+      const { error } = await supabase.rpc("reinstate_job", { p_job: j.id });
+      if (error) { window.alert("Could not reinstate: " + error.message); return; }
+      setStatusNow((prev) => new Map(prev).set(j.id, "confirmed"));
+    } finally { setBusyId(null); }
   };
 
   // Long jobs run over several days - collect Monday, pack Tuesday, deliver
@@ -313,8 +357,14 @@ export default function JobList({ jobs, canDelete = false }) {
     } finally { setDropBusy(false); }
   };
 
+  // A cancelled job stays on the list and changes how it reads, so unlike a
+  // deletion there is nothing to hide - but the parent owns the fetch and does
+  // not reload on our say-so, so the new status is held here until it does.
+  // Without this you cancel a job, nothing on screen changes, and it looks
+  // exactly like the button having done nothing.
   const shown = jobs
     .filter((j) => !removed.has(j.id))
+    .map((j) => (statusNow.has(j.id) ? { ...j, status: statusNow.get(j.id) } : j))
     .filter((j) => filter === "All" || GROUPS[filter].includes(j.status))
     .sort((a, b) => {
       if (a.scheduled_date && b.scheduled_date && a.scheduled_date !== b.scheduled_date)
@@ -570,6 +620,25 @@ export default function JobList({ jobs, canDelete = false }) {
                 onClick={(e) => duplicateJob(e, j)}>
                 duplicate
               </button>
+              {/* Cancelling is not deleting, and it is the one people
+                  actually want. A job called off on the Friday really was
+                  booked: the custody events, the charges and the invoice link
+                  all have to survive it. Deleting is for a job that should
+                  never have existed. */}
+              {!["cancelled", "completed", "closed"].includes(j.status) && (
+                <button className="muted" disabled={busyId === j.id}
+                  style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", padding: 0, font: "inherit" }}
+                  onClick={(e) => cancelJob(e, j)}>
+                  cancel
+                </button>
+              )}
+              {j.status === "cancelled" && (
+                <button className="muted" disabled={busyId === j.id}
+                  style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", padding: 0, font: "inherit" }}
+                  onClick={(e) => reinstateJob(e, j)}>
+                  reinstate
+                </button>
+              )}
               <button className="muted" disabled={busyId === j.id}
                 style={{ background: "none", border: "none", color: "var(--warn)", cursor: "pointer", padding: 0, font: "inherit" }}
                 onClick={(e) => deleteJob(e, j)}>
