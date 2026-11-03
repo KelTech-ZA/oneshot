@@ -17,6 +17,142 @@ const FIELDS = [
   ["country",         "Country",          "ZA"],
 ];
 
+// --- the billing run --------------------------------------------------------
+// When a customer's pack goes out, and to whom.
+//
+// Three settings underneath, one question on screen. billing_direct and
+// billing_to are not independent in practice - "send it to the client" and
+// "send it to this address instead" are two answers to the same question -
+// so they are asked as one choice and written as whichever pair that means.
+//
+// The line at the bottom spells the arrangement back out: the date it next
+// falls on, the address it reaches, and whether a person sees it first. A
+// billing day set to the wrong number is not visible until the wrong month,
+// and by then an invoice pack has gone somewhere.
+
+const MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+const ordinal = (d) => {
+  const s = ["th", "st", "nd", "rd"][d % 100 >= 11 && d % 100 <= 13 ? 0 : Math.min(d % 10, 4)] ?? "th";
+  return `${d}${s}`;
+};
+
+/** The next date a given billing day falls on, clamped to month end the same
+ *  way due_billing_runs does it in the database. */
+export function nextBillingDate(day, from = new Date()) {
+  if (!day) return null;
+  for (let i = 0; i < 2; i++) {
+    const y = from.getFullYear(), m = from.getMonth() + i;
+    const last = new Date(y, m + 1, 0).getDate();
+    const d = new Date(y, m, Math.min(day, last));
+    if (d >= new Date(from.getFullYear(), from.getMonth(), from.getDate())) return d;
+  }
+  return null;
+}
+
+function BillingRun({ row, draft, set, save, workspaceEmail }) {
+  const day = draft.billing_day ?? null;
+  const to = (draft.billing_to ?? "").trim();
+  const direct = !!draft.billing_direct;
+
+  // Held, not derived.
+  //
+  // Reading the mode back out of the data looks tidier and does not work:
+  // "another address" with nothing typed into it yet is indistinguishable
+  // from "to the office", so picking it snapped the dropdown straight back
+  // and the field never appeared. The data says where the pack goes; this
+  // says what the person is in the middle of telling it.
+  const [mode, setMode] = useState(to ? "other" : direct ? "client" : "office");
+  useEffect(() => {
+    setMode(to ? "other" : direct ? "client" : "office");
+    // Only when the card changes to a different client, not on every keystroke.
+  }, [row.id]);
+
+  const choose = (next) => {
+    setMode(next);
+    const patch = next === "office" ? { billing_direct: false, billing_to: null }
+      : next === "client" ? { billing_direct: true, billing_to: null }
+      : { billing_direct: false, billing_to: "" };
+    set(patch);
+    // "Another address" is not written until something is typed into it:
+    // storing a blank would quietly mean "the office" while the screen said
+    // otherwise.
+    if (next !== "other") save(row, patch);
+  };
+
+  const when = nextBillingDate(day);
+  const lands = mode === "other" ? to
+    : mode === "client" ? (draft.billing_email || "")
+    : workspaceEmail;
+
+  return (
+    <div style={{ borderTop: "1px solid var(--line)", marginTop: 14, paddingTop: 12 }}>
+      <label>Billing run</label>
+      <div className="muted" style={{ fontSize: 12, marginTop: -4, marginBottom: 8 }}>
+        Each month, this client's invoices and their statement are gathered into
+        one PDF and emailed automatically.
+      </div>
+
+      <label style={{ fontWeight: 400, fontSize: 13 }}>Send on the</label>
+      <select value={day ?? ""}
+        onChange={(e) => {
+          const v = e.target.value === "" ? null : Number(e.target.value);
+          set({ billing_day: v });
+          save(row, { billing_day: v });
+        }}>
+        <option value="">Not automatic — I'll send it myself</option>
+        {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+          <option key={d} value={d}>{ordinal(d)} of the month</option>
+        ))}
+      </select>
+
+      {day != null && (
+        <>
+          <label style={{ fontWeight: 400, fontSize: 13, marginTop: 10 }}>Send it to</label>
+          <select value={mode} onChange={(e) => choose(e.target.value)}>
+            <option value="office">Us, to check and forward</option>
+            <option value="client">The client, directly</option>
+            <option value="other">Another address</option>
+          </select>
+
+          {mode === "other" && (
+            <input style={{ marginTop: 8 }} type="email" placeholder="bookkeeper@…"
+              value={draft.billing_to ?? ""}
+              onChange={(e) => set({ billing_to: e.target.value })}
+              onBlur={() => save(row, { billing_to: (draft.billing_to ?? "").trim() || null })} />
+          )}
+
+          {mode === "client" && !draft.billing_email && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 6, color: "var(--warn)" }}>
+              This client has no billing email, so nothing can be sent. Fill one in above.
+            </div>
+          )}
+
+          <div className="card" style={{ marginTop: 10, background: "var(--bg)" }}>
+            {when && lands ? (
+              <>
+                <div style={{ fontSize: 13 }}>
+                  Next on <b>{when.getDate()} {MONTHS[when.getMonth()]} {when.getFullYear()}</b>, to <b>{lands}</b>
+                </div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  {mode === "client"
+                    ? "It goes straight to the client. Nobody sees it first."
+                    : "You get a reminder with it, to check and forward."}
+                </div>
+              </>
+            ) : (
+              <div className="muted" style={{ fontSize: 13 }}>
+                Nothing will be sent until there is an address for it to go to.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Clients() {
   const { profile } = useContext(Ctx);
   const [rows, setRows] = useState([]);
@@ -25,6 +161,10 @@ export default function Clients() {
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState("");
   const [msg, setMsg] = useState("");
+  // Where a pack goes when it stops at the office. Read once, so the line
+  // under the billing settings can name the actual address rather than
+  // saying "us" and leaving somebody to wonder which inbox.
+  const [workspaceEmail, setWorkspaceEmail] = useState("");
 
   const isOps = profile?.role === "ops";
 
@@ -33,6 +173,11 @@ export default function Clients() {
     setRows(data ?? []);
   };
   useEffect(() => { if (isOps) load(); }, [isOps]);
+  useEffect(() => {
+    if (!isOps) return;
+    supabase.from("workspace_billing").select("billing_email").maybeSingle()
+      .then(({ data }) => setWorkspaceEmail(data?.billing_email || ""));
+  }, [isOps]);
 
   if (!isOps) return <div className="page empty">Only ops can manage clients.</div>;
 
@@ -128,6 +273,13 @@ export default function Clients() {
                   </span>
                 </span>
               </label>
+              <BillingRun
+                row={r}
+                draft={draft}
+                set={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+                save={save}
+                workspaceEmail={workspaceEmail}
+              />
               <button className="btn btn-ghost" onClick={() => setEditing(null)}>Done</button>
             </>
           ) : (
@@ -147,6 +299,16 @@ export default function Clients() {
                     r.vat_applicable === false && "zero-rated"].filter(Boolean).join(" · ")
                     || "no billing details yet"}
                 </div>
+                {/* Said on the row as well as in the panel: whether a client
+                    is billed automatically is the kind of thing you want to
+                    see down a list, not by opening fifteen of them. */}
+                {r.billing_day != null && (
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    billed {ordinal(r.billing_day)} monthly
+                    {r.billing_direct && !r.billing_to ? " · straight to the client" : ""}
+                    {r.billing_to ? ` · to ${r.billing_to}` : ""}
+                  </div>
+                )}
               </div>
               <span className="muted" style={{ fontSize: 13, flexShrink: 0 }}>edit</span>
             </div>
