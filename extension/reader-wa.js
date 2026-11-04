@@ -58,7 +58,31 @@
   window.__oneshotWa = true;
 
   const MAX_MESSAGES = 30;
-  const GAP_HOURS = 24;          // a silence this long ends the conversation
+
+  // A silence this long ends the conversation.
+  //
+  // THIS WAS 24 HOURS, AND IT WAS THE BUG. A real chat ran over five days:
+  //
+  //   Thu 2:41 PM  booked by Klaudia for Monday, can we reschedule
+  //   Thu 4:20 PM  1:00 PM assist with loading the van with carpets
+  //                2:00 PM assist with moving furniture to the garage
+  //   Thu 6:58 PM  3x techs @ R150p/h each x 2hrs: R900 ex VAT
+  //   Sat 12:38 PM 5x 4m carpets to move to storage
+  //   Sun 7:34 AM  do you maybe have a towbar?
+  //   Mon 9:10 AM  the address is 43 Bree Street, Cape Town
+  //
+  // Walking back from Monday morning, the previous message is Sunday 7:34 AM -
+  // 25.6 hours earlier. Over the limit. Cut. Every night in a business
+  // conversation is longer than 24 hours, so the rule fired at EVERY ONE of
+  // them and handed the parser a single message: an address and a date, no
+  // work, no times, no price. It read as an update rather than a request,
+  // because one line saying "the address is 43 Bree Street, see you tomorrow"
+  // genuinely is one.
+  //
+  // The rule exists to stop an unrelated conversation from months ago being
+  // dragged in, and that is worth keeping - but the boundary is a WEEK of
+  // silence, not a night of it. MAX_MESSAGES is what actually bounds the read.
+  const GAP_HOURS = 24 * 7;
   const MAX_SCROLLS = 12;        // ~5s of loading, then take what we have
   const SCROLL_WAIT = 420;
   const MAX_PHOTOS = 3;
@@ -101,17 +125,66 @@
     return { time: (time + " " + (ampm || "")).trim(), date, who: who.trim() };
   }
 
-  // Day/month order differs by locale and getting it wrong would reorder the
-  // conversation, so this is used only to measure the gap between messages and
-  // to sort them - never to date the job. The job's date comes from the text,
-  // through the parser, the same as it does for email.
-  function stamp(date, time) {
+  // ---------------------------------------------------------------------------
+  // Which way round this chat writes its dates
+  // ---------------------------------------------------------------------------
+  // THE ROOT CAUSE, measured on a real conversation. WhatsApp wrote
+  //
+  //   [2:41 PM, 10/9/2026]  ... [9:10 AM, 10/12/2026]
+  //
+  // meaning 9 October to 12 October - four days. This file resolved an
+  // ambiguous date DAY-first, so it read them as 10 September to 10 December,
+  // and a four-day conversation became a three-month one with ~30 days
+  // between consecutive messages. Every gap rule then severed it, correctly
+  // by its own logic, leaving the parser a single message. The same wrong
+  // date went out as the message's "received" time, which is why a job dated
+  // itself 11 December off the words "see you tomorrow".
+  //
+  // So the order is DECIDED, once per read, from evidence rather than assumed:
+  //
+  //   1. any first component over 12 can only be a day
+  //   2. any second component over 12 can only be a day
+  //   3. otherwise the newest message settles it - it cannot be in the future,
+  //      and in an open chat it is usually today
+  //
+  // and the decision is then applied to every message in the chat, so they
+  // stay consistent with each other whatever it turns out to be.
+  function dateOrder(raws) {
+    let dayFirst = false, monthFirst = false;
+    for (const r of raws) {
+      const [a, b] = String(r).split(/[/.-]/).map(Number);
+      if (a > 12) dayFirst = true;
+      if (b > 12) monthFirst = true;
+    }
+    if (dayFirst && !monthFirst) return "dmy";
+    if (monthFirst && !dayFirst) return "mdy";
+
+    const last = raws[raws.length - 1];
+    const [a, b, y] = String(last || "").split(/[/.-]/).map(Number);
+    if (!a || !b || !y) return "dmy";
+    const yy = y < 100 ? y + 2000 : y;
+    const now = Date.now();
+    const asDmy = new Date(yy, b - 1, a).getTime();
+    const asMdy = new Date(yy, a - 1, b).getTime();
+    // An hour of slack for clock skew and timezones.
+    const sane = (t) => !isNaN(t) && t <= now + 3600e3;
+    if (sane(asDmy) && !sane(asMdy)) return "dmy";
+    if (sane(asMdy) && !sane(asDmy)) return "mdy";
+    // Both possible: the newest message is far more likely to be recent than
+    // months old, so the nearer reading wins.
+    return Math.abs(now - asMdy) <= Math.abs(now - asDmy) ? "mdy" : "dmy";
+  }
+
+  // Used to order the conversation and to measure the silence between
+  // messages. The job's own date still comes from the words, through the
+  // parser, the same as it does for email.
+  function stamp(date, time, order) {
     const p = String(date).split(/[/.-]/).map(Number);
     if (p.length !== 3) return null;
     let [a, b, y] = p;
     if (y < 100) y += 2000;
-    const day = a > 12 ? a : (b > 12 ? b : a);      // ambiguous dates stay ambiguous
-    const mon = a > 12 ? b : (b > 12 ? a : b);
+    const day = order === "mdy" ? b : a;
+    const mon = order === "mdy" ? a : b;
     const t = /(\d{1,2}):(\d{2})/.exec(time) || [];
     let hh = Number(t[1] || 0);
     if (/p/i.test(time) && hh < 12) hh += 12;
@@ -154,20 +227,87 @@
     return best;
   }
 
-  /** Every readable message currently in the DOM, with its identity. */
-  function readPass(pane) {
-    const out = [];
-    for (const node of pane.querySelectorAll("[data-pre-plain-text]")) {
+  // ---------------------------------------------------------------------------
+  // Finding the message bubbles, three ways
+  // ---------------------------------------------------------------------------
+  // This reader hung entirely off data-pre-plain-text, an attribute confirmed
+  // against WhatsApp Web on 30 September. That was a reasonable bet - it is
+  // maintained so copy-and-paste keeps attribution, which makes it far more
+  // durable than a generated class name - but it is still ONE bet, and the
+  // failure mode is the worst kind: the reader finds a handful of nodes, or
+  // one, and reports that as the whole conversation with no sign anything is
+  // wrong.
+  //
+  // So it is now layered. Each rung gives less than the one above it, and the
+  // reader says which rung it ended up on rather than pretending they are
+  // equivalent.
+
+  /** Last resort for a timestamp: WhatsApp prints it inside the bubble. */
+  const TIME_IN = /(\d{1,2}:\d{2})\s*([ap]\.?m\.?)?\s*$/i;
+
+  function bubblesIn(pane) {
+    // 1. The attribute, which carries sender AND timestamp. Always preferred.
+    let nodes = [...pane.querySelectorAll("[data-pre-plain-text]")];
+    if (nodes.length) return { nodes, how: "pre" };
+
+    // 2. Message rows by their own id. data-id looks like
+    //    "false_27833777760@c.us_3EB0..." - the leading true/false is who sent
+    //    it, which is enough to keep a conversation legible even with no name.
+    nodes = [...pane.querySelectorAll("[data-id]")]
+      .filter((n) => n.querySelector(".selectable-text, .copyable-text"));
+    if (nodes.length) return { nodes, how: "data-id" };
+
+    // 3. Anything that reads like a row with words in it.
+    nodes = [...pane.querySelectorAll('[role="row"]')]
+      .filter((n) => (n.innerText || "").trim().length > 1);
+    return { nodes, how: nodes.length ? "row" : "none" };
+  }
+
+  /** One bubble -> {time, date, who, body}, by whatever the rung allows. */
+  function readNode(node, how, order) {
+    const body = textOf(node);
+    if (!body) return null;
+
+    if (how === "pre") {
       const pre = parsePre(node.getAttribute("data-pre-plain-text"));
-      if (!pre) continue;
-      const body = textOf(node);
-      if (!body) continue;
-      out.push({ ...pre, body, when: stamp(pre.date, pre.time) });
+      if (pre) return { ...pre, body, when: stamp(pre.date, pre.time, order) };
+      // A photo, a voice note or a call carries data-pre-plain-text="* " -
+      // there is no sender and no timestamp in it. Dropping those silently
+      // took whole messages out of the middle of a conversation, caption and
+      // all. Fall through and read what can be read.
+    }
+
+    // No attribute: take the direction from data-id and the time from the
+    // bubble's own text. The DATE is unknown, which is said rather than
+    // guessed - a wrong date is worse than an absent one, and the job's date
+    // comes from the words anyway.
+    // data-id usually sits on the row ABOVE the bubble, so ask the ancestor
+    // too - otherwise every one of these reads as incoming.
+    const holder = node.closest("[data-id]") || node;
+    const id = String(holder.getAttribute("data-id") || "");
+    const mine = /^true_/.test(id);
+    const t = TIME_IN.exec((node.innerText || "").trim()) || [];
+    const time = t[1] ? (t[1] + " " + (t[2] || "")).trim() : "";
+    // The trailing timestamp is part of the bubble's text; drop it so it does
+    // not read as part of what somebody said.
+    const clean = time ? body.replace(TIME_IN, "").trim() : body;
+    if (!clean) return null;
+    return { time, date: "", who: mine ? "me" : "them", body: clean, when: null };
+  }
+
+  /** Every readable message currently in the DOM, with its identity. */
+  function readPass(pane, how, order) {
+    const out = [];
+    for (const node of bubblesIn(pane).nodes) {
+      const m = readNode(node, how, order);
+      if (m) out.push(m);
     }
     return out;
   }
 
   const idOf = (m) => `${m.date}|${m.time}|${m.who}|${m.body.slice(0, 120)}`;
+  // With no date and no time the body is the only identity there is, which is
+  // right: two identical messages a minute apart are not worth telling apart.
 
   /**
    * Scroll back until the conversation stops growing, collecting as we go.
@@ -179,25 +319,80 @@
    *
    * Returns everything seen, in time order, and whether there is more above.
    */
+  /**
+   * Wait for the message list to actually exist.
+   *
+   * THIS IS THE ONE THAT MATTERS. Opening a chat renders ONE bubble, and
+   * WhatsApp fills the rest in a beat later. Measured 2.5 seconds after a
+   * click, a real conversation reported:
+   *
+   *     preCount: 1     scrollers: []
+   *
+   * and a moment afterwards, the same chat, untouched:
+   *
+   *     preCount: 12    scrollers: [{h:2266, c:642}]
+   *
+   * Reading on the first tick gets that single bubble, finds no scroller -
+   * one message does not overflow anything - and therefore never scrolls,
+   * never loads history, and reports a one-message conversation with every
+   * appearance of being complete. An earlier version of this file waited for
+   * the count to settle; the rewrite that added scrolling dropped the wait,
+   * which made it strictly worse than what it replaced.
+   */
+  async function settle(pane) {
+    let last = -1;
+    for (let i = 0; i < 14; i++) {
+      const n = pane.querySelectorAll("[data-pre-plain-text], [data-id]").length;
+      // Stable AND non-zero, twice running.
+      if (n > 0 && n === last) return n;
+      last = n;
+      await sleep(250);
+    }
+    return last;
+  }
+
   async function collect(pane) {
     const seen = new Map();
-    const take = () => { for (const m of readPass(pane)) seen.set(idOf(m), m); };
+    let how = "none";
+    let order = "dmy";
+    const take = () => {
+      const found = bubblesIn(pane);
+      if (found.how !== "none") how = found.how;
+      // Re-decided as history loads: more dates are better evidence, and a
+      // chat whose visible messages are all same-month tells you nothing
+      // until an older one with a day over 12 comes into view.
+      const raws = [];
+      for (const n of found.nodes) {
+        const m = PRE.exec(String(n.getAttribute("data-pre-plain-text") || "").trim());
+        if (m) raws.push(m[3]);
+      }
+      if (raws.length) order = dateOrder(raws);
+      for (const m of readPass(pane, found.how, order)) seen.set(idOf(m), m);
+    };
 
+    await settle(pane);
     take();
-    const sc = scrollerOf(pane);
+
     let more = false;
+    let scrolled = false;
+    // Re-found on every pass rather than once. The scroller does not exist
+    // until there is enough in the list to overflow, so looking for it before
+    // the list has filled finds nothing and gives up for good.
+    let sc = scrollerOf(pane);
 
     if (sc) {
       const resting = sc.scrollTop;
       let stable = 0;
       for (let i = 0; i < MAX_SCROLLS && seen.size < MAX_MESSAGES; i++) {
         const before = seen.size;
+        sc = scrollerOf(pane) || sc;
         // Nudge down, then up. Assigning 0 to a scrollTop that is ALREADY 0
         // fires no scroll event at all, so the list is never asked to load the
         // next page and one screenful of history is all you ever get - which
         // looks exactly like working, and is how this went unnoticed.
         if (sc.scrollTop < 2) { sc.scrollTop = Math.min(140, sc.scrollHeight); await sleep(40); }
         sc.scrollTop = 0;
+        scrolled = true;
         await sleep(SCROLL_WAIT);
         take();
         if (seen.size === before) {
@@ -226,6 +421,12 @@
           (x.m.when && y.m.when ? x.m.when - y.m.when : 0) || (x.i - y.i))
         .map((x) => x.m),
       more,
+      // False means the message list was never walked back - either the
+      // conversation is not open, or it is so short there was nothing to
+      // scroll. Either way the reader does not know what is above, and must
+      // say so rather than present one bubble as the whole chat.
+      scrolled,
+      how,
     };
   }
 
@@ -269,7 +470,7 @@
 
   // ---------------------------------------------------------------------------
 
-  function assemble(pane, all, more, photos) {
+  function assemble(pane, all, more, photos, scrolled, how) {
     // Walk backwards from the newest: the recent exchange is the job, and a
     // long silence before it belongs to a different conversation.
     const picked = [];
@@ -305,8 +506,29 @@
     // Said plainly, because a conversation that was cut should never look
     // complete. Both of these are things the reader KNOWS it does not have.
     const limits = [];
+    // THE ONE THAT MATTERS. A card built from a single message looks exactly
+    // like a card built from a whole conversation - same fields, same
+    // confidence, no scrollbar to hint otherwise. The only honest thing is to
+    // say the number out loud when it is implausibly small.
+    if (!scrolled && picked.length <= 2) {
+      limits.push(`ONLY ${picked.length} MESSAGE${picked.length === 1 ? "" : "S"} COULD BE READ. `
+        + `The conversation was not open on screen, so there was nothing to scroll back through. `
+        + `Open the chat itself - not Contact info or a search result - and read it again.`);
+    } else if (!scrolled) {
+      limits.push("The chat could not be scrolled back, so only what was already on screen was read.");
+    }
+    // Which rung the reader ended up on. Said plainly, because a conversation
+    // read without senders or dates is a weaker thing than one read with them,
+    // and nothing else on the card would show the difference.
+    if (how === "data-id") {
+      limits.push("WhatsApp has changed how it marks up messages: these were read without names or dates. Who said what may be wrong.");
+    } else if (how === "row") {
+      limits.push("WhatsApp has changed how it marks up messages and this chat could only be read as plain text. Check everything below.");
+    } else if (how === "none") {
+      limits.push("No messages could be read from this chat at all.");
+    }
     if (cutByGap) {
-      limits.push(`Earlier messages were left out: there is a gap of more than ${GAP_HOURS} hours before this exchange.`);
+      limits.push(`Earlier messages were left out: nothing was said for more than ${Math.round(GAP_HOURS / 24)} days before this exchange.`);
     } else if (more) {
       limits.push(`Only the most recent ${MAX_MESSAGES} messages are included; the chat goes back further.`);
     }
@@ -330,6 +552,12 @@
       messageCount: picked.length,
       media: { ...media, images: photos.length },
       images: photos,
+      // Shown on the form itself. The body already says this, but the body is
+      // read by the parser and the form is read by a person, and it was the
+      // person who could not tell a one-message read from a complete one.
+      limits,
+      how,
+      thin: !scrolled && picked.length <= 2,
       source: "whatsapp",
     };
   }
@@ -337,11 +565,12 @@
   async function readOpenChat() {
     const pane = paneOf();
     if (!pane) return null;
-    const { all, more } = await collect(pane);
+    const { all, more, scrolled, how } = await collect(pane);
     if (!all.length) return null;
     let photos = [];
     try { photos = await grabPhotos(pane); } catch { photos = []; }
-    return assemble(pane, all, more, photos);
+    console.log(`OneShot: read ${all.length} message(s) via "${how}", scrolled=${scrolled}`);
+    return assemble(pane, all, more, photos, scrolled, how);
   }
 
   window.addEventListener("message", (e) => {
