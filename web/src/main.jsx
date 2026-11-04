@@ -21,6 +21,7 @@ import Statements from "./pages/Statements";
 import Signup from "./pages/Signup";
 import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
+import Landing from "./pages/Landing";
 
 export const Ctx = React.createContext(null);
 
@@ -53,6 +54,9 @@ function Shell() {
   const [syncError, setSyncError] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [forcePasswordChange, setForcePasswordChange] = useState(false);
+  // A signed-out visitor at the root gets the pitch, not a password box.
+  // This is how they ask for the password box instead.
+  const [wantsLogin, setWantsLogin] = useState(false);
   const nav = useNavigate();
 
   useEffect(() => {
@@ -163,7 +167,16 @@ function Shell() {
   const [welcomed, setWelcomed] = useState(() => sessionStorage.getItem("oneshot_welcomed") === "1");
 
   if (session === undefined) return null;
-  if (!session) return <Login />;
+  if (!session) {
+    // Only the root is the front door. Every other path a signed-out person
+    // reaches - a bookmark, a link from a colleague, a redirect after signing
+    // out of /dashboard - still wants the sign-in box, because they came for
+    // a particular page rather than to find out what this is.
+    const atFrontDoor = window.location.pathname === "/";
+    return atFrontDoor && !wantsLogin
+      ? <Landing onSignIn={() => setWantsLogin(true)} />
+      : <Login />;
+  }
   if (forcePasswordChange) return <ChangePassword onCancel={() => { setForcePasswordChange(false); supabase.auth.signOut(); }} />;
   if (memberships && memberships.length === 0)
     return <div className="empty">This account isn't a member of any workspace yet.<br/>
