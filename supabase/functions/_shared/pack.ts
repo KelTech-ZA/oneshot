@@ -353,7 +353,7 @@ export class Pack {
     // Said on the invoice itself, not only on the statement, because this page
     // is the one that gets forwarded to whoever pays it.
     if (n(inv.days_overdue) > 0 && n(inv.balance) > 0) {
-      this.put(`${inv.days_overdue} days overdue`, 0, 9,
+      this.put(`${inv.days_overdue} day${n(inv.days_overdue) === 1 ? "" : "s"} overdue`, 0, 9,
         { right: A4.w - M, bold: true, color: rgb(0.78, 0.35, 0.12) });
     } else if (inv.state === "paid") {
       this.put("PAID", 0, 9, { right: A4.w - M, bold: true, color: rgb(0.2, 0.5, 0.33) });
