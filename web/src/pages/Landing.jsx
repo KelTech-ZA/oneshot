@@ -81,10 +81,11 @@ export default function Landing({ onSignIn }) {
 
       <section className="lp-hero">
         <span className="stamp live">Private beta · free to test</span>
-        <h1 className="lp-h1">Stop typing out the job that's already in your inbox.</h1>
+        <h1 className="lp-h1">Every job, every item, and who had it last — in one place.</h1>
         <p className="lp-sub">
-          OneShot reads the email or WhatsApp that brings you work and turns it into
-          the job, the quote and the invoice. You check them and press go.
+          Stop running your operation by hand, across a stack of subscriptions that
+          don't talk to each other. Track any job's progress, find any item, and see
+          who was last accountable for it, from a laptop or a phone.
         </p>
         <div className="lp-cta">
           <button className="lp-btn lp-btn-accent" onClick={start}>Create your workspace</button>
@@ -102,28 +103,42 @@ export default function Landing({ onSignIn }) {
       </figure>
 
       <div className="lp-demo">
-          <div className="lp-pane">
-            <div className="lp-tag">The email you were sent</div>
-            <p className="lp-msg">
-              Please collect <mark>2 crated works</mark> from the studio on
-              <mark> Thursday</mark> and deliver to <mark>95 Sir Lowry Rd</mark> before
-              Friday's install.
-            </p>
-          </div>
-          <div className="lp-go" aria-hidden="true">→</div>
-          <div className="lp-pane lp-pane-out">
-            <div className="lp-tag">What you get, in one click</div>
-            <div className="row lp-jtop">
-              <span className="ref">JOB-2026-0297</span>
-              <span className="stamp done">check &amp; save</span>
-            </div>
-            <dl className="lp-kv">
-              <dt>Collect</dt><dd>Studio · Thu 06 Nov</dd>
-              <dt>Deliver</dt><dd>95 Sir Lowry Rd</dd>
-              <dt>Items</dt><dd>2 crates</dd>
-            </dl>
-          </div>
+        <div className="lp-pane">
+          <div className="lp-tag">The email you were sent</div>
+          <p className="lp-msg">
+            Morning — please collect <mark>3 works</mark> from the studio on
+            <mark> Thursday 6 November between 08:00 and 10:00</mark>:
+            <mark> 1200 x 900 x 120</mark> framed,
+            <mark> 1800 x 700 x 150</mark> panel,
+            and a <mark>420mm</mark> bronze on a plinth.
+            Collection from <mark>44 Brickfield Road, Salt River</mark>,
+            delivery to <mark>7 Glen Crescent, Claremont</mark> before the
+            install on Friday. Imke will meet you there.
+          </p>
         </div>
+        <div className="lp-go" aria-hidden="true">→</div>
+        <div className="lp-pane lp-pane-out">
+          <div className="lp-tag">What you get, before you save anything</div>
+          <div className="row lp-jtop">
+            <span className="ref">JOB-2026-0301</span>
+            <span className="stamp done">check &amp; save</span>
+          </div>
+          <dl className="lp-kv">
+            <dt>Collect</dt><dd>Thu 06 Nov · 08:00–10:00<br/>44 Brickfield Road, Salt River</dd>
+            <dt>Deliver</dt><dd>Before Fri 07 Nov<br/>7 Glen Crescent, Claremont</dd>
+            <dt>Contact</dt><dd>Imke de Waal</dd>
+          </dl>
+          <ul className="lp-items">
+            <li><b>1</b> Framed work <span>1200 × 900 × 120</span></li>
+            <li><b>2</b> Panel <span>1800 × 700 × 150</span></li>
+            <li><b>3</b> Bronze on plinth <span>420mm</span></li>
+          </ul>
+        </div>
+      </div>
+      <p className="democap muted" style={{ marginTop: 9 }}>
+        Three items, both addresses, the window and the deadline — read out of the
+        message and laid out for you to correct. Nothing is saved until you say so.
+      </p>
       </section>
 
       <section className="lp-quote">
@@ -158,7 +173,7 @@ export default function Landing({ onSignIn }) {
             ))}
           </div>
           <p className="muted lp-fine">
-            Mostly our own jobs at Section 9, an art logistics company in Cape Town.
+            Mostly our own jobs at Section 9, a logistics company in Cape Town.
             This is a working tool before it is a product.
           </p>
         </section>
@@ -212,7 +227,7 @@ export default function Landing({ onSignIn }) {
           <div className="lp-way"><b>From Outlook</b><span>The extension shows you
             which mail still needs a job, and makes it from the message you are reading.</span></div>
           <div className="lp-way"><b>From WhatsApp Web</b><span>Open the chat, press
-            create job. The conversation becomes the job, the quote or the invoice.</span></div>
+            create job. The conversation becomes the job, with its items already on it.</span></div>
         </div>
         <a className="lp-btn lp-btn-ghost lp-btn-sm" href="/setup/extension">
           Get the Chrome extension
@@ -223,8 +238,8 @@ export default function Landing({ onSignIn }) {
         <h2 className="lp-h2">Before you sign up</h2>
         <ul>
           <li>It's early. You will find bugs, and you'll be finding them mid-job.</li>
-          <li>It's built around art logistics first, so parts of it may not fit your work yet.</li>
-          <li>No Xero or Sage link yet. Invoices and statements come out as PDFs.</li>
+          <li>It's built around logistics first, so parts of it may not fit your work yet.</li>
+          <li>No need for Xero or Sage. Invoices and statements are built here and sent to you or your client directly.</li>
           <li>Your data sits in our database, separated per workspace, and you can export it and leave whenever you want.</li>
         </ul>
       </section>
@@ -238,12 +253,6 @@ export default function Landing({ onSignIn }) {
         </button>
       </section>
 
-      <footer className="lp-foot">
-        <span className="wordmark">ONE<b>SHOT</b></span>
-        <p className="muted">
-          Built by Lungelo Mkhize at Section 9, art logistics, Cape Town.
-        </p>
-      </footer>
 
     </div>
   );

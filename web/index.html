@@ -612,6 +612,16 @@
     .lp-way b { font-size: 15px; }
     .lp-way span { font-size: 13.5px; line-height: 1.45; color: var(--ink-soft); }
     .lp-btn-sm { min-height: 46px; padding: 12px 18px; font-size: 15px; }
+
+    /* The parsed item list. Dimensions are the detail that tells a logistics
+       reader the parser actually read the message rather than skimmed it. */
+    .lp-items { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px;
+      border-top: 1px solid var(--line); padding-top: 7px; }
+    .lp-items li { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px;
+      align-items: baseline; font-size: 12.5px; }
+    .lp-items li b { font-family: var(--mono); font-size: 10px; color: var(--accent); font-weight: 600; }
+    .lp-items li span { font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+      font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
