@@ -81,11 +81,15 @@ export default function Landing({ onSignIn }) {
 
       <section className="lp-hero">
         <span className="stamp live">Private beta · free to test</span>
-        <h1 className="lp-h1">Every job, every item, and who had it last — in one place.</h1>
+        <h1 className="lp-h1">
+          Your schedules, jobs, documents, tracking and invoicing all in 1 place
+          at a click of a button.
+        </h1>
         <p className="lp-sub">
-          Stop running your operation by hand, across a stack of subscriptions that
-          don't talk to each other. Track any job's progress, find any item, and see
-          who was last accountable for it, from a laptop or a phone.
+          Stop running your logistics business manually losing countless of hours and
+          money with multiple subscriptions. Track the progress of any job, know the
+          location of any item and know who last was accountable for any activity in
+          a job all in 1 place.
         </p>
         <div className="lp-cta">
           <button className="lp-btn lp-btn-accent" onClick={start}>Create your workspace</button>
