@@ -165,34 +165,58 @@ export default function Landing({ onSignIn }) {
       )}
 
       <section className="lp-does">
-        <h2 className="lp-h2">What it does</h2>
+        <h2 className="lp-h2">Everything about a job, inside the job</h2>
+        <p className="lp-lead">
+          Click a date, click a job, and it is all there. No second system, no
+          folder on somebody's desktop, no asking the driver.
+        </p>
         <div className="lp-grid">
           <div className="lp-card">
             <span className="lp-n">01</span>
-            <h3>Makes the job from the message</h3>
-            <p>An extension on your email and WhatsApp Web pulls out the dates,
-              addresses, contacts and items, including from attachments. Nothing
-              saves until you've looked at it.</p>
+            <h3>The job holds the work</h3>
+            <p>Edit it, send it, duplicate it. Every item with its dimensions and
+              details, every document, every photograph, all attached to the job
+              rather than scattered across a thread.</p>
           </div>
           <div className="lp-card">
             <span className="lp-n">02</span>
-            <h3>Prices the quote and the invoice</h3>
-            <p>From what your workspace has charged for similar work before. A line
-              it can't price is flagged, never guessed.</p>
+            <h3>Signed for at every handover</h3>
+            <p>Released by, received by, and the job signed off as complete — each
+              one captured against the item, with who, when and the condition it
+              was in.</p>
           </div>
           <div className="lp-card">
             <span className="lp-n">03</span>
-            <h3>Tracks every item</h3>
-            <p>Who had it, when, with photos at collection and at delivery. The
-              answer to "where is it" takes a second, not a phone call.</p>
+            <h3>Invoices raised and printed inside the job</h3>
+            <p>Charges sit on the job as the work is done, so the invoice is a
+              check and a click. Print the job card, the card with charges, or the
+              invoice on its own.</p>
           </div>
           <div className="lp-card">
             <span className="lp-n">04</span>
-            <h3>Bills each client automatically</h3>
-            <p>Set a billing day once. On that date their invoices and statement go
-              out as one PDF, to you to check or straight to them.</p>
+            <h3>Your crew sees the day, live</h3>
+            <p>Their schedule for today and the week ahead, with the addresses,
+              contacts and items for each job, on their phones, updating as it
+              changes.</p>
           </div>
         </div>
+      </section>
+
+      <section className="lp-ways">
+        <h2 className="lp-h2">Four ways a job gets made</h2>
+        <div className="lp-waygrid">
+          <div className="lp-way"><b>In the app</b><span>Type it in yourself, on a
+            laptop or a phone. Install it from the browser and it behaves like an app.</span></div>
+          <div className="lp-way"><b>By email</b><span>Forward the request to your
+            intake address, or set a rule and never think about it again.</span></div>
+          <div className="lp-way"><b>From Outlook</b><span>The extension shows you
+            which mail still needs a job, and makes it from the message you are reading.</span></div>
+          <div className="lp-way"><b>From WhatsApp Web</b><span>Open the chat, press
+            create job. The conversation becomes the job, the quote or the invoice.</span></div>
+        </div>
+        <a className="lp-btn lp-btn-ghost lp-btn-sm" href="/setup/extension">
+          Get the Chrome extension
+        </a>
       </section>
 
       <section className="lp-honest">

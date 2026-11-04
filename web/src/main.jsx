@@ -22,6 +22,7 @@ import Signup from "./pages/Signup";
 import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
 import Landing from "./pages/Landing";
+import ExtensionSetup from "./pages/ExtensionSetup";
 
 export const Ctx = React.createContext(null);
 
@@ -272,6 +273,7 @@ function Shell() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/setup/email" element={<EmailSetup />} />
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
+        <Route path="/setup/extension" element={<ExtensionSetup />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />

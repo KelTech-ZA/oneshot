@@ -400,6 +400,12 @@ export default function Dashboard() {
       <Link className="card" to="/setup/whatsapp" style={{ fontWeight: 600 }}>
         💬 WhatsApp intake setup — group routing &amp; codes
       </Link>
+      {/* The extension lived only in the repository until now, so a new
+          workspace could read that OneShot works inside Outlook and WhatsApp
+          and have no way to get the thing that does it. */}
+      <Link className="card" to="/setup/extension" style={{ fontWeight: 600 }}>
+        🧩 Chrome extension — download &amp; install for Outlook and WhatsApp Web
+      </Link>
       <button className="card" onClick={showLog ? () => setShowLog(false) : loadLog} style={{ fontWeight: 600 }}>
         {showLog ? "Hide intake log" : "Intake log — last 15 inbound messages"}
       </button>
