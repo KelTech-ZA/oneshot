@@ -51,6 +51,12 @@ security definer
 set search_path = public
 as $$
 declare
+  -- The demo workspace (sql/60) holds invented jobs so the landing page can
+  -- show screenshots without exposing a customer. Those rows must never be
+  -- counted here: the figures beside those screenshots are the one thing on
+  -- that page claiming to be real, and padding them with the fake data would
+  -- make the whole band worthless.
+  k_demo constant uuid := '06b5c9ea-93d5-4f19-8f82-6dcbcefcdb5d';
   v_jobs     bigint;
   v_items    bigint;
   v_events   bigint;
@@ -61,36 +67,37 @@ declare
 begin
   -- Jobs that were really run. A cancelled job still happened as far as the
   -- work of tracking it goes, so it counts.
-  begin select count(*) into v_jobs from public.jobs;
+  begin select count(*) into v_jobs from public.jobs where tenant_id <> k_demo;
   exception when others then v_jobs := null; end;
 
   -- Individual things: crates, works, cases. The number that says whether
   -- this survives contact with real volume.
-  begin select count(*) into v_items from public.line_items;
+  begin select count(*) into v_items from public.line_items where tenant_id <> k_demo;
   exception when others then v_items := null; end;
 
   -- Every handover, scan and status change, each with a person and a time
   -- against it. The claim nobody else in this trade can make.
-  begin select count(*) into v_events from public.custody_events;
+  begin select count(*) into v_events from public.custody_events where tenant_id <> k_demo;
   exception when others then v_events := null; end;
 
   -- Condition at collection and condition at delivery. These are files in a
   -- storage bucket rather than rows in a table, and whether this function's
   -- owner may read storage.objects is not worth guessing at - if it cannot,
   -- the figure is simply absent.
-  begin select count(*) into v_photos from storage.objects where bucket_id = 'photos';
+  begin select count(*) into v_photos from storage.objects
+         where bucket_id = 'photos' and name not like k_demo::text || '%';
   exception when others then v_photos := null; end;
 
   -- Emails and WhatsApp messages read and turned into work.
-  begin select count(*) into v_messages from public.messages;
+  begin select count(*) into v_messages from public.messages where tenant_id <> k_demo;
   exception when others then v_messages := null; end;
 
-  begin select count(*) into v_invoices from public.invoices;
+  begin select count(*) into v_invoices from public.invoices where tenant_id <> k_demo;
   exception when others then v_invoices := null; end;
 
   -- The day the first job was created, so the page can say "since March"
   -- without anyone editing it in March next year.
-  begin select min(created_at)::date into v_since from public.jobs;
+  begin select min(created_at)::date into v_since from public.jobs where tenant_id <> k_demo;
   exception when others then v_since := null; end;
 
   return json_build_object(

@@ -92,7 +92,16 @@ export default function Landing({ onSignIn }) {
         </div>
         <p className="muted lp-fine">Free while it's in testing. No card, no contract.</p>
 
-        <div className="lp-demo">
+        <figure className="lp-shot">
+        <img src="/shots/board.jpg" width="1536" height="700" loading="eager"
+             alt="The OneShot job board: a month calendar beside the week's jobs, each with its reference, status, crew and items." />
+        <figcaption className="muted">
+          A real week in Section 9's workspace. Client names, contacts and addresses
+          have been changed — everything else is the app as it runs.
+        </figcaption>
+      </figure>
+
+      <div className="lp-demo">
           <div className="lp-pane">
             <div className="lp-tag">The email you were sent</div>
             <p className="lp-msg">
@@ -115,6 +124,17 @@ export default function Landing({ onSignIn }) {
             </dl>
           </div>
         </div>
+      </section>
+
+      <section className="lp-quote">
+        <blockquote>
+          I used to give an hour at the end of every day to building the next day's
+          schedule, and the week after it. I don't do that any more. I don't swim
+          around looking for information any more. The request comes in, the parser
+          sorts it, and the job is made. Three or four clicks and a minute checking
+          it, instead of an evening.
+        </blockquote>
+        <figcaption>Lungelo Mkhize · who runs Section 9, and built this for it</figcaption>
       </section>
 
       {figures.length > 0 && (
