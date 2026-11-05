@@ -553,15 +553,46 @@
     return { error: `OneShot answered with ${res.status} and nothing readable.` };
   }
 
-  async function signIn(email, password, msgEl) {
+  // Crew without an email sign in with their number, and the account behind
+  // that is a made-up address: 074 589 7070 becomes
+  // 27745897070@phone.oneshot.local. The web app has done this since those
+  // accounts existed (web/src/lib/identity.js); the extension never did, so
+  // typing a phone number here posted it as an email address and the only
+  // possible answer was "Sign in failed".
+  //
+  // Third copy of this rule, after the app and the invite-user function. If
+  // the numbering ever changes it has to change in all three.
+  function isPhone(v) {
+    return /^[+0-9][0-9 \-()]{6,}$/.test(v.trim()) && !v.includes("@");
+  }
+  function normalizePhone(v) {
+    const digits = v.replace(/\D/g, "");
+    if (digits.startsWith("0")) return "+27" + digits.slice(1);
+    if (digits.startsWith("27")) return "+" + digits;
+    return "+" + digits;
+  }
+  function toLoginEmail(identifier) {
+    const v = (identifier || "").trim();
+    if (!isPhone(v)) return v;
+    return `${normalizePhone(v).replace("+", "")}@phone.oneshot.local`;
+  }
+
+  async function signIn(identifier, password, msgEl) {
     msgEl.textContent = "";
+    const email = toLoginEmail(identifier);
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: "POST",
       headers: { "content-type": "application/json", apikey: ANON },
       body: JSON.stringify({ email, password }),
     });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j.access_token) { msgEl.textContent = j.error_description || "Sign in failed."; return; }
+    if (!res.ok || !j.access_token) {
+      // Say which account it tried, or somebody typing a number has no way to
+      // tell a wrong password from an address the extension never understood.
+      const who = email === identifier.trim() ? "" : ` (as ${email})`;
+      msgEl.textContent = (j.error_description || "Sign in failed.") + who;
+      return;
+    }
     session = j;
     store.save({ session });
     loadClients(); loadJobTypes();
@@ -1703,7 +1734,9 @@
   }
 
   function authRow() {
-    const email = el("input", { type: "email", placeholder: "OneShot email", autocomplete: "username" });
+    // type=text, not email: a browser will not let a phone number out of an
+    // email field, which is the other half of why this never worked.
+    const email = el("input", { type: "text", placeholder: "Email or phone number", autocomplete: "username" });
     const pass  = el("input", { type: "password", placeholder: "Password", autocomplete: "current-password" });
     const msg   = el("span", { className: "msg" });
     const go    = el("button", { className: "primary", textContent: "Sign in" });

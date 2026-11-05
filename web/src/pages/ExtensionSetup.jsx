@@ -12,7 +12,7 @@ import React, { useState } from "react";
 // zip file is somebody who gives up. The steps are on the page, numbered, in
 // the order Chrome actually presents them.
 
-const VERSION = "0.10.0";
+const VERSION = "0.10.1";
 const FILE = `/download/oneshot-extension-${VERSION}.zip`;
 
 const STEPS = [
