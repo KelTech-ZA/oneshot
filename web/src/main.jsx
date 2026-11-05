@@ -180,10 +180,62 @@ function Shell() {
       : <Login />;
   }
   if (forcePasswordChange) return <ChangePassword onCancel={() => { setForcePasswordChange(false); supabase.auth.signOut(); }} />;
+  // Two screens that used to be dead ends.
+  //
+  // Both told you to sign out and gave you nothing to sign out with: the top
+  // bar, which carries the only Sign out button in the app, renders further
+  // down. An account in either state could not reach the sign-in screen again
+  // no matter how many times it reloaded, because the app never gets as far
+  // as asking who you are a second time.
   if (memberships && memberships.length === 0)
-    return <div className="empty">This account isn't a member of any workspace yet.<br/>
-      <span className="muted">Ask your ops manager to add you — or sign out and create your own workspace.</span></div>;
-  if (!profile) return <div className="empty">Loading profile… <br/><span className="muted">If this hangs, your user has no profile row yet — see README step 3.</span></div>;
+    return (
+      <div className="page" style={{ maxWidth: 420, paddingTop: "10vh" }}>
+        <div className="wordmark" style={{ fontSize: 22, marginBottom: 6 }}>ONE<b>SHOT</b></div>
+        <h1 style={{ marginTop: 10 }}>No workspace yet</h1>
+        <p className="muted" style={{ marginBottom: 18 }}>
+          This account is signed in, but it does not belong to a workspace. Either
+          whoever runs yours still has to add you, or you can start one of your own.
+        </p>
+        {wsForm === null ? (
+          <button className="btn btn-accent" onClick={() => setWsForm("")}>
+            ＋ Create a workspace
+          </button>
+        ) : (
+          <div className="card">
+            <label>Company / workspace name</label>
+            <input value={wsForm} autoFocus placeholder="Gallery Movers CC"
+              onChange={(e) => setWsForm(e.target.value)} />
+            <button className="btn btn-primary" onClick={() => createWorkspace(wsForm)}>
+              Create — you'll be its ops
+            </button>
+            <button className="btn btn-ghost" onClick={() => setWsForm(null)}>Cancel</button>
+          </div>
+        )}
+        <div className="quiet-actions">
+          <button onClick={async () => { await supabase.auth.signOut(); nav("/"); }}>
+            Sign out and use a different account
+          </button>
+        </div>
+      </div>
+    );
+
+  if (!profile) return (
+    <div className="page" style={{ maxWidth: 420, paddingTop: "10vh" }}>
+      <div className="wordmark" style={{ fontSize: 22, marginBottom: 6 }}>ONE<b>SHOT</b></div>
+      <h1 style={{ marginTop: 10 }}>Setting this account up…</h1>
+      <p className="muted" style={{ marginBottom: 18 }}>
+        If this does not move on in a few seconds, this account has no profile
+        record yet and somebody has to finish it off. It is not something you can
+        fix from here.
+      </p>
+      <div className="quiet-actions">
+        <button onClick={() => window.location.reload()}>Try again</button>
+        <button onClick={async () => { await supabase.auth.signOut(); nav("/"); }}>
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
 
   if (picking)
     return (
