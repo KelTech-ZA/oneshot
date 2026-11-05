@@ -175,6 +175,12 @@ export default function Dashboard() {
       <Link to="/statements" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Client statements
       </Link>
+      {/* Billing that did not start from a job: a deposit, a storage month,
+          anything invoiced before the work is booked — and the place to put a
+          job onto one of those once the job exists. */}
+      <Link to="/invoices" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Invoices
+      </Link>
 
       <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
         {showNew ? "Cancel" : "+ New job"}

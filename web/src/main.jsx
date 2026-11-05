@@ -23,6 +23,7 @@ import ClaimJob from "./pages/ClaimJob";
 import JobRecord from "./pages/JobRecord";
 import Landing from "./pages/Landing";
 import ExtensionSetup from "./pages/ExtensionSetup";
+import Invoices from "./pages/Invoices";
 
 export const Ctx = React.createContext(null);
 
@@ -278,6 +279,7 @@ function Shell() {
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />
         <Route path="/settings/billing" element={<BillingSettings />} />
+        <Route path="/invoices" element={<Invoices />} />
         <Route path="/statements" element={<Statements />} />
       </Routes>
 
