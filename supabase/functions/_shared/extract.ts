@@ -73,6 +73,13 @@ ONE JOB OR SEVERAL — decide this first:
   A message about one consignment that is built, then packed, then exported is
   still THREE jobs, because the TYPE differs each time. That is correct. What
   is wrong is the same type appearing twice.
+- THOSE JOBS ALL CARRY THE SAME ITEMS, WITH THE SAME DETAIL. When one
+  consignment becomes a crating job and then a packing job, do NOT divide the
+  measurements between them - crate sizes to the crating job, artwork sizes to
+  the packing job. Both jobs are about the same objects. Each one gets the
+  full set of sizes for every piece. A packer holding a list of artwork sizes
+  and no crate sizes cannot tell which work goes into which crate, and that is
+  the one thing he is standing there to do.
 - A heading like "Friday, 25 Sept 2026:" sets the date for every activity
   beneath it until the next date heading. Each job carries its own
   scheduled_date — never two dates in one job.
@@ -90,6 +97,26 @@ ITEM FIELDS — keep these strictly separate. This matters more than anything el
   dates, addresses, instructions or prices in it.
 - "dimensions" holds measurements ONLY, verbatim as written: "138 x 118 x 42 cm (h)".
   If the message gives sizes, they belong here and must NOT also appear in description.
+- SEVERAL SIZES FOR ONE PIECE - KEEP EVERY ONE. A crate quote routinely gives
+  three sizes for the same work:
+      Crate 1: Dan Halter - wooden schoolboy sculpture
+      Artwork: 124 x 29.5 x 23cm(h)
+      Int: 129 x 34.5 x 28cm(h) - Grey foam lining
+      Ext: 141 x 41.5 x 141cm(h) - 9mm plywood
+      Cost: R3 681.25 ex VAT
+  That is ONE item with THREE measurements. It is not three items, and it is
+  not a choice between them. Put all of them in "dimensions", each keeping the
+  label the message used, separated by " · ":
+      "Artwork 124 x 29.5 x 23cm(h) · Int 129 x 34.5 x 28cm(h) · Ext 141 x 41.5 x 141cm(h)"
+  NEVER drop one because another looks more relevant to this job's type. The
+  artwork size says which work this is; the external size says which crate it
+  is in; the internal size is what gets built. A crew member standing in front
+  of a stack of crates needs all three on the same line to match one to the
+  other. Dropping two of them is the single most damaging thing you can do to
+  this item, because what is left looks complete and is not.
+  What is NOT a measurement: the lining and the board ("Grey foam lining",
+  "9mm plywood"), which belong in special_handling, and the cost, which is a
+  charge.
 - "special_handling" holds instructions: "pack on arrival", "glass side up", "two-person lift".
 - "image_indexes": the photographs that show THIS item, as numbers. The body
   contains markers like [IMAGE 1], [IMAGE 2] placed exactly where each photo
@@ -495,14 +522,22 @@ If the COUNT of items changes, or which items they are changes, use
 "items_replace" instead.
 
 
-DIMENSIONS: when a message gives both an artwork size and an internal or crate
-size for the same piece, the INTERNAL size is the frame or crate being built -
-that is the dimension the job needs. Record it as given, units and all.
+DIMENSIONS: when a message gives several sizes for the SAME piece - an artwork
+size, an internal size, an external or crate size - keep EVERY one of them in
+"dimensions", each with the label the message used, separated by " · ":
+"Artwork 124 x 29.5 x 23cm(h) · Int 129 x 34.5 x 28cm(h) · Ext 141 x 41.5 x 141cm(h)".
+Do not choose between them. The internal size is what gets built, but the crew
+matching works to crates on site need the artwork size beside it, and an
+amendment that replaces three sizes with one silently destroys the other two -
+the job still reads as though it is complete. Record them as given, units and
+all.
 
 WHICH JOB GETS WHAT:
 - Use what the jobs hold above to decide. A job whose items are travel frames
-  takes the frame dimensions; a measure job that has already happened usually
-  takes none.
+  takes that piece's measurements; a measure job that has already happened
+  usually takes none. This is about WHICH JOB a detail belongs to, never about
+  which of a piece's sizes to keep - keep all of them, on every job that
+  carries that piece.
 - When the SAME change plainly applies to several jobs, repeat it in each
   amendment. Do not write it once and hope.
 - NEVER DISTRIBUTE BY ORDER. If a message lists four sets of measurements and

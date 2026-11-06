@@ -612,7 +612,23 @@ export default function Job() {
                       Tier {it.identity_tier} · {photoCount(it.id) > 0
                         ? `📷 ${photoCount(it.id)} photo${photoCount(it.id) > 1 ? "s" : ""}`
                         : "no photos yet"}
-                      {it.attributes?.dimensions && <><br />{it.attributes.dimensions}</>}
+                      {/* A crate quote gives three sizes for one work - the
+                          artwork, the crate inside, the crate outside - and
+                          run together on one wrapped line they are unreadable
+                          on a phone, which is where they get read: standing in
+                          front of a stack of crates. One per line puts each
+                          label at the start of a line so it can be scanned.
+                          Single-size items are unaffected - nothing to split.
+
+                          The separator must have a space on each side. A
+                          middle dot is also written as a multiplication sign,
+                          so "124·29.5·23" is ONE measurement and splitting it
+                          would turn a size into three stray numbers. Anything
+                          this does not recognise falls through as one line,
+                          which is exactly what it does today. */}
+                      {it.attributes?.dimensions && String(it.attributes.dimensions)
+                        .split(/\s+[·•|]\s+/).map((d) => d.trim()).filter(Boolean)
+                        .map((d, i) => <React.Fragment key={i}><br />{d}</React.Fragment>)}
                       {it.attributes?.special_handling && (
                         <><br /><span style={{ color: "var(--warn)" }}>{it.attributes.special_handling}</span></>
                       )}
