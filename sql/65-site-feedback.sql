@@ -1,4 +1,4 @@
--- OneShot 65 - letting visitors say something back
+-- OneShot 65 - letting visitors say something back, anonymously
 --
 -- WHY THIS IS DIFFERENT FROM EVERYTHING ELSE IN THIS DATABASE
 --
@@ -11,33 +11,39 @@
 -- but "what happens when a bot finds it", and "what appears on the front page
 -- if somebody types something vile into it at two in the morning".
 --
--- THE THREE DECISIONS THAT FOLLOW FROM THAT
+-- WHAT IS STORED
+--
+-- The words, and when they arrived. That is the whole row.
+--
+-- No name, no company, no email address, and no user id even when the person
+-- happened to be signed in while writing it. This is not a field that was left
+-- optional - there is nowhere to put a name. Asking for one changes what gets
+-- written: somebody who would tell you the invoicing is a mess will not sign
+-- their company to it, and that is the note worth having.
+--
+-- It also means a note can be put on the page without asking anybody's
+-- permission, because there is nobody in it to identify. Which is the point.
+--
+-- THE TWO DECISIONS THAT FOLLOW
 --
 -- 1. Nothing a stranger writes is ever shown to another stranger until
---    Lungelo has read it and said yes. There is no setting to turn this off.
+--    somebody has read it and said yes. There is no setting to turn this off.
 --    An un-moderated comment box on a shop window is a liability, not a
 --    feature: the first spam run would put pharmacy links under a pitch for a
 --    logistics product, and they would sit there until somebody noticed.
 --
--- 2. Consent is separate from approval. A person can send feedback without
---    agreeing to have their name on a public page - that is the default - and
---    approving such a row is refused by the database, not just hidden by the
---    screen. Somebody who writes "honestly the invoicing is a mess" to help
---    has not volunteered to be a testimonial.
---
--- 3. The table is not reachable from the API at all. RLS is on with no
+-- 2. The table is not reachable from the API at all. RLS is on with no
 --    policies and the grants are revoked, so anon and authenticated cannot
 --    select, insert, update or delete it directly no matter what they send to
 --    PostgREST. Everything goes through the four functions below, which are
---    the entire surface. There is no column to select, no filter to bend, and
---    no way to page through other people's email addresses.
+--    the entire surface. There is no column to select and no filter to bend.
 --
 -- WHAT A VISITOR CAN DO
 --   leave_feedback()   write one note. Never reads anything back.
---   public_feedback()  read the notes that were approved AND consented to.
+--   public_feedback()  read the notes that have been approved.
 --
 -- WHAT AN ADMIN CAN DO
---   site_feedback_all()      read everything, including email addresses
+--   site_feedback_all()      read everything, approved or not
 --   set_feedback_published() show one on the page, or take it down again
 --   delete_feedback()        remove spam for good
 --
@@ -95,28 +101,36 @@ end $$;
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.site_feedback (
-  id           uuid primary key default gen_random_uuid(),
-  created_at   timestamptz not null default now(),
+  id          uuid primary key default gen_random_uuid(),
+  created_at  timestamptz not null default now(),
 
-  name         text not null,
-  company      text,
-  -- Optional, so that he can reply. Never leaves the database except through
-  -- site_feedback_all(), which only an admin can call.
-  email        text,
-  message      text not null,
-
-  -- "You may put this on the site." Off unless the person ticks it.
-  may_publish  boolean not null default false,
+  message     text not null,
 
   -- Set when an admin puts it on the page. Null means it has never been
   -- shown; taking one down sets it back to null.
-  approved_at  timestamptz,
-  approved_by  uuid references auth.users(id),
+  approved_at timestamptz,
+  approved_by uuid references auth.users(id),
 
-  -- Filled in when the writer happened to be signed in. Null for a stranger.
-  user_id      uuid references auth.users(id),
-  source       text not null default 'landing'
+  source      text not null default 'landing'
 );
+
+-- An earlier draft of this file collected a name, a company, an email address
+-- and a user id. If that version was ever run, those columns are dropped here
+-- rather than left sitting full of details nobody asked to give. Anonymous
+-- means the column is gone, not that the screen stopped showing it.
+do $$ begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'site_feedback'
+                and column_name in ('name', 'company', 'email', 'may_publish', 'user_id')) then
+    alter table public.site_feedback
+      drop column if exists name,
+      drop column if exists company,
+      drop column if exists email,
+      drop column if exists may_publish,
+      drop column if exists user_id;
+    raise notice 'Dropped the identifying columns from an earlier version of site_feedback.';
+  end if;
+end $$;
 
 alter table public.site_feedback enable row level security;
 revoke all on table public.site_feedback from public;
@@ -150,13 +164,13 @@ create index if not exists site_feedback_shown_idx
 -- too. When it arrives filled, the call succeeds, says ok, and writes nothing.
 -- Telling a bot it failed only teaches it to try again differently.
 
+-- The earlier version took six arguments. Postgres would keep both, and the
+-- old one would still accept a name and an email address.
+drop function if exists public.leave_feedback(text, text, text, text, boolean, text);
+
 create or replace function public.leave_feedback(
-  p_name        text,
-  p_message     text,
-  p_company     text default null,
-  p_email       text default null,
-  p_may_publish boolean default false,
-  p_hp          text default null
+  p_message text,
+  p_hp      text default null
 )
 returns jsonb
 language plpgsql
@@ -164,104 +178,89 @@ security definer
 set search_path = public
 as $$
 declare
-  v_name    text := btrim(coalesce(p_name, ''));
-  v_msg     text := btrim(coalesce(p_message, ''));
-  v_company text := nullif(btrim(coalesce(p_company, '')), '');
-  v_email   text := nullif(lower(btrim(coalesce(p_email, ''))), '');
+  v_msg text := btrim(coalesce(p_message, ''));
 begin
   -- A bot. Say yes, do nothing.
   if coalesce(btrim(p_hp), '') <> '' then
     return jsonb_build_object('ok', true);
   end if;
 
-  if length(v_name) < 2 then
-    raise exception 'Please put a name to it.' using errcode = '22023';
-  end if;
-  if length(v_name) > 80 then
-    raise exception 'That name is too long.' using errcode = '22023';
-  end if;
   if length(v_msg) < 10 then
     raise exception 'Please say a bit more than that.' using errcode = '22023';
   end if;
   if length(v_msg) > 4000 then
-    raise exception 'That is longer than this box takes. Email it instead.' using errcode = '22023';
-  end if;
-  if length(coalesce(v_company, '')) > 120 then
-    raise exception 'That company name is too long.' using errcode = '22023';
-  end if;
-  if v_email is not null and v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$' then
-    raise exception 'That email address does not look right. Leave it blank if you would rather not.'
-      using errcode = '22023';
+    raise exception 'That is longer than this box takes.' using errcode = '22023';
   end if;
 
-  -- A double-clicked button, or a page that retried. Same person, same words,
-  -- within ten minutes: treat it as the one note it is.
+  -- A double-clicked button, or a page that retried. The same words within ten
+  -- minutes: treat it as the one note it is. With no name to compare, the words
+  -- are all there is - which also quietly swallows a bot posting one line over
+  -- and over.
   if exists (
     select 1 from public.site_feedback f
-     where f.name = v_name and f.message = v_msg
+     where f.message = v_msg
        and f.created_at > now() - interval '10 minutes'
   ) then
     return jsonb_build_object('ok', true);
   end if;
 
   -- A crude ceiling on the whole table rather than a per-visitor one, because
-  -- there is nothing trustworthy to identify a visitor by. Normal traffic will
+  -- there is nothing to identify a visitor by - by design. Normal traffic will
   -- never approach it; a flood stops here instead of filling the disk.
   if (select count(*) from public.site_feedback
        where created_at > now() - interval '10 minutes') >= 20 then
     raise exception 'Too many notes at once. Try again in a few minutes.' using errcode = '53400';
   end if;
 
-  insert into public.site_feedback (name, company, email, message, may_publish, user_id)
-  values (v_name, v_company, v_email, v_msg, coalesce(p_may_publish, false), auth.uid());
+  insert into public.site_feedback (message) values (v_msg);
 
   return jsonb_build_object('ok', true);
 end;
 $$;
 
-comment on function public.leave_feedback(text, text, text, text, boolean, text) is
-  'Anonymous write path for the landing page. Writes one note, returns {ok:true}, reads nothing back.';
+comment on function public.leave_feedback(text, text) is
+  'Anonymous write path for the landing page. Stores the words and nothing else.';
 
-revoke all on function public.leave_feedback(text, text, text, text, boolean, text) from public;
+revoke all on function public.leave_feedback(text, text) from public;
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    execute 'grant execute on function public.leave_feedback(text, text, text, text, boolean, text) to anon';
+    execute 'grant execute on function public.leave_feedback(text, text) to anon';
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    execute 'grant execute on function public.leave_feedback(text, text, text, text, boolean, text) to authenticated';
+    execute 'grant execute on function public.leave_feedback(text, text) to authenticated';
   end if;
 end $$;
 
 -- ---------------------------------------------------------------------------
 -- Reading the ones that are allowed out
 -- ---------------------------------------------------------------------------
--- Two conditions, both required: an admin approved it, and the writer agreed
--- to it being shown. No email address, no user id, no row that fails either
--- test. The limit is capped here rather than trusted from the caller.
+-- One condition: an admin approved it. The limit is capped here rather than
+-- trusted from the caller.
 
-create or replace function public.public_feedback(p_limit int default 12)
+-- The shape of what comes back changed, and Postgres will not replace a
+-- function's return type in place.
+drop function if exists public.public_feedback(int);
+
+create function public.public_feedback(p_limit int default 12)
 returns table (
-  id         uuid,
-  shown_at   timestamptz,
-  name       text,
-  company    text,
-  message    text
+  id       uuid,
+  shown_at timestamptz,
+  message  text
 )
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select f.id, f.approved_at, f.name, f.company, f.message
+  select f.id, f.approved_at, f.message
     from public.site_feedback f
    where f.approved_at is not null
-     and f.may_publish
    order by f.approved_at desc
    limit least(greatest(coalesce(p_limit, 12), 1), 50);
 $$;
 
 comment on function public.public_feedback(int) is
-  'The approved, consented notes, for the landing page. Never returns an email address.';
+  'The approved notes, for the landing page.';
 
 revoke all on function public.public_feedback(int) from public;
 do $$ begin
@@ -277,15 +276,13 @@ end $$;
 -- Moderating
 -- ---------------------------------------------------------------------------
 
-create or replace function public.site_feedback_all(p_limit int default 200)
+drop function if exists public.site_feedback_all(int);
+
+create function public.site_feedback_all(p_limit int default 200)
 returns table (
   id          uuid,
   created_at  timestamptz,
-  name        text,
-  company     text,
-  email       text,
   message     text,
-  may_publish boolean,
   approved_at timestamptz
 )
 language plpgsql
@@ -298,8 +295,7 @@ begin
     raise exception 'Not yours to read.';
   end if;
   return query
-    select f.id, f.created_at, f.name, f.company, f.email, f.message,
-           f.may_publish, f.approved_at
+    select f.id, f.created_at, f.message, f.approved_at
       from public.site_feedback f
      order by f.created_at desc
      limit least(greatest(coalesce(p_limit, 200), 1), 500);
@@ -314,11 +310,6 @@ do $$ begin
 end $$;
 
 -- Putting one on the page, or taking it off again.
---
--- The consent check is here and not only on the screen. A screen can be
--- rebuilt, misread, or bypassed by anybody holding a signed-in token; this
--- cannot. If somebody did not agree to be quoted, the database will not quote
--- them, and the error says so plainly rather than failing quietly.
 
 create or replace function public.set_feedback_published(p_id uuid, p_publish boolean)
 returns public.site_feedback
@@ -336,10 +327,6 @@ begin
   select * into v_f from public.site_feedback where id = p_id for update;
   if not found then
     raise exception 'That note is not here any more.';
-  end if;
-
-  if coalesce(p_publish, false) and not v_f.may_publish then
-    raise exception 'They did not agree to this being shown publicly. Ask them first.';
   end if;
 
   update public.site_feedback
@@ -422,12 +409,12 @@ commit;
 --     from public.site_admins a join auth.users u on u.id = a.user_id;
 --
 --   -- everything that has come in
---   select created_at, name, company, email, may_publish, approved_at, message
+--   select created_at, approved_at, message
 --     from public.site_feedback order by created_at desc;
 --
 --   -- waiting on you
---   select created_at, name, company, may_publish, message
---     from public.site_feedback where approved_at is null order by created_at desc;
+--   select created_at, message from public.site_feedback
+--    where approved_at is null order by created_at desc;
 --
 --   -- what the page is showing right now
 --   select * from public.public_feedback(50);

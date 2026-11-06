@@ -641,9 +641,7 @@
       quotes: "\201C" "\201D"; text-wrap: pretty; overflow-wrap: anywhere; }
     .lp-note blockquote::before { content: open-quote; color: var(--accent); font-weight: 700; }
     .lp-note blockquote::after { content: close-quote; color: var(--accent); font-weight: 700; }
-    .lp-note figcaption { font-size: 12.5px; color: var(--ink-soft);
-      border-top: 1px solid var(--line); padding-top: 8px; }
-    .lp-note figcaption b { color: var(--ink); font-weight: 700; }
+    /* No figcaption: the notes are anonymous, so there is nobody to credit. */
 
     .lp-saybox { background: var(--card); border: 1px solid var(--line);
       border-radius: 14px; box-shadow: var(--shadow); padding: 20px;
@@ -654,30 +652,18 @@
     .lp-say-lead { font-size: 14px; line-height: 1.5; max-width: 56ch; margin: 0 0 6px; }
 
     .lp-form { display: grid; gap: 0; }
-    .lp-form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
-    @media (max-width: 560px) { .lp-form-row { grid-template-columns: 1fr; } }
     .lp-form label { display: block; min-width: 0; }
-    .lp-form label > span { display: block; font-size: 12.5px; font-weight: 600;
-      color: var(--ink-soft); margin-bottom: 5px; }
-    /* "optional" rides along inside the label rather than taking a line of its
-       own, so the two columns of the first row stay the same height. */
-    .lp-form label > span i { font-style: normal; font-weight: 400; opacity: .72; }
-    .lp-form textarea { resize: vertical; min-height: 104px; line-height: 1.5; }
+    .lp-form textarea { resize: vertical; min-height: 132px; line-height: 1.5; }
+
+    /* One box with a placeholder needs no visible label, but it still needs a
+       label - a screen reader announcing "edit text, blank" is not a form. */
+    .lp-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
     /* Off-screen rather than display:none - a bot that skips hidden inputs is
        exactly the bot this is trying to catch. */
     .lp-hp { position: absolute; left: -9999px; width: 1px; height: 1px;
       overflow: hidden; }
-
-    /* label.lp-check, not .lp-check: `.lp-form label` above is a class plus an
-       element and outranks a bare class, so the plain version lost and the tick
-       box stacked on top of its own sentence. */
-    .lp-form label.lp-check { display: flex; align-items: flex-start; gap: 10px;
-      cursor: pointer; margin: 2px 0 16px; }
-    .lp-form label.lp-check > span { display: inline; margin: 0; font-size: 14px;
-      font-weight: 400; line-height: 1.45; color: var(--ink); }
-    .lp-check input { width: 19px; height: 19px; flex: none; margin: 1px 0 0;
-      accent-color: var(--accent); cursor: pointer; }
 
     .lp-err { margin: 0 0 12px; font-size: 14px; line-height: 1.45;
       color: var(--accent); font-weight: 600; }

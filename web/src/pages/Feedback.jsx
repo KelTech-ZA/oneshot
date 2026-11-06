@@ -19,10 +19,13 @@ import { supabase } from "../lib/supabase";
 // what appears on the front page. The check is enforced in the database; this
 // screen only decides whether to bother rendering.
 //
-// WHAT CANNOT BE DONE HERE
+// WHY THERE IS NOBODY'S NAME ON ANY OF THIS
 //
-// Publishing a note whose writer did not tick the consent box. The button is
-// not drawn, and if it were, set_feedback_published refuses it.
+// The landing page box asks for nothing but the words, so there is nothing
+// here to attribute, reply to, or look up. That is the point: it is what makes
+// people willing to write "the invoicing is a mess", and it is what lets any
+// note go on the page without asking anybody first. If a note needs a reply,
+// it cannot have one - which is the trade.
 
 const fmt = (ts) => {
   if (!ts) return "";
@@ -62,8 +65,8 @@ export default function Feedback() {
     setBusy("");
   };
 
-  const remove = async (id, name) => {
-    if (!window.confirm(`Delete the note from ${name}? This cannot be undone.`)) return;
+  const remove = async (id) => {
+    if (!window.confirm("Delete this note? It cannot be undone, and there is no way to ask for it again.")) return;
     setBusy(id); setErr("");
     const { error } = await supabase.rpc("delete_feedback", { p_id: id });
     if (error) setErr(error.message); else await load();
@@ -86,8 +89,8 @@ export default function Feedback() {
     <div className="page">
       <h1>Feedback</h1>
       <p className="muted" style={{ marginBottom: 16 }}>
-        Everything left on the landing page. Nothing here is public until you put it there,
-        and only notes whose writer agreed can be shown at all.
+        Everything left on the landing page, anonymously. Nothing is public until you
+        put it there, and anything here can go up — there is nobody in it to ask.
       </p>
 
       {err && <div className="card" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{err}</div>}
@@ -120,27 +123,13 @@ function Note({ r, busy, onPublish, onDelete }) {
   return (
     <div className="card">
       <div className="row" style={{ alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <div style={{ minWidth: 0 }}>
-          <b>{r.name}</b>
-          {r.company && <span className="muted"> · {r.company}</span>}
-        </div>
-        {/* Not "PRIVATE": that reads as something the writer asked for, and it
-            would sit on a note that explicitly agreed to be shown as well as on
-            one that refused. This says where the note is, and the line lower
-            down says what they agreed to. */}
+        <span className="muted" style={{ fontSize: 12.5 }}>{fmt(r.created_at)}</span>
         <span className={`stamp ${shown ? "done" : "pending"}`} style={{ flex: "none" }}>
           {shown ? "ON THE PAGE" : "NOT SHOWN"}
         </span>
       </div>
 
-      <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
-        {fmt(r.created_at)}
-        {r.email
-          ? <> · <a href={`mailto:${r.email}`}>{r.email}</a></>
-          : <> · no email, so no way to reply</>}
-      </div>
-
-      <p style={{ margin: "10px 0 0", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+      <p style={{ margin: "8px 0 0", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
         {r.message}
       </p>
 
@@ -148,23 +137,15 @@ function Note({ r, busy, onPublish, onDelete }) {
           form and wrong here - two actions on one note would each take a line
           of their own. They size to their text and wrap together on a phone. */}
       <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
-        {r.may_publish ? (
-          <button className={`btn ${shown ? "btn-ghost" : "btn-primary"}`} disabled={busy}
-                  style={{ marginTop: 0, marginBottom: 0, width: "auto", flex: "0 0 auto" }}
-                  onClick={() => onPublish(r.id, !shown)}>
-            {busy ? "…" : shown ? "Take it off the page" : "Put it on the page"}
-          </button>
-        ) : (
-          // Not a disabled button: there is nothing to enable. They did not
-          // agree, and the only way to change that is to ask them.
-          <span className="muted" style={{ fontSize: 13, flex: "1 1 220px" }}>
-            They didn't agree to be shown publicly{r.email ? " — ask them if you'd like to quote it" : ""}.
-          </span>
-        )}
+        <button className={`btn ${shown ? "btn-ghost" : "btn-primary"}`} disabled={busy}
+                style={{ marginTop: 0, marginBottom: 0, width: "auto", flex: "0 0 auto" }}
+                onClick={() => onPublish(r.id, !shown)}>
+          {busy ? "…" : shown ? "Take it off the page" : "Put it on the page"}
+        </button>
         <button className="btn btn-ghost" disabled={busy}
                 style={{ marginTop: 0, marginBottom: 0, width: "auto", flex: "0 0 auto",
                          color: "var(--accent)" }}
-                onClick={() => onDelete(r.id, r.name)}>
+                onClick={() => onDelete(r.id)}>
           Delete
         </button>
       </div>
