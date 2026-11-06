@@ -24,6 +24,7 @@ import JobRecord from "./pages/JobRecord";
 import Landing from "./pages/Landing";
 import ExtensionSetup from "./pages/ExtensionSetup";
 import Invoices from "./pages/Invoices";
+import Quotes from "./pages/Quotes";
 
 export const Ctx = React.createContext(null);
 
@@ -331,6 +332,7 @@ function Shell() {
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />
         <Route path="/settings/billing" element={<BillingSettings />} />
+        <Route path="/quotes" element={<Quotes />} />
         <Route path="/invoices" element={<Invoices />} />
         <Route path="/statements" element={<Statements />} />
       </Routes>

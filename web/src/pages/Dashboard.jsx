@@ -178,6 +178,9 @@ export default function Dashboard() {
       {/* Billing that did not start from a job: a deposit, a storage month,
           anything invoiced before the work is booked — and the place to put a
           job onto one of those once the job exists. */}
+      <Link to="/quotes" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Quotes
+      </Link>
       <Link to="/invoices" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Invoices
       </Link>
