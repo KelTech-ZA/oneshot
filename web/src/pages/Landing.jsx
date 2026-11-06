@@ -44,6 +44,20 @@ function since(d) {
   return `${MONTHS[i]} ${y}`;
 }
 
+// Five stars drawn at a given size. Half stars are done by clipping a second
+// copy rather than by a half-star glyph, so 4.4 looks like 4.4 instead of
+// being rounded to something the number underneath contradicts.
+function Stars({ value, size = 16, label }) {
+  const pct = Math.max(0, Math.min(100, (Number(value) / 5) * 100));
+  return (
+    <span className="lp-stars-out" style={{ fontSize: size }}
+          role="img" aria-label={label ?? `${value} out of 5`}>
+      <span className="lp-stars-bg" aria-hidden="true">★★★★★</span>
+      <span className="lp-stars-fg" aria-hidden="true" style={{ width: `${pct}%` }}>★★★★★</span>
+    </span>
+  );
+}
+
 // What people have said, and the box to say something in.
 //
 // IT IS ANONYMOUS, AND THAT IS THE DESIGN
@@ -62,6 +76,9 @@ function since(d) {
 // goes looking for it, and finds nothing.
 function Feedback() {
   const [notes, setNotes] = useState([]);
+  const [score, setScore] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [hover, setHover] = useState(0);
   const [message, setMessage] = useState("");
   const [hp, setHp] = useState("");
   const [state, setState] = useState("idle");   // idle | sending | sent
@@ -72,34 +89,55 @@ function Feedback() {
     supabase.rpc("public_feedback", { p_limit: 12 })
       .then(({ data, error }) => { if (alive && !error && Array.isArray(data)) setNotes(data); })
       .catch(() => {});
+    supabase.rpc("public_rating")
+      .then(({ data, error }) => { if (alive && !error && data) setScore(data); })
+      .catch(() => {});
     return () => { alive = false; };
   }, []);
 
   const send = async (e) => {
     e.preventDefault();
     if (state === "sending") return;
+    if (!rating) { setErr("Pick a number of stars first."); return; }
     setErr(""); setState("sending");
     const { error } = await supabase.rpc("leave_feedback", {
-      p_message: message, p_hp: hp || null,
+      p_rating: rating, p_message: message || null, p_hp: hp || null,
     });
     if (error) { setErr(error.message || "That didn't send. Try again in a moment."); setState("idle"); return; }
     setState("sent");
   };
+
+  // An average over three people is noise wearing a number's clothes, and the
+  // first few reviews will be friends. Below five it says nothing at all,
+  // which is the same rule the live job counts above follow.
+  const avg = score && Number(score.count) >= 5 ? Number(score.average) : null;
+  const shownStars = hover || rating;
 
   return (
     <section className="lp-say">
       {/* "What people are saying" sitting directly above "Nothing here yet"
           reads as a section that failed to load. On day one it is a question,
           not a wall of praise. */}
-      <h2 className="lp-h2">{notes.length > 0 ? "What people are saying" : "Tell me what you think"}</h2>
+      <div className="lp-say-head">
+        <h2 className="lp-h2">{notes.length > 0 ? "What people are saying" : "Tell me what you think"}</h2>
+        {avg !== null && (
+          <div className="lp-avg">
+            <Stars value={avg} size={19} label={`${avg} out of 5`} />
+            <b>{avg.toFixed(1)}</b>
+            <span className="muted">out of 5 · {score.count} reviews</span>
+          </div>
+        )}
+      </div>
 
       {notes.length > 0 && (
         <div className="lp-notes">
           {notes.map((n) => (
-            // No caption. There is nobody to name, and inventing a label -
+            // No name. There is nobody to credit, and inventing a label -
             // "a logistics operator", "a beta tester" - would be dressing up
-            // an anonymous note as an attributed one.
+            // an anonymous review as an attributed one. The stars are the
+            // only thing standing in for a byline, and they are real.
             <figure className="lp-note" key={n.id}>
+              {n.rating ? <Stars value={n.rating} size={14} /> : null}
               <blockquote>{n.message}</blockquote>
             </figure>
           ))}
@@ -117,7 +155,7 @@ function Feedback() {
             </h3>
             <p className="muted lp-say-lead">
               Anonymous — no name, no company, no email, nothing asked and nothing kept.
-              Using it, thinking about it, or it broke on you: all three are worth hearing.
+              Stars are one click; the box underneath is optional.
             </p>
           </>
         )}
@@ -126,17 +164,39 @@ function Feedback() {
           <div className="lp-thanks">
             <b>Got it — thank you.</b>
             <span className="muted">
-              I read everything that comes through here. If it's worth other people
-              seeing, it'll turn up on this page.
+              Your rating counts from now. I read every comment that comes through
+              here, and if it's worth other people seeing it'll turn up on this page.
             </span>
           </div>
         ) : (
           <form className="lp-form" onSubmit={send}>
+            {/* Radios, not buttons. A fieldset of radios is what a rating is,
+                it arrives keyboard-operable and announced for free, and it
+                submits with the form rather than needing its own state to be
+                remembered on a failed send. */}
+            <fieldset className="lp-rate" onMouseLeave={() => setHover(0)}>
+              <legend>How is it so far?</legend>
+              <div className="lp-rate-row">
+                {[1, 2, 3, 4, 5].map((v) => (
+                  <label key={v} className={`lp-star ${shownStars >= v ? "on" : ""}`}
+                         onMouseEnter={() => setHover(v)}>
+                    <input type="radio" name="rating" value={v} className="lp-sr"
+                           checked={rating === v} onChange={() => setRating(v)} />
+                    <span aria-hidden="true">★</span>
+                    <span className="lp-sr">{v} out of 5</span>
+                  </label>
+                ))}
+                <span className="lp-rate-say muted">
+                  {["", "Not good", "Rough", "It's alright", "Good", "Very good"][shownStars]}
+                </span>
+              </div>
+            </fieldset>
+
             <label>
-              <span className="lp-sr">What you want to say</span>
+              <span className="lp-sr">Anything you want to say</span>
               <textarea value={message} onChange={(e) => setMessage(e.target.value)}
-                        required rows={5} minLength={10} maxLength={4000}
-                        placeholder="What worked, what didn't, what's missing, what you'd never use." />
+                        rows={4} minLength={10} maxLength={4000}
+                        placeholder="Optional — what worked, what didn't, what's missing, what you'd never use." />
             </label>
 
             {/* Not for people. A bot fills every input it finds, including this one,
@@ -151,11 +211,13 @@ function Feedback() {
 
             {err && <p className="lp-err">{err}</p>}
 
-            <button className="lp-btn lp-btn-accent" type="submit" disabled={state === "sending"}>
+            <button className="lp-btn lp-btn-accent" type="submit"
+                    disabled={state === "sending" || !rating}>
               {state === "sending" ? "Sending…" : "Send it"}
             </button>
             <p className="muted lp-fine">
-              Nothing posts straight to the page — I read everything first.
+              Every rating counts towards the score, including the bad ones.
+              Comments don't post straight to the page — I read those first.
             </p>
           </form>
         )}

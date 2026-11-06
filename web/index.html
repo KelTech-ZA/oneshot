@@ -641,7 +641,34 @@
       quotes: "\201C" "\201D"; text-wrap: pretty; overflow-wrap: anywhere; }
     .lp-note blockquote::before { content: open-quote; color: var(--accent); font-weight: 700; }
     .lp-note blockquote::after { content: close-quote; color: var(--accent); font-weight: 700; }
-    /* No figcaption: the notes are anonymous, so there is nobody to credit. */
+    /* No figcaption: the reviews are anonymous, so there is nobody to credit.
+       The stars are the only thing standing in for a byline. */
+
+    /* ---------------------------------------------------------------------
+       Stars, read-only.
+
+       Two copies of the same five glyphs, the filled one laid over the empty
+       one and clipped to a percentage. A half-star glyph would force every
+       average onto a 0.5 step, and then 4.4 would be drawn as 4.5 beside the
+       number 4.4 - a small lie, but one the reader can see.
+       --------------------------------------------------------------------- */
+    /* width and justify-self are load-bearing. As a grid item inside .lp-note
+       this span would otherwise stretch to the card, and the filled copy would
+       be clipped to a percentage of the CARD rather than of the glyphs - so
+       three stars out of five drew all five and the card lied. */
+    .lp-stars-out { position: relative; display: inline-block; flex: none;
+      width: max-content; justify-self: start;
+      line-height: 1; letter-spacing: .08em; white-space: nowrap;
+      color: var(--line); vertical-align: middle; }
+    .lp-stars-fg { position: absolute; inset: 0; overflow: hidden;
+      color: var(--accent); white-space: nowrap; }
+
+    .lp-say-head { display: flex; flex-wrap: wrap; gap: 6px 16px;
+      align-items: baseline; justify-content: space-between; }
+    .lp-say-head .lp-h2 { margin-bottom: 0; }
+    .lp-avg { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .lp-avg b { font-family: var(--mono); font-size: 17px; font-weight: 600;
+      font-variant-numeric: tabular-nums; }
 
     .lp-saybox { background: var(--card); border: 1px solid var(--line);
       border-radius: 14px; box-shadow: var(--shadow); padding: 20px;
@@ -653,7 +680,30 @@
 
     .lp-form { display: grid; gap: 0; }
     .lp-form label { display: block; min-width: 0; }
-    .lp-form textarea { resize: vertical; min-height: 132px; line-height: 1.5; }
+    .lp-form textarea { resize: vertical; min-height: 108px; line-height: 1.5; }
+
+    /* ---------------------------------------------------------------------
+       Stars you press.
+
+       Radio inputs behind the glyphs: keyboard and screen readers get a real
+       rating control, and the pointer gets five big targets. 40px, because
+       this is the one thing on the page a visitor does with their thumb.
+       --------------------------------------------------------------------- */
+    .lp-rate { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
+    .lp-rate legend { padding: 0; font-size: 12.5px; font-weight: 600;
+      color: var(--ink-soft); margin-bottom: 4px; }
+    .lp-rate-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+    .lp-form label.lp-star { display: inline-flex; align-items: center;
+      justify-content: center; width: 40px; height: 40px; flex: none;
+      cursor: pointer; font-size: 27px; line-height: 1; color: var(--line);
+      border-radius: 9px; transition: color .08s ease, transform .08s ease; }
+    .lp-form label.lp-star.on { color: var(--accent); }
+    .lp-form label.lp-star:active { transform: scale(.92); }
+    /* The radio is off-screen, so the ring has to be put back by hand or the
+       control is invisible to anybody tabbing through the page. */
+    .lp-form label.lp-star:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .lp-rate-say { font-size: 13.5px; margin-left: 8px; }
+    @media (hover: none) { .lp-rate-say { display: none; } }
 
     /* One box with a placeholder needs no visible label, but it still needs a
        label - a screen reader announcing "edit text, blank" is not a form. */

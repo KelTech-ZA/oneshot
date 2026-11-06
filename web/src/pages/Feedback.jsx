@@ -33,9 +33,25 @@ const fmt = (ts) => {
   return d.toLocaleDateString("en-ZA", { day: "2-digit", month: "short", year: "numeric" });
 };
 
+// The same ten lines as the one on the landing page, deliberately copied
+// rather than shared. It is presentation with no logic in it, and a shared
+// component would have to live somewhere both pages can reach - a decision
+// about this repository's layout that a star drawing does not earn.
+function Stars({ value, size = 15 }) {
+  const pct = Math.max(0, Math.min(100, (Number(value) / 5) * 100));
+  return (
+    <span className="lp-stars-out" style={{ fontSize: size }}
+          role="img" aria-label={`${value} out of 5`}>
+      <span className="lp-stars-bg" aria-hidden="true">★★★★★</span>
+      <span className="lp-stars-fg" aria-hidden="true" style={{ width: `${pct}%` }}>★★★★★</span>
+    </span>
+  );
+}
+
 export default function Feedback() {
   const [admin, setAdmin] = useState(null);     // null = still checking
   const [rows, setRows] = useState([]);
+  const [score, setScore] = useState(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
 
@@ -44,6 +60,11 @@ export default function Feedback() {
     if (error) { setErr(error.message); return; }
     setErr("");
     setRows(Array.isArray(data) ? data : []);
+    // The score comes from the database rather than from averaging the rows
+    // above, so that this screen shows the same number the public page does
+    // even once there are more than 200 reviews.
+    const { data: s } = await supabase.rpc("public_rating");
+    if (s) setScore(s);
   };
 
   useEffect(() => {
@@ -82,24 +103,64 @@ export default function Feedback() {
       </div>
     );
 
-  const waiting = rows.filter((r) => !r.approved_at);
-  const live = rows.filter((r) => r.approved_at);
+  const withWords = rows.filter((r) => r.message);
+  const waiting = withWords.filter((r) => !r.approved_at);
+  const live = withWords.filter((r) => r.approved_at);
+  const bare = rows.filter((r) => !r.message);
+
+  const avg = score && Number(score.count) > 0 ? Number(score.average) : null;
+
+  // The spread matters more than the average when there are few reviews: four
+  // fives and a one is a different thing from five fours, and they average the
+  // same. Counted from the rows on this screen, which is every review until
+  // there are more than 200 of them.
+  const spread = [5, 4, 3, 2, 1].map((n) => [n, rows.filter((r) => r.rating === n).length]);
 
   return (
     <div className="page">
       <h1>Feedback</h1>
       <p className="muted" style={{ marginBottom: 16 }}>
-        Everything left on the landing page, anonymously. Nothing is public until you
-        put it there, and anything here can go up — there is nobody in it to ask.
+        Everything left on the landing page, anonymously. Every rating counts towards
+        the score whether or not you show it; comments are public only once you put
+        them there.
       </p>
 
       {err && <div className="card" style={{ borderColor: "var(--accent)", color: "var(--accent)" }}>{err}</div>}
+
+      {avg !== null && (
+        <div className="card">
+          {/* .row spreads its children apart, which leaves the number marooned
+              in the middle of the card away from the stars it belongs to. */}
+          <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap",
+                                        justifyContent: "flex-start" }}>
+            <Stars value={avg} size={22} />
+            <b style={{ fontSize: 20 }}>{avg.toFixed(1)}</b>
+            <span className="muted">
+              out of 5 · {score.count} {Number(score.count) === 1 ? "rating" : "ratings"}
+              {Number(score.count) < 5 && " · the page shows nothing until there are five"}
+            </span>
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 4 }}>
+            {spread.map(([n, c]) => (
+              <div key={n} className="row" style={{ alignItems: "center", gap: 8 }}>
+                <span className="muted" style={{ fontSize: 12.5, width: 42, flex: "none" }}>{n} star</span>
+                <span style={{ flex: 1, height: 7, background: "var(--line)", borderRadius: 4, minWidth: 40 }}>
+                  <span style={{ display: "block", height: "100%", borderRadius: 4,
+                    background: "var(--accent)",
+                    width: `${rows.length ? (c / rows.length) * 100 : 0}%` }} />
+                </span>
+                <span className="muted" style={{ fontSize: 12.5, width: 24, textAlign: "right", flex: "none" }}>{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {rows.length === 0 && <div className="card"><span className="muted">Nothing yet.</span></div>}
 
       {waiting.length > 0 && (
         <>
-          <h2>Waiting on you · {waiting.length}</h2>
+          <h2>Comments waiting on you · {waiting.length}</h2>
           {waiting.map((r) => (
             <Note key={r.id} r={r} busy={busy === r.id} onPublish={publish} onDelete={remove} />
           ))}
@@ -114,6 +175,32 @@ export default function Feedback() {
           ))}
         </>
       )}
+
+      {bare.length > 0 && (
+        <>
+          {/* Nothing to approve and nothing to read, so they get a line each
+              rather than a card. The only thing worth doing to one is deleting
+              it, and the only reason to do that is that it was a bot. */}
+          <h2>Ratings with no comment · {bare.length}</h2>
+          <div className="card" style={{ display: "grid", gap: 2 }}>
+            {bare.map((r) => (
+              <div className="row" key={r.id}
+                   style={{ alignItems: "center", gap: 10, justifyContent: "space-between",
+                            padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                <Stars value={r.rating} size={14} />
+                <span className="muted" style={{ fontSize: 12.5, flex: 1 }}>{fmt(r.created_at)}</span>
+                <button className="btn btn-ghost" disabled={busy === r.id}
+                        style={{ marginTop: 0, marginBottom: 0, width: "auto", flex: "0 0 auto",
+                                 minHeight: 34, padding: "6px 12px", fontSize: 13,
+                                 color: "var(--accent)" }}
+                        onClick={() => remove(r.id)}>
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -122,8 +209,11 @@ function Note({ r, busy, onPublish, onDelete }) {
   const shown = !!r.approved_at;
   return (
     <div className="card">
-      <div className="row" style={{ alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-        <span className="muted" style={{ fontSize: 12.5 }}>{fmt(r.created_at)}</span>
+      <div className="row" style={{ alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span className="row" style={{ alignItems: "center", gap: 9, minWidth: 0 }}>
+          <Stars value={r.rating} size={15} />
+          <span className="muted" style={{ fontSize: 12.5 }}>{fmt(r.created_at)}</span>
+        </span>
         <span className={`stamp ${shown ? "done" : "pending"}`} style={{ flex: "none" }}>
           {shown ? "ON THE PAGE" : "NOT SHOWN"}
         </span>
