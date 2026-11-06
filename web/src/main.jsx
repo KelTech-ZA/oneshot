@@ -25,6 +25,7 @@ import Landing from "./pages/Landing";
 import ExtensionSetup from "./pages/ExtensionSetup";
 import Invoices from "./pages/Invoices";
 import Quotes from "./pages/Quotes";
+import Feedback from "./pages/Feedback";
 
 export const Ctx = React.createContext(null);
 
@@ -335,6 +336,10 @@ function Shell() {
         <Route path="/quotes" element={<Quotes />} />
         <Route path="/invoices" element={<Invoices />} />
         <Route path="/statements" element={<Statements />} />
+        {/* Site-wide, not workspace-wide. The page checks is_site_admin() and
+            shows a polite nothing to everybody else; the database refuses them
+            regardless of what the route allows. */}
+        <Route path="/feedback" element={<Feedback />} />
       </Routes>
 
       {/* Sync badge with error display */}

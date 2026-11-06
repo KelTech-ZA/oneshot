@@ -44,6 +44,150 @@ function since(d) {
   return `${MONTHS[i]} ${y}`;
 }
 
+// What people have said, and the box to say something in.
+//
+// TWO THINGS ARE DELIBERATE HERE
+//
+// Nothing written in this box appears on this page until it has been read and
+// approved (sql/65). That is said out loud under the button rather than hidden,
+// because a comment box that silently swallows what you wrote is worse than no
+// comment box: the person assumes it posted, goes looking for it, and finds
+// nothing.
+//
+// The consent tick is off by default and the note is useful either way. Most
+// of what comes in will be "the invoicing is confusing", which is the point of
+// asking - it is not a testimonial and should never be fished for as one.
+function Feedback() {
+  const [notes, setNotes] = useState([]);
+  const [f, setF] = useState({ name: "", company: "", email: "", message: "", pub: false, hp: "" });
+  const [state, setState] = useState("idle");   // idle | sending | sent
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    supabase.rpc("public_feedback", { p_limit: 12 })
+      .then(({ data, error }) => { if (alive && !error && Array.isArray(data)) setNotes(data); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const set = (k) => (e) =>
+    setF((p) => ({ ...p, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+
+  const send = async (e) => {
+    e.preventDefault();
+    if (state === "sending") return;
+    setErr(""); setState("sending");
+    const { error } = await supabase.rpc("leave_feedback", {
+      p_name: f.name, p_message: f.message, p_company: f.company || null,
+      p_email: f.email || null, p_may_publish: f.pub, p_hp: f.hp || null,
+    });
+    if (error) { setErr(error.message || "That didn't send. Try again in a moment."); setState("idle"); return; }
+    setState("sent");
+  };
+
+  return (
+    <section className="lp-say">
+      {/* "What people are saying" sitting directly above "Nothing here yet"
+          reads as a section that failed to load. On day one it is a question,
+          not a wall of praise. */}
+      <h2 className="lp-h2">{notes.length > 0 ? "What people are saying" : "Tell me what you think"}</h2>
+
+      {notes.length > 0 && (
+        <div className="lp-notes">
+          {notes.map((n) => (
+            <figure className="lp-note" key={n.id}>
+              <blockquote>{n.message}</blockquote>
+              <figcaption>
+                <b>{n.name}</b>{n.company ? ` · ${n.company}` : ""}
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+
+      <div className="lp-saybox">
+        {/* The invitation goes away once it has been accepted. Leaving "be the
+            first to tell me what's wrong with it" sitting above "thank you"
+            reads as though the thing they just sent did not arrive. */}
+        {state !== "sent" && (
+          <>
+            <h3 className="lp-say-h">
+              {notes.length > 0 ? "Add yours" : "Nothing here yet. Be the first to tell me what's wrong with it."}
+            </h3>
+            <p className="muted lp-say-lead">
+              Using it, thinking about it, or it broke on you — all three are worth hearing.
+              I read every one of these myself.
+            </p>
+          </>
+        )}
+
+        {state === "sent" ? (
+          <div className="lp-thanks">
+            <b>Got it — thank you.</b>
+            <span className="muted">
+              It's gone straight to me. If you ticked the box, it'll appear on this page
+              once I've read it; if you didn't, nobody but me will ever see it.
+            </span>
+          </div>
+        ) : (
+          <form className="lp-form" onSubmit={send}>
+            <div className="lp-form-row">
+              <label>
+                <span>Your name</span>
+                <input value={f.name} onChange={set("name")} required maxLength={80}
+                       autoComplete="name" placeholder="Thandi Mabaso" />
+              </label>
+              <label>
+                <span>Company <i>optional</i></span>
+                <input value={f.company} onChange={set("company")} maxLength={120}
+                       autoComplete="organization" placeholder="Mabaso Fine Art Services" />
+              </label>
+            </div>
+
+            <label>
+              <span>Email <i>only if you want a reply</i></span>
+              <input type="email" value={f.email} onChange={set("email")} maxLength={160}
+                     autoComplete="email" placeholder="you@yourcompany.co.za" />
+            </label>
+
+            <label>
+              <span>What you want to say</span>
+              <textarea value={f.message} onChange={set("message")} required rows={5}
+                        minLength={10} maxLength={4000}
+                        placeholder="What worked, what didn't, what's missing, what you'd never use." />
+            </label>
+
+            {/* Not for people. A bot fills every input it finds, including this one,
+                and sql/65 drops anything that arrives with it set. */}
+            <div className="lp-hp" aria-hidden="true">
+              <label>
+                Leave this empty
+                <input value={f.hp} onChange={set("hp")} tabIndex={-1} autoComplete="off" />
+              </label>
+            </div>
+
+            <label className="lp-check">
+              <input type="checkbox" checked={f.pub} onChange={set("pub")} />
+              <span>You may show this, with my name, on this page.</span>
+            </label>
+
+            {err && <p className="lp-err">{err}</p>}
+
+            <button className="lp-btn lp-btn-accent" type="submit" disabled={state === "sending"}>
+              {state === "sending" ? "Sending…" : "Send it"}
+            </button>
+            <p className="muted lp-fine">
+              Nothing posts straight to the page — I read everything first.
+              Your email is never shown here and never passed on.
+            </p>
+          </form>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function Landing({ onSignIn }) {
   const nav = useNavigate();
   const [stats, setStats] = useState(null);
@@ -247,6 +391,8 @@ export default function Landing({ onSignIn }) {
           <li>Your data sits in our database, separated per workspace, and you can export it and leave whenever you want.</li>
         </ul>
       </section>
+
+      <Feedback />
 
       <section className="lp-end">
         <h2 className="lp-end-h">Run one month of real jobs through it and tell me what's wrong with it.</h2>

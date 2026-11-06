@@ -616,6 +616,88 @@
     .lp-way span { font-size: 13.5px; line-height: 1.45; color: var(--ink-soft); }
     .lp-btn-sm { min-height: 46px; padding: 12px 18px; font-size: 15px; }
 
+    /* ---------------------------------------------------------------------
+       What people are saying, and the box to say it in.
+
+       The form is the point of this section, not the quotes above it: on the
+       day it ships there are no approved notes at all, so it has to look
+       deliberate while empty rather than look like a feature that failed to
+       load. Hence the box carries its own heading and sits in a framed panel
+       of its own - it reads as an invitation with or without anything above it.
+       --------------------------------------------------------------------- */
+    .lp-say { padding-block: 10px 34px; display: grid; gap: 16px; }
+
+    /* Masonry would be neater and is not worth a layout dependency. Equal
+       columns with top-aligned cards, so notes of different lengths sit level
+       at the top rather than floating in the middle of their box. */
+    .lp-notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px; align-items: start; }
+    .lp-note { background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: var(--shadow); padding: 16px 17px;
+      margin: 0; display: grid; gap: 9px; min-width: 0; }
+    .lp-note blockquote { margin: 0; font-size: 14.5px; line-height: 1.5;
+      /* The quote marks are drawn rather than typed so a note that opens with
+         a dash or a number does not end up with one hanging in front of it. */
+      quotes: "\201C" "\201D"; text-wrap: pretty; overflow-wrap: anywhere; }
+    .lp-note blockquote::before { content: open-quote; color: var(--accent); font-weight: 700; }
+    .lp-note blockquote::after { content: close-quote; color: var(--accent); font-weight: 700; }
+    .lp-note figcaption { font-size: 12.5px; color: var(--ink-soft);
+      border-top: 1px solid var(--line); padding-top: 8px; }
+    .lp-note figcaption b { color: var(--ink); font-weight: 700; }
+
+    .lp-saybox { background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: var(--shadow); padding: 20px;
+      display: grid; gap: 4px; }
+    .lp-say-h { font-size: clamp(17px, 2.4vw, 21px); font-weight: 800;
+      letter-spacing: -.015em; line-height: 1.2; margin: 0; max-width: 34ch;
+      text-wrap: balance; }
+    .lp-say-lead { font-size: 14px; line-height: 1.5; max-width: 56ch; margin: 0 0 6px; }
+
+    .lp-form { display: grid; gap: 0; }
+    .lp-form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+    @media (max-width: 560px) { .lp-form-row { grid-template-columns: 1fr; } }
+    .lp-form label { display: block; min-width: 0; }
+    .lp-form label > span { display: block; font-size: 12.5px; font-weight: 600;
+      color: var(--ink-soft); margin-bottom: 5px; }
+    /* "optional" rides along inside the label rather than taking a line of its
+       own, so the two columns of the first row stay the same height. */
+    .lp-form label > span i { font-style: normal; font-weight: 400; opacity: .72; }
+    .lp-form textarea { resize: vertical; min-height: 104px; line-height: 1.5; }
+
+    /* Off-screen rather than display:none - a bot that skips hidden inputs is
+       exactly the bot this is trying to catch. */
+    .lp-hp { position: absolute; left: -9999px; width: 1px; height: 1px;
+      overflow: hidden; }
+
+    /* label.lp-check, not .lp-check: `.lp-form label` above is a class plus an
+       element and outranks a bare class, so the plain version lost and the tick
+       box stacked on top of its own sentence. */
+    .lp-form label.lp-check { display: flex; align-items: flex-start; gap: 10px;
+      cursor: pointer; margin: 2px 0 16px; }
+    .lp-form label.lp-check > span { display: inline; margin: 0; font-size: 14px;
+      font-weight: 400; line-height: 1.45; color: var(--ink); }
+    .lp-check input { width: 19px; height: 19px; flex: none; margin: 1px 0 0;
+      accent-color: var(--accent); cursor: pointer; }
+
+    .lp-err { margin: 0 0 12px; font-size: 14px; line-height: 1.45;
+      color: var(--accent); font-weight: 600; }
+
+    .lp-form .lp-fine { margin-top: 10px; font-size: 12.5px; line-height: 1.45;
+      max-width: 54ch; }
+
+    /* The form is a grid, which stretches every child the full width - fine for
+       the inputs, wrong for the button, which then reads as a page-width banner
+       rather than the end of a form. */
+    .lp-form button[type="submit"] { justify-self: start; }
+
+    .lp-thanks { display: grid; gap: 6px; padding: 16px 0 4px; font-size: 14.5px;
+      line-height: 1.5; max-width: 54ch; }
+    .lp-thanks b { font-size: 16px; }
+
+    @media (max-width: 640px) {
+      .lp-form button[type="submit"] { justify-self: stretch; }
+    }
+
     /* The parsed item list. Dimensions are the detail that tells a logistics
        reader the parser actually read the message rather than skimmed it. */
     .lp-items { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px;

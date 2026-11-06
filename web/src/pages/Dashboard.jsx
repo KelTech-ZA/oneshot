@@ -27,6 +27,8 @@ export const refsIn = (t) => [...String(t ?? "").matchAll(/JOB-\d{4}-\d+/g)].map
 
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
+  const [siteAdmin, setSiteAdmin] = useState(false);
+  const [waitingCount, setWaitingCount] = useState(0);
   const [jobs, setJobs] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
   const [unread, setUnread] = useState([]);
@@ -43,6 +45,22 @@ export default function Dashboard() {
     supabase.from("job_types").select("key,label").eq("active", true).order("sort")
       .then(({ data }) => setJobTypes(data ?? []));
     loadUnread();
+  }, []);
+
+  // Landing page feedback, for the one account that owns the site. Everything
+  // here fails to "not an admin" and shows nothing: this is a link, and it is
+  // not worth an error message on somebody else's office screen.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase.rpc("is_site_admin");
+      if (!alive || error || !data) return;
+      setSiteAdmin(true);
+      const { data: all, error: e2 } = await supabase.rpc("site_feedback_all", { p_limit: 200 });
+      if (!alive || e2 || !Array.isArray(all)) return;
+      setWaitingCount(all.filter((r) => !r.approved_at).length);
+    })();
+    return () => { alive = false; };
   }, []);
 
   // This board sits open all day next to somebody's mail. Without this it
@@ -184,6 +202,15 @@ export default function Dashboard() {
       <Link to="/invoices" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Invoices
       </Link>
+      {/* Only for the site owner, and only once the database has said so. The
+          link would be harmless either way - the page and every function behind
+          it check again - but a customer seeing "Landing page feedback" in their
+          own office would reasonably wonder whose app this is. */}
+      {siteAdmin && (
+        <Link to="/feedback" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+          Landing page feedback{waitingCount > 0 ? ` · ${waitingCount} waiting` : ""}
+        </Link>
+      )}
 
       <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
         {showNew ? "Cancel" : "+ New job"}
