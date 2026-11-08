@@ -202,6 +202,12 @@ export default function Dashboard() {
       <Link to="/invoices" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Invoices
       </Link>
+      {/* Everyone needs this and nobody goes looking for it under Settings.
+          It sits with the other setup links because that is where somebody
+          onboarding a new crew member will be. */}
+      <Link to="/setup/app" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
+        Put OneShot on your phone
+      </Link>
       {/* Only for the site owner, and only once the database has said so. The
           link would be harmless either way - the page and every function behind
           it check again - but a customer seeing "Landing page feedback" in their

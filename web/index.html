@@ -641,6 +641,14 @@
       quotes: "\201C" "\201D"; text-wrap: pretty; overflow-wrap: anywhere; }
     .lp-note blockquote::before { content: open-quote; color: var(--accent); font-weight: 700; }
     .lp-note blockquote::after { content: close-quote; color: var(--accent); font-weight: 700; }
+    /* Two routes in — the extension and the phone — side by side on a laptop,
+       stacked and full width on a phone, where one of them is the point. */
+    .lp-waybtns { display: flex; flex-wrap: wrap; gap: 10px; }
+    @media (max-width: 460px) {
+      .lp-waybtns { display: grid; }
+      .lp-waybtns .lp-btn { width: 100%; }
+    }
+
     /* No figcaption: the reviews are anonymous, so there is nobody to credit.
        The stars are the only thing standing in for a byline. */
 

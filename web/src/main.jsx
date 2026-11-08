@@ -26,6 +26,7 @@ import ExtensionSetup from "./pages/ExtensionSetup";
 import Invoices from "./pages/Invoices";
 import Quotes from "./pages/Quotes";
 import Feedback from "./pages/Feedback";
+import InstallApp from "./pages/InstallApp";
 
 export const Ctx = React.createContext(null);
 
@@ -329,6 +330,7 @@ function Shell() {
         <Route path="/setup/email" element={<EmailSetup />} />
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
         <Route path="/setup/extension" element={<ExtensionSetup />} />
+        <Route path="/setup/app" element={<InstallApp />} />
         <Route path="/job/:id/edit" element={<EditJob />} />
         <Route path="/settings/types" element={<TypeSettings />} />
         <Route path="/settings/clients" element={<Clients />} />
@@ -381,7 +383,21 @@ createRoot(document.getElementById("root")).render(
       {/* Public: the invitation on a shared record leads here, and the visitor
           is by definition not signed in. */}
       <Route path="/signup" element={<Signup />} />
+      {/* Public on purpose. The landing page sends people here before they
+          have an account, and a driver sent the link by WhatsApp needs it to
+          open without a sign-in wall in front of it. */}
+      <Route path="/setup/app" element={<InstallApp />} />
       <Route path="*" element={<Shell />} />
     </Routes>
   </BrowserRouter>
 );
+
+// The browser fires beforeinstallprompt once, early, and usually before the
+// install page has been mounted - and it is only offered once per page load.
+// Catching it here at start-up and parking it means the button on that page
+// works whenever somebody gets round to opening it.
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  window.__oneshotInstall = e;
+});
+window.addEventListener("appinstalled", () => { window.__oneshotInstall = null; });

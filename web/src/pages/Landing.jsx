@@ -407,7 +407,8 @@ export default function Landing({ onSignIn }) {
         <h2 className="lp-h2">Four ways a job gets made</h2>
         <div className="lp-waygrid">
           <div className="lp-way"><b>In the app</b><span>Type it in yourself, on a
-            laptop or a phone. Install it from the browser and it behaves like an app.</span></div>
+            laptop or a phone. Put it on your home screen and it behaves like any
+            other app, notifications included.</span></div>
           <div className="lp-way"><b>By email</b><span>Forward the request to your
             intake address, or set a rule and never think about it again.</span></div>
           <div className="lp-way"><b>From Outlook</b><span>The extension shows you
@@ -415,9 +416,16 @@ export default function Landing({ onSignIn }) {
           <div className="lp-way"><b>From WhatsApp Web</b><span>Open the chat, press
             create job. The conversation becomes the job, with its items already on it.</span></div>
         </div>
-        <a className="lp-btn lp-btn-ghost lp-btn-sm" href="/setup/extension">
-          Get the Chrome extension
-        </a>
+        {/* Two ways in, two buttons. The phone one was missing entirely, which
+            is how somebody came to ask for it and get no answer. */}
+        <div className="lp-waybtns">
+          <a className="lp-btn lp-btn-ghost lp-btn-sm" href="/setup/extension">
+            Get the Chrome extension
+          </a>
+          <a className="lp-btn lp-btn-ghost lp-btn-sm" href="/setup/app">
+            Put it on your phone
+          </a>
+        </div>
       </section>
 
       <section className="lp-honest">
