@@ -1,6 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
+import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
 
 // Quotes, and the two things a quote becomes.
 //
@@ -10,6 +11,12 @@ import { Ctx } from "../main";
 // conversions the table was always shaped for: converted_invoice_id and
 // converted_job_id.
 //
+// VAT is per line (sql/66, and sql/69 for this screen's own function). Whether
+// the quote charges VAT at all is not this form's decision - the server works
+// it out from the job, then the client, then whether the workspace has a VAT
+// number - so the preview below resolves it the same way rather than assuming
+// 15%, which is what it used to do.
+//
 // A quote may become both a job and an invoice. That is deliberate: a deposit
 // invoiced up front and the balance billed off the job is ordinary. It also
 // means nothing stops the same work being billed twice, so a quote holding
@@ -17,13 +24,19 @@ import { Ctx } from "../main";
 
 const today = () => new Date().toISOString().slice(0, 10);
 const money = (v) => (Number(v) || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const blankLine = () => ({ description: "", unit: "", quantity: "1", unit_price: "" });
+const blankLine = () => ({ description: "", unit: "", quantity: "1", unit_price: "", vat_rate: "" });
+
+// The standard rate. create_quote resolves the document's rate from the job
+// first, and this screen never quotes against a job, so 15 is what the server
+// will use for anything raised here.
+const DRAFT_RATE = 15;
 
 export default function Quotes() {
   const { profile } = useContext(Ctx);
   const [rows, setRows] = useState([]);
   const [clients, setClients] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
+  const [issuer, setIssuer] = useState(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState(false);
@@ -41,19 +54,31 @@ export default function Quotes() {
   const [job, setJob] = useState(null);
 
   const load = async () => {
-    const [{ data: q }, { data: cl }, { data: jt }] = await Promise.all([
+    const [{ data: q }, { data: cl }, { data: jt }, { data: wb }] = await Promise.all([
       supabase.from("quote_ledger").select("*").order("created_at", { ascending: false }).limit(200),
-      supabase.from("clients").select("id,name,legal_name").order("name"),
+      supabase.from("clients").select("id,name,legal_name,vat_applicable").order("name"),
       supabase.from("job_types").select("key,label").eq("active", true).order("sort"),
+      supabase.from("workspace_billing").select("vat_number").maybeSingle(),
     ]);
-    setRows(q ?? []); setClients(cl ?? []); setJobTypes(jt ?? []);
+    setRows(q ?? []); setClients(cl ?? []); setJobTypes(jt ?? []); setIssuer(wb ?? null);
   };
   useEffect(() => { load(); }, []);
 
+  // The same order create_quote uses: the client first - an export client is
+  // zero-rated whatever the workspace does - then whether this workspace is
+  // registered for VAT at all.
+  const vatable = useMemo(() => {
+    const c = clients.find((x) => x.id === f.client_id);
+    if (c && c.vat_applicable !== null && c.vat_applicable !== undefined) return !!c.vat_applicable;
+    return !!String(issuer?.vat_number ?? "").trim();
+  }, [clients, f.client_id, issuer]);
+
   const totals = useMemo(() => {
-    const sub = f.lines.reduce((t, l) => t + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0);
-    return { sub, vat: sub * 0.15, total: sub * 1.15 };
-  }, [f.lines]);
+    const split = vatBreakdown(f.lines, vatable, DRAFT_RATE);
+    const sub = subtotalOf(f.lines);
+    const vat = split.reduce((t, g) => t + Number(g.vat), 0);
+    return { sub, vat, total: sub + vat, split, mixed: split.length > 1 };
+  }, [f.lines, vatable]);
 
   const create = async () => {
     const lines = f.lines.filter((l) => l.description.trim()).map((l) => ({
@@ -61,6 +86,9 @@ export default function Quotes() {
       unit: l.unit.trim() || null,
       quantity: Number(l.quantity) || 1,
       unit_price: Number(l.unit_price) || 0,
+      // null means "at whatever rate this quote is at", which is what the
+      // database stores for every line that has no opinion.
+      vat_rate: vatValueOf(l.vat_rate),
     }));
     if (!lines.length) { setMsg("A quote needs at least one line with a description."); return; }
     setBusy(true); setMsg("");
@@ -185,7 +213,17 @@ export default function Quotes() {
                   onChange={(e) => setLine(i, { unit_price: e.target.value })} />
               </div>
               <div className="row">
-                <span className="muted">{money((Number(l.quantity) || 0) * (Number(l.unit_price) || 0))}</span>
+                <select value={vatChoiceOf(l)} disabled={!vatable}
+                  aria-label={`VAT on line ${i + 1}`}
+                  onChange={(e) => setLine(i, { vat_rate: e.target.value })}
+                  style={{ width: "auto", minWidth: 110, marginBottom: 0, fontSize: 13 }}>
+                  {VAT_CHOICES(DRAFT_RATE).map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+                <span className="muted" style={{ marginLeft: "auto" }}>
+                  {money((Number(l.quantity) || 0) * (Number(l.unit_price) || 0))}
+                </span>
                 {f.lines.length > 1 && (
                   <button className="topbar-link" style={{ color: "var(--warn)" }}
                     onClick={() => setF((x) => ({ ...x, lines: x.lines.filter((_, n) => n !== i) }))}>remove</button>
@@ -202,8 +240,33 @@ export default function Quotes() {
 
           <div className="card" style={{ background: "var(--bg)", marginTop: 12 }}>
             <div className="row"><span className="muted">Subtotal</span><span>{money(totals.sub)}</span></div>
-            <div className="row"><span className="muted">VAT at 15%</span><span>{money(totals.vat)}</span></div>
+            {/* A quote covering supplies at more than one rate says what was
+                taxed and what was not, the way the invoice it becomes will. */}
+            {totals.mixed ? totals.split.map((g) => (
+              <div className="row" key={g.rate}>
+                <span className="muted">
+                  {Number(g.rate) > 0
+                    ? `VAT ${pct(g.rate)} on ${money(g.net)}`
+                    : `Zero-rated ${money(g.net)}`}
+                </span>
+                <span>{money(g.vat)}</span>
+              </div>
+            )) : (
+              <div className="row">
+                <span className="muted">
+                  {vatable ? `VAT at ${pct(DRAFT_RATE)}` : "VAT — zero-rated"}
+                </span>
+                <span>{money(totals.vat)}</span>
+              </div>
+            )}
             <div className="row" style={{ fontWeight: 700 }}><span>Total</span><span>{money(totals.total)}</span></div>
+            {!vatable && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {f.client_id
+                  ? "This client is billed outside South Africa, so the quote is zero-rated."
+                  : "This workspace has no VAT number in Billing settings, so nothing is quoted with VAT."}
+              </div>
+            )}
           </div>
 
           <button className="btn btn-accent" disabled={busy} onClick={create}>

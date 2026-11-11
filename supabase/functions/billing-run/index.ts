@@ -34,7 +34,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { Resend } from "npm:resend";
 import { age, buildPack } from "../_shared/pack.ts";
-import type { PackInvoice, PackLine } from "../_shared/pack.ts";
+import type { PackInvoice, PackLine, PackVatGroup } from "../_shared/pack.ts";
 
 const admin = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -150,6 +150,9 @@ async function runOne(due: Due): Promise<{ client: string; status: string; detai
 
     // What each invoice is for, not just what it came to.
     await attachLines(invoices);
+    // And, where it carries supplies at more than one rate, the split the
+    // printed document has to show.
+    await attachVatBreakdown(invoices);
 
     // ---- the letterhead -----------------------------------------------------
     const { data: issuer } = await admin.from("workspace_billing")
@@ -348,6 +351,10 @@ async function attachLines(
       quantity: qty,
       unit_price: price,
       line_total: Math.round(amount * 100) / 100,
+      // sql/66. Null means the line is at the invoice's own rate, which is
+      // every line written before per-line VAT existed. Dropping it here
+      // would print a zero-rated export leg as though it were taxed.
+      vat_rate: c.vat_rate == null ? null : num(c.vat_rate),
     });
   }
 
@@ -368,6 +375,43 @@ async function attachLines(
         inv.vat_rate = Math.round((num(inv.vat) / num(inv.subtotal)) * 1000) / 10;
       }
     }
+  }
+}
+
+/** The per-rate VAT split for each invoice, where there is more than one rate.
+ *
+ *  Read, not computed. public.vat_breakdown (sql/68) works it out from the
+ *  invoice's own frozen lines and is guaranteed to sum to the vat stored on
+ *  the row; a second implementation here would be a second thing that can
+ *  disagree with the document.
+ *
+ *  An invoice at one rate comes back as a single group and pack.ts then
+ *  prints it exactly as it did before any of this, so nothing an existing
+ *  customer has been receiving changes shape. */
+async function attachVatBreakdown(
+  invoices: (PackInvoice & { id: string })[],
+): Promise<void> {
+  const ids = invoices.map((i) => i.id).filter(Boolean);
+  if (!ids.length) return;
+
+  const { data, error } = await admin.from("invoice_vat_breakdown")
+    .select("invoice_id,vat_breakdown").in("invoice_id", ids);
+  if (error) {
+    // The view arrives with sql/68. If this function is deployed first, the
+    // pack should still go out - without the split, which is how it has
+    // always printed.
+    console.warn("billing-run: VAT breakdown not read:", error.message);
+    return;
+  }
+
+  const by = new Map<string, PackVatGroup[]>();
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
+    const id = String(r.invoice_id ?? "");
+    if (id) by.set(id, (r.vat_breakdown as PackVatGroup[]) ?? []);
+  }
+  for (const inv of invoices) {
+    const split = by.get(inv.id);
+    if (split?.length) inv.vat_breakdown = split;
   }
 }
 

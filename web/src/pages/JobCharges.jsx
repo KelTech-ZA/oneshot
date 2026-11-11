@@ -5,6 +5,7 @@ import BillTo from "./BillTo";
 import Letterhead from "./Letterhead";
 import JobReminders from "./JobReminders";
 import { CURRENCIES, amount, amountWithCode, jobCurrency, money } from "../lib/money";
+import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
 
 // What the job costs. Ops only - the database enforces that too, so this is
 // not merely a hidden panel.
@@ -15,6 +16,15 @@ import { CURRENCIES, amount, amountWithCode, jobCurrency, money } from "../lib/m
 // Currency is chosen per invoice and NOTHING is converted. Switching to USD
 // relabels the sheet; it does not restate a rand rate card in dollars. The
 // warning below exists because that distinction is easy to miss at a glance.
+//
+// VAT is per line as well as per job (sql/66). The checkbox at the bottom
+// still decides whether this job charges VAT at all; each line then says
+// whether it is at that rate or at nil. An export job carrying one local
+// collection is the case it exists for: leave the job's VAT on and zero-rate
+// the export lines, rather than turning VAT off and losing it on the local
+// work. Turning the job's VAT off overrides every line, which is what the
+// database does too, so the note below says so rather than letting somebody
+// set rates that are quietly having no effect.
 
 export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
   const { profile } = useContext(Ctx);
@@ -127,6 +137,20 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
     await load();
   };
 
+  // Its own handler rather than another field through patch(), because patch
+  // coerces with `Number(value) || 0` and "" has to mean null here - follow
+  // the document - not nil. Saved on change, not on blur: a dropdown has no
+  // half-typed state to protect.
+  const setLineVat = async (line, choice) => {
+    const value = vatValueOf(choice);
+    const { data, error } = await supabase.from("job_charges")
+      .update({ vat_rate: value }).eq("id", line.id).select("id");
+    if (error) { setMsg("Could not change VAT on that line: " + error.message); return; }
+    if (!data?.length) { setMsg("That change was refused by the database."); return; }
+    setMsg("");
+    await load();
+  };
+
   const removeLine = async (line) => {
     if (!window.confirm(`Remove "${line.description}"?`)) return;
     const { error } = await supabase.from("job_charges").delete().eq("id", line.id);
@@ -216,9 +240,17 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
     await load();
   };
 
-  const subtotal = lines.reduce((n, l) => n + Number(l.line_total ?? 0), 0);
+  // Worked out by the same rule the database uses, so the sheet and the
+  // invoice it becomes cannot disagree by a cent. See web/src/lib/vat.js.
   const rate = Number(job?.vat_rate ?? 15);
-  const vat = job?.vat_applicable ? subtotal * (rate / 100) : 0;
+  const vatable = !!job?.vat_applicable;
+  const split = vatBreakdown(lines, vatable, rate);
+  const subtotal = subtotalOf(lines);
+  const vat = split.reduce((n, g) => n + Number(g.vat), 0);
+  const mixed = split.length > 1;
+  // Rates set on lines of a job that is not charging VAT. They are doing
+  // nothing, and silently doing nothing is the worst of the options.
+  const strandedRates = !vatable && lines.some((l) => Number(l.vat_rate) > 0);
 
   const cell = { border: "none", borderBottom: "1px solid var(--line)", background: "transparent",
     font: "inherit", padding: "4px 2px", width: "100%", marginBottom: 0 };
@@ -307,6 +339,28 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
               style={{ background: "none", border: "none", color: "var(--warn)",
                 cursor: "pointer", font: "inherit" }}>×</button>
           </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+            <select className="no-print"
+              aria-label={`VAT on ${l.description || "this charge"}`}
+              disabled={!vatable}
+              value={vatChoiceOf(l)}
+              onChange={(e) => setLineVat(l, e.target.value)}
+              style={{ ...cell, width: "auto", minWidth: 110, fontSize: 13,
+                color: "var(--muted)", marginBottom: 0 }}>
+              {VAT_CHOICES(rate).map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
+              ))}
+            </select>
+            {/* The printed sheet carries the rate per line only where the
+                lines differ - on an ordinary job it would be six identical
+                numbers down the page saying nothing. */}
+            {mixed && (
+              <span className="print-only muted" style={{ fontSize: 13 }}>
+                VAT {pct(l.vat_rate ?? rate)}
+              </span>
+            )}
+          </div>
         </div>
       ))}
 
@@ -392,14 +446,36 @@ export default function JobCharges({ jobId, tenantId, job, onJobChange }) {
             onChange={(e) => setVat(e.target.checked)} style={{ width: 18, height: 18, marginTop: 2 }} />
           <span>Charge VAT at {rate}%
             <br /><span className="muted" style={{ fontSize: 12 }}>
-              Turn off for billing outside South Africa.
+              Turn off for a job billed entirely outside South Africa. For a job
+              that is part local and part export, leave this on and set the
+              export lines to No VAT.
             </span></span>
         </label>
 
-        <div className="row">
-          <span className="muted">VAT{job?.vat_applicable ? ` (${rate}%)` : " — zero-rated"}</span>
-          <span style={{ fontWeight: 600 }}>{amount(vat, ccy)}</span>
-        </div>
+        {strandedRates && (
+          <div className="no-print" style={{ fontSize: 12, color: "var(--warn)", marginBottom: 8 }}>
+            This job is not charging VAT, so the rates set on its lines are
+            having no effect. Turn VAT on above to use them.
+          </div>
+        )}
+
+        {/* A sheet carrying supplies at more than one rate has to show the
+            value and the tax for each. One rate keeps the one line it had. */}
+        {mixed ? split.map((g) => (
+          <div className="row" key={g.rate}>
+            <span className="muted">
+              {Number(g.rate) > 0
+                ? `VAT ${pct(g.rate)} on ${amount(g.net, ccy)}`
+                : `Zero-rated ${amount(g.net, ccy)}`}
+            </span>
+            <span style={{ fontWeight: 600 }}>{amount(g.vat, ccy)}</span>
+          </div>
+        )) : (
+          <div className="row">
+            <span className="muted">VAT{vatable ? ` (${rate}%)` : " — zero-rated"}</span>
+            <span style={{ fontWeight: 600 }}>{amount(vat, ccy)}</span>
+          </div>
+        )}
         <div className="row" style={{ marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--line)" }}>
           <span style={{ fontWeight: 700 }}>Total</span>
           <span style={{ fontWeight: 700, fontSize: 18 }}>{amountWithCode(subtotal + vat, ccy)}</span>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
 
 // Invoices that do not come from a job.
 //
@@ -9,13 +10,23 @@ import { supabase } from "../lib/supabase";
 // that gets scheduled on Monday all have the invoice first and the job - if
 // there is ever a job - after.
 //
+// VAT is per line as well as per invoice (sql/66). The checkbox below still
+// decides whether this invoice charges VAT at all - create_invoice takes that
+// answer from here and it overrides every line - and each line then says
+// whether it is at that rate or at nil. A deposit against a part-export job is
+// the case: the local portion at 15%, the freight zero-rated, one document.
+//
 // So this does two things the rest of the app cannot: issue an invoice with
 // nothing behind it, and put a job onto one later. Everything else about the
 // invoice is unchanged - same number series, same printouts, same statement.
 
 const today = () => new Date().toISOString().slice(0, 10);
 const money = (v) => (Number(v) || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const blankLine = () => ({ description: "", unit: "", quantity: "1", unit_price: "" });
+const blankLine = () => ({ description: "", unit: "", quantity: "1", unit_price: "", vat_rate: "" });
+
+// create_invoice uses coalesce(p_vat_rate, 15) and this form does not send
+// one, so 15 is the rate every line here is measured against.
+const DRAFT_RATE = 15;
 
 export default function Invoices() {
   const [rows, setRows] = useState([]);
@@ -47,11 +58,14 @@ export default function Invoices() {
 
   // Shown while typing. The server works the real figures out again from the
   // lines it is sent — this is only so nobody has to total it in their head.
+  // Worked out by the same rule the server uses (web/src/lib/vat.js), so the
+  // figure on screen is the figure on the invoice rather than a flat 15% of
+  // everything, which is what this used to show.
   const totals = useMemo(() => {
-    const sub = f.lines.reduce((t, l) =>
-      t + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0);
-    const vat = f.vat_applicable ? sub * 0.15 : 0;
-    return { sub, vat, total: sub + vat };
+    const split = vatBreakdown(f.lines, f.vat_applicable, DRAFT_RATE);
+    const sub = subtotalOf(f.lines);
+    const vat = split.reduce((t, g) => t + Number(g.vat), 0);
+    return { sub, vat, total: sub + vat, split, mixed: split.length > 1 };
   }, [f.lines, f.vat_applicable]);
 
   const create = async () => {
@@ -62,6 +76,8 @@ export default function Invoices() {
         unit: l.unit.trim() || null,
         quantity: Number(l.quantity) || 1,
         unit_price: Number(l.unit_price) || 0,
+        // null means "at whatever rate this invoice is at".
+        vat_rate: vatValueOf(l.vat_rate),
       }));
     if (!lines.length) { setMsg("An invoice needs at least one line with a description."); return; }
 
@@ -195,7 +211,15 @@ export default function Invoices() {
                   onChange={(e) => setLine(i, { unit_price: e.target.value })} />
               </div>
               <div className="row">
-                <span className="muted">
+                <select value={vatChoiceOf(l)} disabled={!f.vat_applicable}
+                  aria-label={`VAT on line ${i + 1}`}
+                  onChange={(e) => setLine(i, { vat_rate: e.target.value })}
+                  style={{ width: "auto", minWidth: 110, marginBottom: 0, fontSize: 13 }}>
+                  {VAT_CHOICES(DRAFT_RATE).map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+                <span className="muted" style={{ marginLeft: "auto" }}>
                   {money((Number(l.quantity) || 0) * (Number(l.unit_price) || 0))}
                 </span>
                 {f.lines.length > 1 && (
@@ -219,13 +243,32 @@ export default function Invoices() {
                 <input type="checkbox" style={{ width: "auto", margin: 0 }}
                   checked={f.vat_applicable}
                   onChange={(e) => set({ vat_applicable: e.target.checked })} />
-                VAT at 15%
+                Charge VAT on this invoice
               </label>
-              <span>{money(totals.vat)}</span>
+              {!totals.mixed && <span>{money(totals.vat)}</span>}
             </div>
+            {/* More than one rate on the page means the page has to say which
+                is which, the way the printed invoice does. */}
+            {totals.mixed && totals.split.map((g) => (
+              <div className="row" key={g.rate}>
+                <span className="muted">
+                  {Number(g.rate) > 0
+                    ? `VAT ${pct(g.rate)} on ${money(g.net)}`
+                    : `Zero-rated ${money(g.net)}`}
+                </span>
+                <span>{money(g.vat)}</span>
+              </div>
+            ))}
             <div className="row" style={{ fontWeight: 700 }}>
               <span>Total</span><span>{money(totals.total)}</span>
             </div>
+            {!f.vat_applicable && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                Nothing on this invoice carries VAT. For an invoice that is part
+                local and part export, leave this on and set the export lines to
+                No VAT.
+              </div>
+            )}
           </div>
 
           <button className="btn btn-accent" disabled={busy} onClick={create}>

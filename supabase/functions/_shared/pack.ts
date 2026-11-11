@@ -47,6 +47,22 @@ export interface PackLine {
   quantity?: number | string | null;
   unit_price?: number | string | null;
   line_total?: number | string | null;
+  /** Per sql/66. Absent means the line is at the document's rate. */
+  vat_rate?: number | string | null;
+}
+
+/**
+ * One rate's worth of a document, from public.vat_breakdown (sql/68).
+ *
+ * The caller passes this through; it is not worked out here. The whole point
+ * of the SQL function is that these figures sum to the invoice's own vat
+ * exactly, and a second implementation in TypeScript would be a second thing
+ * that can disagree with the row.
+ */
+export interface PackVatGroup {
+  rate?: number | string | null;
+  net?: number | string | null;
+  vat?: number | string | null;
 }
 
 export interface PackInvoice {
@@ -64,6 +80,12 @@ export interface PackInvoice {
   subtotal?: number | string | null;
   vat?: number | string | null;
   vat_rate?: number | string | null;
+  /**
+   * The per-rate split, from public.invoice_vat_breakdown. Optional: an
+   * invoice fetched without it prints exactly as it did before sql/68, which
+   * is the right answer for every invoice that does not mix rates.
+   */
+  vat_breakdown?: PackVatGroup[] | null;
   total?: number | string | null;
   paid?: number | string | null;
   balance?: number | string | null;
@@ -107,6 +129,9 @@ export function money(v: unknown, ccy = ""): string {
 }
 
 const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
+
+/** 15, "15.00" and 15.0 all print as "15%"; 7.5 keeps its half. */
+const pct = (v: unknown) => `${String(n(v)).replace(/\.0+$/, "")}%`;
 
 export class Pack {
   private doc!: PDFDocument;
@@ -371,7 +396,25 @@ export class Pack {
     if (inv.bill_to_vat_number) { this.put(`VAT ${inv.bill_to_vat_number}`, M, 9, { color: SOFT }); this.y -= 11; }
     this.y -= 14;
 
-    const cx = { desc: M, qty: 372, unit: 420, price: 492, amt: A4.w - M };
+    // An invoice carrying supplies at more than one rate has to say which
+    // lines were taxed and at what, so it gets a VAT column and a totals
+    // block split by rate. An invoice at one rate - which is every invoice
+    // this app has ever issued - gets neither, and prints to the point
+    // identically to before sql/68.
+    //
+    // The split arrives worked out (see PackVatGroup). Nothing below adds up
+    // a figure that the database has not already added up.
+    const split = (inv.vat_breakdown ?? []).filter((g) => g && g.rate != null);
+    const mixed = split.length > 1;
+
+    // Measured, not guessed. At 9pt Helvetica "1 248 000.00" is 52.5pt wide
+    // and "22.4%" is 25.5pt, so the VAT column goes in at 432 with the price
+    // and amount columns left where they are - the first attempt squeezed
+    // those two instead and a seven-figure line ran straight through the
+    // rate beside it.
+    const cx = mixed
+      ? { desc: M, qty: 370, unit: 407, rate: 432, price: 492, amt: A4.w - M }
+      : { desc: M, qty: 372, unit: 420, rate: 0,   price: 492, amt: A4.w - M };
     // Where the totals block's labels end. Short of cx.price, because a bold
     // 13pt amount in the hundreds of thousands runs back to about x=481 and
     // would otherwise touch the word in front of it.
@@ -383,6 +426,7 @@ export class Pack {
     this.put("Description", cx.desc, 8, { bold: true, color: SOFT });
     this.put("Qty", 0, 8, { bold: true, color: SOFT, right: cx.qty });
     this.put("Unit", cx.unit - 28, 8, { bold: true, color: SOFT });
+    if (mixed) this.put("VAT", 0, 8, { bold: true, color: SOFT, right: cx.rate });
     this.put("Price", 0, 8, { bold: true, color: SOFT, right: cx.price });
     this.put("Amount", 0, 8, { bold: true, color: SOFT, right: cx.amt });
     this.y -= 20;
@@ -398,6 +442,12 @@ export class Pack {
       this.y = top;
       this.put(String(n(line.quantity)).replace(/\.00$/, ""), 0, 9, { right: cx.qty });
       this.put(clean(line.unit ?? ""), cx.unit - 28, 9, { color: SOFT });
+      if (mixed) {
+        // The line's own rate where it has one, else the document's - the
+        // same fallback vat_breakdown used to group them.
+        this.put(pct(line.vat_rate ?? inv.vat_rate ?? 0), 0, 9,
+          { right: cx.rate, color: SOFT });
+      }
       this.put(money(line.unit_price), 0, 9, { right: cx.price });
       this.put(money(line.line_total), 0, 9, { right: cx.amt });
       this.y = top - (parts.length - 1) * 11 - 8;
@@ -406,11 +456,24 @@ export class Pack {
     }
 
     this.y -= 8;
+    // A mixed invoice states the value and the tax for each rate, which is
+    // what a tax invoice covering more than one rate has to show. A single-
+    // rate one keeps the one line it has always had.
+    const vatRows: [string, string, boolean][] = mixed
+      ? split.map((g) => [
+          n(g.rate) > 0
+            ? `VAT ${pct(g.rate)} on ${money(g.net)}`
+            : `Zero-rated ${money(g.net)}`,
+          money(g.vat),
+          false,
+        ] as [string, string, boolean])
+      : n(inv.vat) > 0
+        ? [[`VAT ${n(inv.vat_rate) || 15}%`, money(inv.vat), false] as [string, string, boolean]]
+        : [];
+
     const totals: [string, string, boolean][] = [
       ["Subtotal", money(inv.subtotal), false],
-      ...(n(inv.vat) > 0
-        ? [[`VAT ${n(inv.vat_rate) || 15}%`, money(inv.vat), false] as [string, string, boolean]]
-        : []),
+      ...vatRows,
       [`Total ${ccy}`, money(inv.total), true],
     ];
     for (const [label, value, strong] of totals) {

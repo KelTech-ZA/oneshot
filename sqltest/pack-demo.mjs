@@ -77,6 +77,37 @@ const invoices = [
     subtotal: 1460.00, vat: 219.00, total: 1679.00,
     paid: 0, balance: 1679.00, state: "owing", days_overdue: 0,
   },
+  // The invoice sql/66 and sql/68 were built for: local work at 15% and an
+  // export leg zero-rated, on one document. The vat_breakdown below is not
+  // typed out by hand - it is what public.vat_breakdown returns for these
+  // lines, so what this renders is what the live function will be handed.
+  {
+    number: "SEC90005",
+    invoice_date: "2026-10-27",
+    due_date: "2026-11-26",
+    job_ref: "JOB-2026-0263",
+    their_reference: "CMG-PO-4471",
+    bill_to_name: "Charles Moffet Gallery",
+    bill_to_address: "511 Canal Street\nNew York, NY 10013\nUnited States",
+    bill_to_vat_number: null,
+    currency: "ZAR",
+    payment_terms: "30",
+    vat_rate: 15,
+    lines: [
+      { description: "Collection & packing: 2 works, Woodstock studio", unit: "crate", quantity: 2, unit_price: 1850.00, line_total: 3700.00, vat_rate: 15 },
+      { description: "Packing labour: 2 x techs @ R150 p/hr each x 4hrs", unit: "hour", quantity: 8, unit_price: 150.00, line_total: 1200.00, vat_rate: 15 },
+      { description: "Export crate build: 207 x 37 x 146cm(h)", unit: "crate", quantity: 1, unit_price: 3135.00, line_total: 3135.00, vat_rate: 0 },
+      { description: "Airfreight: CPT-JFK/EWR @ 187vkg", unit: "job", quantity: 1, unit_price: 24782.38, line_total: 24782.38, vat_rate: 0 },
+      { description: "Customs forwarding & airline handling", unit: "job", quantity: 1, unit_price: 2470.50, line_total: 2470.50, vat_rate: 0 },
+      { description: "Destination charges up to door delivery (DDU)", unit: "job", quantity: 1, unit_price: 27285.46, line_total: 27285.46, vat_rate: 0 },
+    ],
+    vat_breakdown: [
+      { rate: 15, net: 4900.00, vat: 735.00 },
+      { rate: 0, net: 57673.34, vat: 0 },
+    ],
+    subtotal: 62573.34, vat: 735.00, total: 63308.34,
+    paid: 0, balance: 63308.34, state: "owing", days_overdue: 0,
+  },
 ];
 
 const pdf = await buildPack({
