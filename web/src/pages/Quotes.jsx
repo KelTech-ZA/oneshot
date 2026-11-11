@@ -44,6 +44,7 @@ export default function Quotes() {
 
   const [f, setF] = useState({
     client_id: "", their_reference: "", notes: "", lines: [blankLine()],
+    vat_applicable: null,   // null = whatever the client and workspace imply
   });
   const set = (p) => setF((x) => ({ ...x, ...p }));
   const setLine = (i, p) => setF((x) => ({ ...x, lines: x.lines.map((l, n) => n === i ? { ...l, ...p } : l) }));
@@ -64,14 +65,20 @@ export default function Quotes() {
   };
   useEffect(() => { load(); }, []);
 
-  // The same order create_quote uses: the client first - an export client is
-  // zero-rated whatever the workspace does - then whether this workspace is
-  // registered for VAT at all.
-  const vatable = useMemo(() => {
+  // What the client record and the workspace imply, in the order create_quote
+  // resolves them: the client first - an export client is zero-rated whatever
+  // the workspace does - then whether this workspace is registered for VAT at
+  // all. This is the starting position of the checkbox, not the verdict.
+  const defaultVatable = useMemo(() => {
     const c = clients.find((x) => x.id === f.client_id);
     if (c && c.vat_applicable !== null && c.vat_applicable !== undefined) return !!c.vat_applicable;
     return !!String(issuer?.vat_number ?? "").trim();
   }, [clients, f.client_id, issuer]);
+
+  // Until somebody touches the checkbox it follows the client, so changing the
+  // client still does the sensible thing. Once touched it stops moving, because
+  // an answer somebody gave should not be overwritten by a dropdown.
+  const vatable = f.vat_applicable === null ? defaultVatable : !!f.vat_applicable;
 
   const totals = useMemo(() => {
     const split = vatBreakdown(f.lines, vatable, DRAFT_RATE);
@@ -99,13 +106,17 @@ export default function Quotes() {
       p_job_draft: null,
       p_their_ref: f.their_reference || null,
       p_notes: f.notes || null,
+      // Sent as the answer on screen, not as null, so what was ticked is what
+      // is raised even if the client record changes afterwards.
+      p_vat_applicable: vatable,
     });
     setBusy(false);
     if (error) { setMsg(error.message); return; }
     const q = Array.isArray(data) ? data[0] : data;
     setMsg(`Quote ${q?.number ?? ""} raised.`);
     setOpen(false);
-    setF({ client_id: "", their_reference: "", notes: "", lines: [blankLine()] });
+    setF({ client_id: "", their_reference: "", notes: "", lines: [blankLine()],
+           vat_applicable: null });
     await load();
   };
 
@@ -242,7 +253,16 @@ export default function Quotes() {
             <div className="row"><span className="muted">Subtotal</span><span>{money(totals.sub)}</span></div>
             {/* A quote covering supplies at more than one rate says what was
                 taxed and what was not, the way the invoice it becomes will. */}
-            {totals.mixed ? totals.split.map((g) => (
+            <div className="row">
+              <label style={{ margin: 0, display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="checkbox" style={{ width: "auto", margin: 0 }}
+                  checked={vatable}
+                  onChange={(e) => set({ vat_applicable: e.target.checked })} />
+                Charge VAT on this quote
+              </label>
+              {!totals.mixed && <span>{money(totals.vat)}</span>}
+            </div>
+            {totals.mixed && totals.split.map((g) => (
               <div className="row" key={g.rate}>
                 <span className="muted">
                   {Number(g.rate) > 0
@@ -251,20 +271,18 @@ export default function Quotes() {
                 </span>
                 <span>{money(g.vat)}</span>
               </div>
-            )) : (
-              <div className="row">
-                <span className="muted">
-                  {vatable ? `VAT at ${pct(DRAFT_RATE)}` : "VAT — zero-rated"}
-                </span>
-                <span>{money(totals.vat)}</span>
-              </div>
-            )}
+            ))}
             <div className="row" style={{ fontWeight: 700 }}><span>Total</span><span>{money(totals.total)}</span></div>
             {!vatable && (
               <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                {f.client_id
-                  ? "This client is billed outside South Africa, so the quote is zero-rated."
-                  : "This workspace has no VAT number in Billing settings, so nothing is quoted with VAT."}
+                Nothing on this quote carries VAT
+                {f.vat_applicable === null && f.client_id
+                  ? " — this client is billed outside South Africa."
+                  : f.vat_applicable === null
+                    ? " — this workspace has no VAT number in Billing settings."
+                    : "."}
+                {" "}For a quote that is part local and part export, tick the box
+                and set the export lines to No VAT.
               </div>
             )}
           </div>

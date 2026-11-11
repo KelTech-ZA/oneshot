@@ -35,10 +35,10 @@ const BASE = `
   create table public.memberships (user_id uuid, tenant_id uuid, role text);
   create table public.clients (id uuid primary key default gen_random_uuid(), tenant_id uuid,
     name text, legal_name text, billing_address text, vat_number text, reg_number text,
-    billing_email text, payment_terms text, vat_applicable boolean);
+    billing_email text, payment_terms int, vat_applicable boolean);
   create table public.workspace_billing (tenant_id uuid primary key, invoice_prefix text,
     quote_prefix text, invoice_seq_pad int, quote_seq_pad int, default_currency text,
-    payment_terms text, vat_number text, quote_valid_days int);
+    payment_terms int, vat_number text, quote_valid_days int);
   create table public.jobs (id uuid primary key default gen_random_uuid(), tenant_id uuid,
     ref text, client_id uuid, currency text, vat_applicable boolean, vat_rate numeric);
   create table public.job_charges (id uuid primary key default gen_random_uuid(),

@@ -43,10 +43,10 @@ const BASE = `
 
   create table public.clients (id uuid primary key default gen_random_uuid(), tenant_id uuid,
     name text, legal_name text, billing_address text, vat_number text, reg_number text,
-    billing_email text, payment_terms text, vat_applicable boolean);
+    billing_email text, payment_terms int, vat_applicable boolean);
   create table public.workspace_billing (tenant_id uuid primary key, invoice_prefix text,
     quote_prefix text, invoice_seq_pad int, quote_seq_pad int, default_currency text,
-    payment_terms text, vat_number text, quote_valid_days int,
+    payment_terms int, vat_number text, quote_valid_days int,
     invoice_next_seq bigint default 1, updated_by uuid);
   insert into public.workspace_billing (tenant_id, invoice_prefix, invoice_seq_pad,
                                         default_currency, vat_number, invoice_next_seq)
@@ -60,10 +60,10 @@ const BASE = `
 
   create table public.job_billing (job_id uuid primary key, tenant_id uuid, client_id uuid,
     bill_to_name text, bill_to_address text, vat_number text, reg_number text,
-    billing_email text, reference text, payment_terms text,
+    billing_email text, reference text, payment_terms int,
     invoice_number text, invoice_date date, updated_at timestamptz);
   insert into public.job_billing (job_id, tenant_id, bill_to_name, payment_terms)
-    values ('${JOB}','${T1}','Verso Gallery','30 days');
+    values ('${JOB}','${T1}','Verso Gallery',30);
 
   create table public.job_charges (id uuid primary key default gen_random_uuid(),
     tenant_id uuid, job_id uuid, charge_type_id uuid, description text, unit text,

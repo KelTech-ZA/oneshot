@@ -361,7 +361,14 @@ begin
     to_jsonb(v_issuer) - 'invoice_next_seq' - 'updated_by',
     v_date,
     p_due_date,
-    coalesce(p_payment_terms, v_client.payment_terms, v_issuer.payment_terms),
+    -- What was passed, and nothing else. sql/62 added invoice_terms_days
+    -- and a trigger to resolve the job, then the client, then the
+    -- workspace; reaching for those columns here both duplicates that
+    -- and gets it wrong, because they are integers and this column is
+    -- text. plpgsql does not check a function body until it runs, so
+    -- that mistake installs cleanly and then fails on the first
+    -- standalone invoice. This is the line sql/61 and sql/62 have.
+    nullif(btrim(coalesce(p_payment_terms, '')), ''),
     'issued',
     nullif(btrim(coalesce(p_notes, '')), ''),
     auth.uid(),
