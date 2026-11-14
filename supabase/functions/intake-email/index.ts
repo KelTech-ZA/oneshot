@@ -150,6 +150,33 @@ Deno.serve(async (req) => {
     return new Response("ok");
   }
 
+  const sb = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  // ---- crate quote replies are not OneShot jobs ------------------------------
+  // The Crate Costing platform (crate-costing.netlify.app) shares this Resend
+  // account. Each fabricator it emails gets a private reply address of the form
+  // q-<24 hex>@<receiving domain>, and those replies are read by that platform's
+  // own webhook. Left alone they would fall through to the catch-all route here
+  // and turn a crate quote into a job (and into noise for KEL). They are skipped
+  // before anything is fetched, unless someone deliberately copied a OneShot
+  // intake address on the same email.
+  const crateReply = /^q-[a-f0-9]{24}@/i;
+  const addressed = [...toList, ...cc]
+    .map((a) => a.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0]?.toLowerCase())
+    .filter(Boolean) as string[];
+  if (addressed.some((a) => crateReply.test(a))) {
+    const { data: ours } = await sb.from("intake_routes").select("address")
+      .eq("channel", "email").eq("active", true).not("address", "is", null);
+    const intake = (ours ?? []).map((r) => String(r.address).trim().toLowerCase());
+    if (!addressed.some((a) => intake.includes(a))) {
+      console.log(`intake-email: skipped crate quote reply ${emailId} (handled by Crate Costing)`);
+      return new Response("ok");
+    }
+  }
+
   // ---- body ---------------------------------------------------------------
   let text = "", html = "";
   try {
@@ -304,10 +331,6 @@ Deno.serve(async (req) => {
     return new Response("ok");
   }
 
-  const sb = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
 
   // ---- which workspace is this for? ---------------------------------------
   // In order of how hard it is for a human to get wrong:
