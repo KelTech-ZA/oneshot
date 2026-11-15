@@ -163,7 +163,9 @@ Deno.serve(async (req) => {
   // and turn a crate quote into a job (and into noise for KEL). They are skipped
   // before anything is fetched, unless someone deliberately copied a OneShot
   // intake address on the same email.
-  const crateReply = /^q-[a-f0-9]{24}@/i;
+  // Also the platform's own sending address, which collects auto-replies
+  // (out-of-office, bounces) that ignore Reply-To.
+  const crateReply = /^(q-[a-f0-9]{24}|crate-requests)@/i;
   const addressed = [...toList, ...cc]
     .map((a) => a.match(/[^\s<>,;]+@[^\s<>,;]+/)?.[0]?.toLowerCase())
     .filter(Boolean) as string[];
