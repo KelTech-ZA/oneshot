@@ -90,6 +90,12 @@ export interface PackInvoice {
   /** Quotes only. */
   valid_until?: string | null;
   /**
+   * Whether the document states its terms. The terms still decide the due
+   * date either way (sql/72). Absent means yes, so a caller that does not
+   * know about it prints what it always printed.
+   */
+  show_payment_terms?: boolean | null;
+  /**
    * Quotes only: draft, sent, accepted, declined or expired. Worked out by
    * the caller - whether a date has passed is a decision, and this file does
    * not make decisions (see the note at the top).
@@ -527,18 +533,24 @@ export class Pack {
       this.y -= 20;
     }
 
+    // Whether the terms print is a separate question from what they are: a
+    // pro forma or a client who settles monthly still has a due date, and
+    // clearing the terms to silence this line would move it (sql/54 derives
+    // one from the other). Absent means yes, so nothing already issued moves.
+    const sayTerms = inv.show_payment_terms !== false;
+
     if (isQuote) {
       this.y -= 6;
       const note = inv.valid_until
         ? `This quote is valid until ${inv.valid_until}. Prices are subject to change after that date.`
         : "Prices are subject to change.";
       this.put(note, M, 8.5, { color: SOFT });
-      if (inv.payment_terms) {
+      if (sayTerms && inv.payment_terms) {
         this.y -= 12;
         this.put(`On acceptance, payment is due within ${clean(inv.payment_terms)} days of invoice date.`,
           M, 8.5, { color: SOFT });
       }
-    } else if (inv.payment_terms) {
+    } else if (sayTerms && inv.payment_terms) {
       this.y -= 6;
       this.put(`Payment due within ${clean(inv.payment_terms)} days of invoice date.`,
         M, 8.5, { color: SOFT });

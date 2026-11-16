@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
 import { downloadDocument, viewDocument } from "../lib/documents";
+import LineEditor, { fromServerLines, toServerLines } from "./LineEditor";
 
 // Invoices that do not come from a job.
 //
@@ -121,6 +122,83 @@ export default function Invoices() {
   const [dueFor, setDueFor] = useState(null);
   const [dueDate, setDueDate] = useState("");
   const [dueTerms, setDueTerms] = useState("");
+  // Editing an issued invoice. retotal_invoice has been in the database since
+  // sql/66 and nothing has ever called it: the lines were frozen at issue and
+  // the only way to fix a wrong one was to void the invoice and raise another.
+  //
+  // It refuses two things and both are deliberate. A void invoice is a record,
+  // not a bill. And an invoice with a payment receipted against it cannot be
+  // retotalled at all - changing what somebody has already paid is not an
+  // edit, and the way to fix that one is still to void it and issue another.
+  const [editFor, setEditFor] = useState(null);
+  const [editLines, setEditLines] = useState([]);
+  const [editVatable, setEditVatable] = useState(true);
+  const [editDue, setEditDue] = useState("");
+  const [editTerms, setEditTerms] = useState("");
+  const [editShowTerms, setEditShowTerms] = useState(true);
+  const [editWhy, setEditWhy] = useState("");
+  const [history, setHistory] = useState([]);
+
+  const openEdit = async (r) => {
+    setEditFor(r.id);
+    setEditLines(fromServerLines(r.lines));
+    setEditVatable(r.vat_applicable !== false);
+    setEditDue(r.due_date ? String(r.due_date).slice(0, 10) : "");
+    setEditTerms(r.payment_terms ?? "");
+    setEditWhy("");
+    setMsg("");
+
+    // show_payment_terms is read off the invoice itself, not off r. The rows
+    // on this page come from invoice_ledger, and a view's `select *` is
+    // expanded when the view is CREATED - a column added to invoices
+    // afterwards never appears in it. Reading r.show_payment_terms would be
+    // undefined for every invoice, so the box would open ticked even on one
+    // where it is off, and saving would quietly turn it back on.
+    //
+    // The view's own definition is not in this repo, so it is not being
+    // rewritten blind. The screen reads the row it is about to write.
+    const { data: own } = await supabase.from("invoices")
+      .select("show_payment_terms").eq("id", r.id).maybeSingle();
+    setEditShowTerms(own?.show_payment_terms !== false);
+    // What has already been changed on it, so an edit is made with the
+    // previous ones in view rather than on top of them unseen.
+    const { data } = await supabase.from("invoice_edits")
+      .select("edited_at,reason,was,now_is").eq("invoice_id", r.id)
+      .order("edited_at", { ascending: false }).limit(10);
+    setHistory(data ?? []);
+  };
+
+  const saveEdit = async (r) => {
+    const lines = toServerLines(editLines, vatValueOf);
+    if (!lines.length) { setMsg("An invoice needs at least one line."); return; }
+    setBusy(true); setMsg("");
+
+    // The dates and the lines are two different functions, so the lines go
+    // first: if the second call fails, what is left is an invoice with the
+    // right figures and the old due date, which is the better half to be
+    // holding.
+    const { error: lineErr } = await supabase.rpc("retotal_invoice", {
+      p_invoice: r.id, p_lines: lines, p_reason: editWhy.trim() || null,
+    });
+    if (lineErr) { setBusy(false); setMsg(lineErr.message); return; }
+
+    const { error: dueErr } = await supabase.rpc("change_invoice_due_date", {
+      p_invoice: r.id,
+      p_due_date: editDue || null,
+      p_payment_terms: editTerms.trim() || null,
+      p_show_payment_terms: editShowTerms,
+    });
+    setBusy(false);
+    if (dueErr) {
+      setMsg(`The lines were saved, but the dates were not: ${dueErr.message}`);
+      await load();
+      return;
+    }
+    setMsg(`${r.number} updated.`);
+    setEditFor(null);
+    await load();
+  };
+
   const changeDue = async (id) => {
     setBusy(true); setMsg("");
     const { data, error } = await supabase.rpc("change_invoice_due_date", {
@@ -358,14 +436,94 @@ export default function Invoices() {
               ever reaches the person who has to pay it. */}
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
             <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
-              onClick={() => viewDocument("invoice", r.id, setMsg)}>
+              onClick={() => viewDocument("invoice", r.id)}>
               View
             </button>
             <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
-              onClick={() => downloadDocument("invoice", r.id, r.number, setMsg)}>
+              onClick={() => downloadDocument("invoice", r.id, r.number)}>
               Download
             </button>
+            {r.status !== "void" && editFor !== r.id && (
+              <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+                onClick={() => openEdit(r)}>
+                Edit
+              </button>
+            )}
           </div>
+
+          {editFor === r.id && (
+            <div className="card" style={{ background: "var(--bg)", marginTop: 10 }}>
+              <h3 style={{ marginTop: 0 }}>Editing {r.number}</h3>
+              <p className="muted" style={{ marginTop: -4 }}>
+                The invoice keeps its number and its date. Every change is
+                recorded against it, with whatever reason you give.
+              </p>
+
+              <LineEditor
+                lines={editLines}
+                onChange={setEditLines}
+                vatable={editVatable}
+                rate={Number(r.vat_rate) || DRAFT_RATE}
+                currency={r.currency}
+              />
+
+              <div className="row" style={{ gap: 8, alignItems: "flex-start", marginTop: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label>Due date</label>
+                  <input type="date" value={editDue} onChange={(e) => setEditDue(e.target.value)} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label>Terms</label>
+                  <input value={editTerms} placeholder="COD, 30 days…"
+                    onChange={(e) => setEditTerms(e.target.value)} />
+                </div>
+              </div>
+              <p className="muted" style={{ marginTop: -6 }}>
+                Clear the date to go back to whatever the terms say.
+              </p>
+
+              {/* Separate from the terms themselves on purpose: silencing this
+                  line used to mean clearing the terms, which moves the due
+                  date, because sql/54 derives one from the other. */}
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start",
+                margin: "8px 0", fontWeight: 400 }}>
+                <input type="checkbox" checked={editShowTerms}
+                  onChange={(e) => setEditShowTerms(e.target.checked)}
+                  style={{ width: 18, height: 18, marginTop: 2 }} />
+                <span>Print the payment terms on the invoice
+                  <br /><span className="muted" style={{ fontSize: 12 }}>
+                    Turn off for a pro forma, or a client who settles on account.
+                    The due date stays either way.
+                  </span></span>
+              </label>
+
+              <label>Why (optional)</label>
+              <input value={editWhy} placeholder="Wrong crate size quoted, agreed with Sarah…"
+                onChange={(e) => setEditWhy(e.target.value)} />
+
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1, marginTop: 0 }}
+                  disabled={busy} onClick={() => saveEdit(r)}>Save changes</button>
+                <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0 }}
+                  onClick={() => setEditFor(null)}>Cancel</button>
+              </div>
+
+              {history.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <label>Already changed</label>
+                  {history.map((h, i) => (
+                    <div className="row" key={i} style={{ fontSize: 13 }}>
+                      <span className="muted">{String(h.edited_at).slice(0, 10)}</span>
+                      <span className="muted" style={{ marginLeft: "auto", textAlign: "right" }}>
+                        {money(h.was?.total)} → {money(h.now_is?.total)}
+                        {h.reason ? ` · ${h.reason}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {dueFor === r.id && (
             <div style={{ marginTop: 8 }}>

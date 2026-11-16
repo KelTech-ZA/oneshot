@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
 import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
 import { downloadDocument, viewDocument } from "../lib/documents";
+import LineEditor, { fromServerLines, toServerLines } from "./LineEditor";
 
 // Quotes, and the two things a quote becomes.
 //
@@ -80,6 +81,57 @@ export default function Quotes() {
   // client still does the sensible thing. Once touched it stops moving, because
   // an answer somebody gave should not be overwritten by a dropdown.
   const vatable = f.vat_applicable === null ? defaultVatable : !!f.vat_applicable;
+
+  // Editing a quote that already exists. retotal_quote has been in the
+  // database since sql/66 with nothing calling it. It refuses an accepted or
+  // declined quote: that is a record of what was agreed or refused, and the
+  // answer to a wrong one is a new quote, not a rewritten old one.
+  const [editFor, setEditFor] = useState(null);
+  const [editLines, setEditLines] = useState([]);
+  const [editValid, setEditValid] = useState("");
+  const [editTerms, setEditTerms] = useState("");
+  const [editShowTerms, setEditShowTerms] = useState(true);
+
+  const openEdit = async (q) => {
+    setEditFor(q.id);
+    setEditLines(fromServerLines(q.lines));
+    setEditValid(q.valid_until ? String(q.valid_until).slice(0, 10) : "");
+    setMsg("");
+    // Off the quote itself: quote_ledger is a view, and a view's `select *`
+    // is expanded when it is created, so columns added by sql/72 are not in
+    // it. See the same note in Invoices.jsx.
+    const { data: own } = await supabase.from("quotes")
+      .select("payment_terms,show_payment_terms").eq("id", q.id).maybeSingle();
+    setEditTerms(own?.payment_terms ?? "");
+    setEditShowTerms(own?.show_payment_terms !== false);
+  };
+
+  const saveEdit = async (q) => {
+    const lines = toServerLines(editLines, vatValueOf);
+    if (!lines.length) { setMsg("A quote needs at least one line."); return; }
+    setBusy(true); setMsg("");
+
+    const { error: lineErr } = await supabase.rpc("retotal_quote", {
+      p_quote: q.id, p_lines: lines,
+    });
+    if (lineErr) { setBusy(false); setMsg(lineErr.message); return; }
+
+    const { error: dateErr } = await supabase.rpc("change_quote_dates", {
+      p_quote: q.id,
+      p_valid_until: editValid || null,
+      p_payment_terms: editTerms.trim() || null,
+      p_show_payment_terms: editShowTerms,
+    });
+    setBusy(false);
+    if (dateErr) {
+      setMsg(`The lines were saved, but the dates were not: ${dateErr.message}`);
+      await load();
+      return;
+    }
+    setMsg(`${q.number} updated.`);
+    setEditFor(null);
+    await load();
+  };
 
   const totals = useMemo(() => {
     const split = vatBreakdown(f.lines, vatable, DRAFT_RATE);
@@ -333,14 +385,68 @@ export default function Quotes() {
               a document somebody may need to produce later. */}
           <div className="row" style={{ gap: 8, marginTop: 10 }}>
             <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
-              onClick={() => viewDocument("quote", q.id, setMsg)}>
+              onClick={() => viewDocument("quote", q.id)}>
               View
             </button>
             <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
-              onClick={() => downloadDocument("quote", q.id, q.number, setMsg)}>
+              onClick={() => downloadDocument("quote", q.id, q.number)}>
               Download
             </button>
+            {q.status !== "accepted" && q.status !== "declined" && editFor !== q.id && (
+              <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+                onClick={() => openEdit(q)}>
+                Edit
+              </button>
+            )}
           </div>
+
+          {editFor === q.id && (
+            <div className="card" style={{ background: "var(--bg)", marginTop: 10 }}>
+              <h3 style={{ marginTop: 0 }}>Editing {q.number}</h3>
+              <p className="muted" style={{ marginTop: -4 }}>
+                It keeps its number and its quote date. Once a quote has been
+                accepted or declined it can no longer be changed — make a new one.
+              </p>
+
+              <LineEditor
+                lines={editLines}
+                onChange={setEditLines}
+                vatable={q.vat_applicable !== false}
+                rate={Number(q.vat_rate) || DRAFT_RATE}
+                currency={q.currency}
+              />
+
+              <div className="row" style={{ gap: 8, alignItems: "flex-start", marginTop: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label>Valid until</label>
+                  <input type="date" value={editValid} onChange={(e) => setEditValid(e.target.value)} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label>Terms</label>
+                  <input value={editTerms} placeholder="COD, 30 days…"
+                    onChange={(e) => setEditTerms(e.target.value)} />
+                </div>
+              </div>
+
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start",
+                margin: "8px 0", fontWeight: 400 }}>
+                <input type="checkbox" checked={editShowTerms}
+                  onChange={(e) => setEditShowTerms(e.target.checked)}
+                  style={{ width: 18, height: 18, marginTop: 2 }} />
+                <span>Print the payment terms on the quote
+                  <br /><span className="muted" style={{ fontSize: 12 }}>
+                    The line reading “On acceptance, payment is due within N days”.
+                  </span></span>
+              </label>
+
+              <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <button className="btn btn-primary" style={{ flex: 1, marginTop: 0 }}
+                  disabled={busy} onClick={() => saveEdit(q)}>Save changes</button>
+                <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0 }}
+                  onClick={() => setEditFor(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
 
           {q.status !== "declined" && (
             <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>

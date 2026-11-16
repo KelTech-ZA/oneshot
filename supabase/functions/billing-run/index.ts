@@ -153,6 +153,8 @@ async function runOne(due: Due): Promise<{ client: string; status: string; detai
     // And, where it carries supplies at more than one rate, the split the
     // printed document has to show.
     await attachVatBreakdown(invoices);
+    // And whether it says what its terms are.
+    await attachTermsVisibility(invoices);
 
     // ---- the letterhead -----------------------------------------------------
     const { data: issuer } = await admin.from("workspace_billing")
@@ -375,6 +377,38 @@ async function attachLines(
         inv.vat_rate = Math.round((num(inv.vat) / num(inv.subtotal)) * 1000) / 10;
       }
     }
+  }
+}
+
+/** Whether each invoice prints its payment terms (sql/72).
+ *
+ *  Read from invoices rather than taken off invoice_ledger, because a view's
+ *  `select *` is expanded when the view is created: show_payment_terms was
+ *  added to the table afterwards and never appears in the ledger. Without
+ *  this the invoice a customer downloads and the same invoice inside their
+ *  monthly statement would disagree about whether to state the terms - which
+ *  is the exact drift the single renderer exists to prevent. */
+async function attachTermsVisibility(
+  invoices: (PackInvoice & { id: string })[],
+): Promise<void> {
+  const ids = invoices.map((i) => i.id).filter(Boolean);
+  if (!ids.length) return;
+
+  const { data, error } = await admin.from("invoices")
+    .select("id,show_payment_terms").in("id", ids);
+  if (error) {
+    // The column arrives with sql/72. Deployed first, the pack still goes
+    // out - printing the terms, which is how it has always printed.
+    console.warn("billing-run: terms visibility not read:", error.message);
+    return;
+  }
+  const by = new Map<string, boolean>();
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
+    by.set(String(r.id), r.show_payment_terms !== false);
+  }
+  for (const inv of invoices) {
+    const v = by.get(inv.id);
+    if (v === false) inv.show_payment_terms = false;
   }
 }
 
