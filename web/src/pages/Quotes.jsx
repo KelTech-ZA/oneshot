@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { Ctx } from "../main";
 import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
+import { downloadDocument, viewDocument } from "../lib/documents";
 
 // Quotes, and the two things a quote becomes.
 //
@@ -327,6 +328,19 @@ export default function Quotes() {
               </span>
             </div>
           )}
+
+          {/* Outside the status block below, because a declined quote is still
+              a document somebody may need to produce later. */}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+              onClick={() => viewDocument("quote", q.id, setMsg)}>
+              View
+            </button>
+            <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+              onClick={() => downloadDocument("quote", q.id, q.number, setMsg)}>
+              Download
+            </button>
+          </div>
 
           {q.status !== "declined" && (
             <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>

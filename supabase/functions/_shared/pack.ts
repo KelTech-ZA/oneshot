@@ -77,6 +77,24 @@ export interface PackInvoice {
   currency?: string | null;
   payment_terms?: string | null;
   lines?: PackLine[] | null;
+  /**
+   * What this document is. A quote prints the same layout as an invoice -
+   * deliberately, so the thing a customer accepts and the thing they are
+   * later billed for cannot drift apart - with four differences: its own
+   * heading, "Valid until" in place of "Due", no received/balance block, and
+   * its own status badge.
+   *
+   * Absent means invoice, so every existing caller is unaffected.
+   */
+  kind?: "invoice" | "quote";
+  /** Quotes only. */
+  valid_until?: string | null;
+  /**
+   * Quotes only: draft, sent, accepted, declined or expired. Worked out by
+   * the caller - whether a date has passed is a decision, and this file does
+   * not make decisions (see the note at the top).
+   */
+  quote_status?: string | null;
   subtotal?: number | string | null;
   vat?: number | string | null;
   vat_rate?: number | string | null;
@@ -142,7 +160,11 @@ export class Pack {
   private page!: ReturnType<PDFDocument["addPage"]>;
   private y = 0;
 
-  constructor(private readonly input: PackInput) {}
+  constructor(
+    private readonly input: PackInput,
+    /** One document on its own, rather than a statement and its invoices. */
+    private readonly single = false,
+  ) {}
 
   // --- the small mechanics --------------------------------------------------
 
@@ -359,25 +381,38 @@ export class Pack {
     this.footer(this.input.issuer.invoice_footer ?? "");
   }
 
-  // --- one invoice ----------------------------------------------------------
+  // --- one document: an invoice, or a quote -----------------------------------
 
   private invoice(inv: PackInvoice) {
     const ccy = inv.currency ?? this.input.currency ?? "";
+    const isQuote = inv.kind === "quote";
     this.newPage();
     this.header();
 
-    this.put("TAX INVOICE", M, 15, { bold: true });
+    this.put(isQuote ? "QUOTE" : "TAX INVOICE", M, 15, { bold: true });
     this.put(inv.number ?? "", 0, 15, { bold: true, right: A4.w - M });
     this.y -= 18;
 
-    const facts: string[] = [`Issued ${inv.invoice_date ?? ""}`];
-    if (inv.due_date) facts.push(`Due ${inv.due_date}`);
+    const facts: string[] = [`${isQuote ? "Quoted" : "Issued"} ${inv.invoice_date ?? ""}`];
+    if (isQuote) {
+      if (inv.valid_until) facts.push(`Valid until ${inv.valid_until}`);
+    } else if (inv.due_date) {
+      facts.push(`Due ${inv.due_date}`);
+    }
     if (inv.job_ref) facts.push(`Job ${inv.job_ref}`);
     if (inv.their_reference) facts.push(`Your ref ${clean(inv.their_reference)}`);
     this.put(facts.join("   ·   "), M, 9, { color: SOFT });
-    // Said on the invoice itself, not only on the statement, because this page
-    // is the one that gets forwarded to whoever pays it.
-    if (n(inv.days_overdue) > 0 && n(inv.balance) > 0) {
+    // Said on the document itself, not only on the statement, because this
+    // page is the one that gets forwarded to whoever pays it.
+    if (isQuote) {
+      const badge: Record<string, [string, ReturnType<typeof rgb>]> = {
+        accepted: ["ACCEPTED", rgb(0.2, 0.5, 0.33)],
+        declined: ["DECLINED", rgb(0.72, 0.25, 0.25)],
+        expired:  ["EXPIRED",  rgb(0.78, 0.35, 0.12)],
+      };
+      const b = badge[String(inv.quote_status ?? "")];
+      if (b) this.put(b[0], 0, 9, { right: A4.w - M, bold: true, color: b[1] });
+    } else if (n(inv.days_overdue) > 0 && n(inv.balance) > 0) {
       this.put(`${inv.days_overdue} day${n(inv.days_overdue) === 1 ? "" : "s"} overdue`, 0, 9,
         { right: A4.w - M, bold: true, color: rgb(0.78, 0.35, 0.12) });
     } else if (inv.state === "paid") {
@@ -482,7 +517,8 @@ export class Pack {
       this.y -= strong ? 20 : 14;
     }
 
-    if (n(inv.paid) !== 0) {
+    // A quote has had nothing paid against it, by definition.
+    if (!isQuote && n(inv.paid) !== 0) {
       this.put("Received", 0, 9, { right: labelRight, color: SOFT });
       this.put(money(inv.paid), 0, 9, { right: cx.amt, color: SOFT });
       this.y -= 16;
@@ -491,7 +527,18 @@ export class Pack {
       this.y -= 20;
     }
 
-    if (inv.payment_terms) {
+    if (isQuote) {
+      this.y -= 6;
+      const note = inv.valid_until
+        ? `This quote is valid until ${inv.valid_until}. Prices are subject to change after that date.`
+        : "Prices are subject to change.";
+      this.put(note, M, 8.5, { color: SOFT });
+      if (inv.payment_terms) {
+        this.y -= 12;
+        this.put(`On acceptance, payment is due within ${clean(inv.payment_terms)} days of invoice date.`,
+          M, 8.5, { color: SOFT });
+      }
+    } else if (inv.payment_terms) {
       this.y -= 6;
       this.put(`Payment due within ${clean(inv.payment_terms)} days of invoice date.`,
         M, 8.5, { color: SOFT });
@@ -520,10 +567,15 @@ export class Pack {
       }
     }
 
-    this.statement();
+    // A single document skips the statement cover: nobody wants an ageing
+    // table on the one invoice they asked to look at.
+    if (!this.single) this.statement();
     for (const inv of this.input.invoices) this.invoice(inv);
 
-    this.doc.setTitle(`Statement and invoices — ${this.input.client.name}`);
+    const first = this.input.invoices[0];
+    this.doc.setTitle(this.single && first
+      ? `${first.kind === "quote" ? "Quote" : "Invoice"} ${first.number ?? ""}`.trim()
+      : `Statement and invoices — ${this.input.client.name}`);
     this.doc.setProducer("OneShot");
     this.doc.setCreationDate(new Date());
     return await this.doc.save();
@@ -531,6 +583,33 @@ export class Pack {
 }
 
 export const buildPack = (input: PackInput) => new Pack(input).build();
+
+/**
+ * One invoice or one quote, on its own, for somebody who clicked View or
+ * Download.
+ *
+ * Same class, same drawing code, same page as the one inside the monthly
+ * pack - which is the point. A second renderer for "the downloadable one"
+ * would be a second layout to keep in step, and the first time they disagreed
+ * would be the day a customer held both.
+ */
+export interface DocumentInput {
+  issuer: Issuer;
+  doc: PackInvoice;
+  logo?: Uint8Array | null;
+}
+
+export const buildDocument = (input: DocumentInput) =>
+  new Pack({
+    issuer: input.issuer,
+    client: { name: input.doc.bill_to_name ?? "" },
+    period: { from: "", to: "" },
+    invoices: [input.doc],
+    ageing: [0, 0, 0, 0],
+    currency: input.doc.currency ?? "ZAR",
+    outstanding: 0,
+    logo: input.logo ?? null,
+  }, true).build();
 
 /**
  * Ageing, from the invoice date. Here rather than in the drawing code so the

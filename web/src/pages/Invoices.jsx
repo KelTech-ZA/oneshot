@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { VAT_CHOICES, pct, subtotalOf, vatBreakdown, vatChoiceOf, vatValueOf } from "../lib/vat";
+import { downloadDocument, viewDocument } from "../lib/documents";
 
 // Invoices that do not come from a job.
 //
@@ -352,6 +353,20 @@ export default function Invoices() {
               )}
             </div>
           )}
+          {/* An invoice nobody can look at is a row in a list. These two are
+              the only way a standalone invoice - one not raised against a job -
+              ever reaches the person who has to pay it. */}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+              onClick={() => viewDocument("invoice", r.id, setMsg)}>
+              View
+            </button>
+            <button className="btn btn-ghost" style={{ flex: 1, marginTop: 0, minHeight: 44 }}
+              onClick={() => downloadDocument("invoice", r.id, r.number, setMsg)}>
+              Download
+            </button>
+          </div>
+
           {dueFor === r.id && (
             <div style={{ marginTop: 8 }}>
               <div className="row" style={{ gap: 8, alignItems: "flex-start" }}>
