@@ -136,6 +136,8 @@ export default function Invoices() {
   const [editDue, setEditDue] = useState("");
   const [editTerms, setEditTerms] = useState("");
   const [editShowTerms, setEditShowTerms] = useState(true);
+  const [editNotes, setEditNotes] = useState("");
+  const [editShowNotes, setEditShowNotes] = useState(false);
   const [editWhy, setEditWhy] = useState("");
   const [history, setHistory] = useState([]);
 
@@ -158,8 +160,12 @@ export default function Invoices() {
     // The view's own definition is not in this repo, so it is not being
     // rewritten blind. The screen reads the row it is about to write.
     const { data: own } = await supabase.from("invoices")
-      .select("show_payment_terms").eq("id", r.id).maybeSingle();
+      .select("show_payment_terms,notes,show_notes").eq("id", r.id).maybeSingle();
     setEditShowTerms(own?.show_payment_terms !== false);
+    setEditNotes(own?.notes ?? "");
+    // Absent means no: a note written before sql/73 was written into a
+    // box that never printed, so it does not start printing now.
+    setEditShowNotes(own?.show_notes === true);
     // What has already been changed on it, so an edit is made with the
     // previous ones in view rather than on top of them unseen.
     const { data } = await supabase.from("invoice_edits")
@@ -187,6 +193,9 @@ export default function Invoices() {
       p_due_date: editDue || null,
       p_payment_terms: editTerms.trim() || null,
       p_show_payment_terms: editShowTerms,
+      // An empty note deletes it; null would leave the old one in place.
+      p_notes: editNotes.trim(),
+      p_show_notes: editShowNotes,
     });
     setBusy(false);
     if (dueErr) {
@@ -497,6 +506,22 @@ export default function Invoices() {
                   </span></span>
               </label>
 
+
+              <label>Notes</label>
+              <textarea rows={3} value={editNotes}
+                placeholder="Anything that should appear on the invoice"
+                onChange={(e) => setEditNotes(e.target.value)} />
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start",
+                margin: "4px 0 8px", fontWeight: 400 }}>
+                <input type="checkbox" checked={editShowNotes}
+                  onChange={(e) => setEditShowNotes(e.target.checked)}
+                  style={{ width: 18, height: 18, marginTop: 2 }} />
+                <span>Print the notes on the invoice
+                  <br /><span className="muted" style={{ fontSize: 12 }}>
+                    Off for anything meant for your own crew. Invoices raised before
+                    this existed start off, because the box never printed then.
+                  </span></span>
+              </label>
               <label>Why (optional)</label>
               <input value={editWhy} placeholder="Wrong crate size quoted, agreed with Sarah…"
                 onChange={(e) => setEditWhy(e.target.value)} />

@@ -96,6 +96,15 @@ export interface PackInvoice {
    */
   show_payment_terms?: boolean | null;
   /**
+   * Free text the person raising the document typed into the Notes box.
+   * Carried on the row since sql/55 and never once printed until sql/73 -
+   * which is why absent here means NO. Every note written before this
+   * existed was written into a box that demonstrably did not print, and
+   * assuming otherwise would put a remark about a customer in front of them.
+   */
+  notes?: string | null;
+  show_notes?: boolean | null;
+  /**
    * Quotes only: draft, sent, accepted, declined or expired. Worked out by
    * the caller - whether a date has passed is a decision, and this file does
    * not make decisions (see the note at the top).
@@ -156,6 +165,30 @@ const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
 
 /** 15, "15.00" and 15.0 all print as "15%"; 7.5 keeps its half. */
 const pct = (v: unknown) => `${String(n(v)).replace(/\.0+$/, "")}%`;
+
+/**
+ * The terms sentence.
+ *
+ * payment_terms is free text. sql/54's trigger writes a bare number into it
+ * when nothing else is set, which is where "Payment due within 30 days of
+ * invoice date." came from - but a person typing the field puts words in it,
+ * and an invoice has gone out reading
+ *
+ *     Payment due within Payment terms: COD days of invoice date.
+ *
+ * So the sentence is only built when the stored value really is a number of
+ * days. Anything else is the terms as somebody wrote them, printed as
+ * written, with a label only if it does not already carry one.
+ */
+const termsLine = (terms: unknown, quote: boolean) => {
+  const t = clean(terms);
+  if (/^\d+$/.test(t)) {
+    return quote
+      ? `On acceptance, payment is due within ${t} days of invoice date.`
+      : `Payment due within ${t} days of invoice date.`;
+  }
+  return /^payment terms\b/i.test(t) ? t : `Payment terms: ${t}`;
+};
 
 export class Pack {
   private doc!: PDFDocument;
@@ -407,23 +440,59 @@ export class Pack {
     }
     if (inv.job_ref) facts.push(`Job ${inv.job_ref}`);
     if (inv.their_reference) facts.push(`Your ref ${clean(inv.their_reference)}`);
-    this.put(facts.join("   ·   "), M, 9, { color: SOFT });
-    // Said on the document itself, not only on the statement, because this
-    // page is the one that gets forwarded to whoever pays it.
+    // The badge is worked out BEFORE the facts are drawn, because the facts
+    // have to be laid out around it. Both used to be drawn on the same
+    // baseline - facts from the left, badge from the right - on the
+    // assumption that the facts were short. A client reference of any length
+    // breaks that, and "3 days overdue" lands on top of the customer's own
+    // purchase order number. Said on the document itself, not only on the
+    // statement, because this page is the one that gets forwarded to whoever
+    // pays it.
+    let badge: [string, ReturnType<typeof rgb>] | null = null;
     if (isQuote) {
-      const badge: Record<string, [string, ReturnType<typeof rgb>]> = {
+      const byStatus: Record<string, [string, ReturnType<typeof rgb>]> = {
         accepted: ["ACCEPTED", rgb(0.2, 0.5, 0.33)],
         declined: ["DECLINED", rgb(0.72, 0.25, 0.25)],
         expired:  ["EXPIRED",  rgb(0.78, 0.35, 0.12)],
       };
-      const b = badge[String(inv.quote_status ?? "")];
-      if (b) this.put(b[0], 0, 9, { right: A4.w - M, bold: true, color: b[1] });
+      badge = byStatus[String(inv.quote_status ?? "")] ?? null;
     } else if (n(inv.days_overdue) > 0 && n(inv.balance) > 0) {
-      this.put(`${inv.days_overdue} day${n(inv.days_overdue) === 1 ? "" : "s"} overdue`, 0, 9,
-        { right: A4.w - M, bold: true, color: rgb(0.78, 0.35, 0.12) });
+      badge = [`${inv.days_overdue} day${n(inv.days_overdue) === 1 ? "" : "s"} overdue`,
+               rgb(0.78, 0.35, 0.12)];
     } else if (inv.state === "paid") {
-      this.put("PAID", 0, 9, { right: A4.w - M, bold: true, color: rgb(0.2, 0.5, 0.33) });
+      badge = ["PAID", rgb(0.2, 0.5, 0.33)];
     }
+
+    // 14pt of air, so the two are never merely touching either.
+    const factsFull = A4.w - M * 2;
+    const factsFirst = badge ? factsFull - this.w(badge[0], 9, true) - 14 : factsFull;
+
+    // Broken between facts, never inside one: half a purchase order number is
+    // worse than a second line.
+    const SEP = "   ·   ";
+    const factLines: string[] = [];
+    const flush = (text: string) => {
+      const limit = factLines.length === 0 ? factsFirst : factsFull;
+      if (this.w(text, 9) <= limit) { factLines.push(text); return; }
+      // One fact too long even on its own. Wrap it on spaces rather than let
+      // it run under the badge.
+      for (const piece of this.wrap(text, limit, 9)) factLines.push(piece);
+    };
+    let cur = "";
+    for (const f of facts) {
+      const limit = factLines.length === 0 ? factsFirst : factsFull;
+      const joined = cur ? cur + SEP + f : f;
+      if (cur && this.w(joined, 9) > limit) { flush(cur); cur = f; } else { cur = joined; }
+    }
+    if (cur) flush(cur);
+
+    factLines.forEach((line, i) => {
+      this.put(line, M, 9, { color: SOFT });
+      if (i === 0 && badge) {
+        this.put(badge[0], 0, 9, { right: A4.w - M, bold: true, color: badge[1] });
+      }
+      if (i < factLines.length - 1) this.y -= 12;
+    });
     this.y -= 26;
 
     this.put("BILL TO", M, 7.5, { color: SOFT, bold: true });
@@ -547,13 +616,33 @@ export class Pack {
       this.put(note, M, 8.5, { color: SOFT });
       if (sayTerms && inv.payment_terms) {
         this.y -= 12;
-        this.put(`On acceptance, payment is due within ${clean(inv.payment_terms)} days of invoice date.`,
-          M, 8.5, { color: SOFT });
+        this.put(termsLine(inv.payment_terms, true), M, 8.5, { color: SOFT });
       }
     } else if (sayTerms && inv.payment_terms) {
       this.y -= 6;
-      this.put(`Payment due within ${clean(inv.payment_terms)} days of invoice date.`,
-        M, 8.5, { color: SOFT });
+      this.put(termsLine(inv.payment_terms, false), M, 8.5, { color: SOFT });
+    }
+
+    // The Notes box has been on both forms since sql/55, labelled "Anything
+    // that should appear on the quote", and nothing has ever appeared. It
+    // prints here when the document says to - show_notes, absent meaning no,
+    // for the reason in the field's own comment above.
+    const notes = String(inv.notes ?? "")
+      .split("\n").map(clean).filter(Boolean);
+    if (inv.show_notes === true && notes.length) {
+      this.y -= 20;
+      // Keep the heading with at least its first line rather than stranding
+      // "NOTES" alone at the foot of a page.
+      this.room(14 + 12 + 12);
+      this.put("NOTES", M, 7.5, { color: SOFT, bold: true });
+      this.y -= 13;
+      for (const line of notes) {
+        for (const part of this.wrap(line, A4.w - M * 2, 9)) {
+          this.room(12);
+          this.put(part, M, 9, { color: SOFT });
+          this.y -= 12;
+        }
+      }
     }
 
     this.footer(this.input.issuer.invoice_footer ?? "");

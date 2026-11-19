@@ -108,6 +108,31 @@ const invoices = [
     subtotal: 62573.34, vat: 735.00, total: 63308.34,
     paid: 0, balance: 63308.34, state: "owing", days_overdue: 0,
   },
+  // SEC90006 as it actually went out, kept because of what it caught: the
+  // facts line and the overdue badge were drawn on the same baseline from
+  // opposite edges, on the assumption the facts were short. This reference is
+  // not short, and "3 days overdue" landed on top of the customer's own
+  // purchase order number. The terms value is theirs, typed by hand, and the
+  // sentence used to be built around it whether it was a number of days or
+  // not - "Payment due within Payment terms: COD days of invoice date."
+  {
+    number: "SEC90006",
+    invoice_date: "2026-11-09",
+    due_date: "2026-11-13",
+    job_ref: "JOB-2026-0300",
+    their_reference: "Thirza Schaap - Boxing for sculptures | Nov 2026",
+    bill_to_name: "Candice Berman Gallery",
+    bill_to_address: "223 Jan Smuts Avenue\nJohannesburg",
+    currency: "ZAR",
+    payment_terms: "Payment terms: COD",
+    vat_rate: 15,
+    lines: [
+      { description: "Materials - cardboard boxing with polychips", unit: "job", quantity: 1, unit_price: 307.76, line_total: 307.76 },
+      { description: "Packing - 2x techs @ R150ph each", unit: "hour", quantity: 1.5, unit_price: 300.00, line_total: 450.00 },
+    ],
+    subtotal: 757.76, vat: 113.66, total: 871.42,
+    paid: 0, balance: 871.42, state: "owing", days_overdue: 3,
+  },
 ];
 
 const pdf = await buildPack({

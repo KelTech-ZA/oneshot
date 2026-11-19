@@ -91,6 +91,8 @@ export default function Quotes() {
   const [editValid, setEditValid] = useState("");
   const [editTerms, setEditTerms] = useState("");
   const [editShowTerms, setEditShowTerms] = useState(true);
+  const [editNotes, setEditNotes] = useState("");
+  const [editShowNotes, setEditShowNotes] = useState(false);
 
   const openEdit = async (q) => {
     setEditFor(q.id);
@@ -101,9 +103,12 @@ export default function Quotes() {
     // is expanded when it is created, so columns added by sql/72 are not in
     // it. See the same note in Invoices.jsx.
     const { data: own } = await supabase.from("quotes")
-      .select("payment_terms,show_payment_terms").eq("id", q.id).maybeSingle();
+      .select("payment_terms,show_payment_terms,notes,show_notes").eq("id", q.id).maybeSingle();
     setEditTerms(own?.payment_terms ?? "");
     setEditShowTerms(own?.show_payment_terms !== false);
+    setEditNotes(own?.notes ?? "");
+    // Absent means no - see sql/73.
+    setEditShowNotes(own?.show_notes === true);
   };
 
   const saveEdit = async (q) => {
@@ -121,6 +126,9 @@ export default function Quotes() {
       p_valid_until: editValid || null,
       p_payment_terms: editTerms.trim() || null,
       p_show_payment_terms: editShowTerms,
+      // An empty note deletes it; null would leave the old one in place.
+      p_notes: editNotes.trim(),
+      p_show_notes: editShowNotes,
     });
     setBusy(false);
     if (dateErr) {
@@ -439,6 +447,22 @@ export default function Quotes() {
                   </span></span>
               </label>
 
+
+              <label>Notes</label>
+              <textarea rows={3} value={editNotes}
+                placeholder="Anything that should appear on the quote"
+                onChange={(e) => setEditNotes(e.target.value)} />
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start",
+                margin: "4px 0 8px", fontWeight: 400 }}>
+                <input type="checkbox" checked={editShowNotes}
+                  onChange={(e) => setEditShowNotes(e.target.checked)}
+                  style={{ width: 18, height: 18, marginTop: 2 }} />
+                <span>Print the notes on the quote
+                  <br /><span className="muted" style={{ fontSize: 12 }}>
+                    Off for anything meant for your own crew. Quotes raised before
+                    this existed start off, because the box never printed then.
+                  </span></span>
+              </label>
               <div className="row" style={{ gap: 8, marginTop: 8 }}>
                 <button className="btn btn-primary" style={{ flex: 1, marginTop: 0 }}
                   disabled={busy} onClick={() => saveEdit(q)}>Save changes</button>
