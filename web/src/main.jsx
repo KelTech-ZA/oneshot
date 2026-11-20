@@ -368,7 +368,12 @@ function Shell() {
         <Route path="/job/new" element={<NewJob />} />
         <Route path="/job/:id" element={<Job />} />
         <Route path="/job/:id/shoot" element={<Capture />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        {/* Office IS the calendar, with the ops dots and the ops rail on it.
+            It was a page of banners and card stacks you had to read past
+            before you could see the week. The team, the intake setup and the
+            log live one click away in the rail. */}
+        <Route path="/dashboard" element={<Week office />} />
+        <Route path="/office/setup" element={<Dashboard />} />
         <Route path="/setup/email" element={<EmailSetup />} />
         <Route path="/setup/whatsapp" element={<WhatsAppSetup />} />
         <Route path="/setup/extension" element={<ExtensionSetup />} />

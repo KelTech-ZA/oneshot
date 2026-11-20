@@ -173,8 +173,8 @@ export default function Dashboard() {
   return (
     <div className="wk">
       <div className="wk-bar">
-        <h1 className="wk-h1">OFFICE</h1>
-        <span className="wk-range">{profile.workspace ?? "Workspace"} · team, setup and every job</span>
+        <h1 className="wk-h1">TEAM &amp; SETUP</h1>
+        <span className="wk-range">{profile.workspace ?? "Workspace"} · people, intake and every job</span>
         <div className="wk-flags">
           {pending.length > 0 && (
             <button className="wk-flag on" onClick={() => jump("office-pending")}>

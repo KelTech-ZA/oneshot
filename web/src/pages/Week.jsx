@@ -1,10 +1,12 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useRefreshOnReturn } from "../lib/refresh";
 import { Ctx } from "../main";
 import { parseWindow, fmt } from "../lib/schedule";
 import { localISO } from "./JobCalendar";
+import { isRepeat, withoutTag, refsIn } from "./Dashboard";
+import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
 
 // The week, as a calendar.
 //
@@ -108,7 +110,11 @@ export function layColumns(list) {
   return out;
 }
 
-export default function Week() {
+// office: the same calendar with the ops controls on it. Crew get the week
+// and nothing else; ops get the three dots and the rail of office work. It is
+// deliberately one component - the moment Office is "the calendar, but
+// rebuilt", the two drift and only one of them gets fixed.
+export default function Week({ office = false }) {
   const { profile, session } = useContext(Ctx);
   const nav = useNavigate();
   const isOps = profile.role === "ops";
@@ -124,7 +130,8 @@ export default function Week() {
   const [states, setStates] = useState({ scheduled: true, open: true, new: true, done: false });
   const [peek, setPeek] = useState(null);     // the job in the side panel
   const [docs, setDocs] = useState(null);     // its documents
-  const [flag, setFlag] = useState(null);     // "open" | "new" list
+  const [flag, setFlag] = useState(null);     // "open" | "new" | "errors" list
+  const [bad, setBad] = useState([]);         // intake that produced no job
   const [note, setNote] = useState("Drag a job onto any day or time. Filter by client on the left.");
   const [railOpen, setRailOpen] = useState(false);
 
@@ -175,6 +182,23 @@ export default function Week() {
 
   useEffect(() => { load(); }, [from, to]);
   useRefreshOnReturn(load);
+
+  // Mail that arrived and produced nothing: unreadable, or the same request
+  // for a second time. Ops only, because it is ops who fix it.
+  const loadBad = async () => {
+    if (!office || !isOps) return;
+    const since = new Date(Date.now() - 14 * 864e5).toISOString();
+    const { data } = await supabase.from("messages")
+      .select("id,sender,subject,body,created_at,parse_error,kind")
+      .is("job_id", null).gte("created_at", since)
+      .order("created_at", { ascending: false }).limit(20);
+    const noted = (data ?? []).filter((m) => m.parse_error || m.kind === "unknown");
+    // Dismissing is per-browser and deliberately not a database write: the
+    // message is evidence, and one person clearing their own view should not
+    // erase it for a colleague.
+    setBad(keepUndismissed(noted, (m) => (isRepeat(m) ? `rep-${m.id}` : `msg-${m.id}`)));
+  };
+  useEffect(() => { loadBad(); }, [office]);
 
   useEffect(() => {
     supabase.from("clients").select("id,name").order("name")
@@ -370,6 +394,14 @@ export default function Week() {
     load();
   };
 
+  const decide = async (j, status) => {
+    const { error } = await supabase.from("jobs")
+      .update({ status, updated_at: new Date().toISOString() }).eq("id", j.id);
+    if (error) { setNote("Could not change it: " + error.message); return; }
+    setNote(`${j.ref} ${status === "confirmed" ? "confirmed" : "cancelled"}.`);
+    load();
+  };
+
   /* ── the side panel ────────────────────────────────────────────────── */
   const openPeek = async (j) => {
     setFlag(null); setPeek(j); setDocs(null);
@@ -419,15 +451,22 @@ export default function Week() {
       <div className="wk-bar">
         <button className="wk-railtog" onClick={() => setRailOpen(!railOpen)}>▪ FILTERS</button>
         <h1 className="wk-h1">WEEK {weekNo}</h1>
-        <span className="wk-range">{short(anchor)} — {short(addDays(anchor, 6))} {addDays(anchor, 6).getFullYear()}</span>
+        <span className="wk-range">
+          {short(anchor)} — {short(addDays(anchor, 6))} {addDays(anchor, 6).getFullYear()}
+          {office ? " · OFFICE" : ""}
+        </span>
         <div className="wk-step">
           <button onClick={() => setAnchor(addDays(anchor, -7))} aria-label="Previous week">‹</button>
           <button onClick={() => { setAnchor(mondayOf(new Date())); const n = new Date(); setMiniMonth(new Date(n.getFullYear(), n.getMonth(), 1)); }}>TODAY</button>
           <button onClick={() => setAnchor(addDays(anchor, 7))} aria-label="Next week">›</button>
         </div>
+        {/* Everything that wants you is a dot up here, and nothing else.
+            A screen that opens with a stack of banners is a screen you learn
+            to scroll past before you have read it. */}
         <div className="wk-flags">
           <Flag kind="open" n={counts.open} />
           <Flag kind="new" n={counts.new} />
+          {office && isOps && <Flag kind="errors" n={bad.length} />}
         </div>
       </div>
 
@@ -524,6 +563,17 @@ export default function Week() {
             onClick={() => setHidden(hidden.size ? new Set() : new Set(railClients.map((c) => c.id)))}>
             ▪ ALL / NONE
           </button>
+
+          {office && isOps && (<>
+            <h2>Office</h2>
+            <div className="wk-filters">
+              <Link className="wk-frow" to="/office/setup"><span className="cursor">▸</span><span className="name">Team &amp; setup</span></Link>
+              <Link className="wk-frow" to="/settings/clients"><span className="cursor">▸</span><span className="name">Clients</span></Link>
+              <Link className="wk-frow" to="/settings/types"><span className="cursor">▸</span><span className="name">Job types &amp; rates</span></Link>
+              <Link className="wk-frow" to="/settings/billing"><span className="cursor">▸</span><span className="name">Billing &amp; letterhead</span></Link>
+              <Link className="wk-frow" to="/statements"><span className="cursor">▸</span><span className="name">Statements</span></Link>
+            </div>
+          </>)}
 
           <h2>Job types</h2>
           <div className="wk-filters">
@@ -641,7 +691,64 @@ export default function Week() {
 
       {(peek || flag) && <div className="wk-scrim" onClick={() => { setPeek(null); setFlag(null); }} />}
 
-      {flag && (
+      {flag === "errors" && (
+        <aside className="wk-panel" role="dialog" aria-label="intake problems">
+          <header>
+            <h3>ERRORS</h3>
+            <button className="x" onClick={() => setFlag(null)}>ESC ✕</button>
+          </header>
+          <div className="inner">
+            <p className="wk-note">
+              Mail that reached intake in the last two weeks and produced no job —
+              unreadable, or the same request arriving twice. An intake pipeline
+              that loses work quietly is worse than none, because you stop checking.
+            </p>
+            <div className="wk-plist">
+              {bad.map((m) => {
+                const repeat = isRepeat(m);
+                return (
+                  <div className={`wk-pitem s-${repeat ? "new" : "open"}`} key={m.id}
+                    style={{ display: "block" }}>
+                    <div className="row" style={{ alignItems: "flex-start" }}>
+                      <span className="body" style={{ flex: 1 }}>
+                        <span className="n">{m.subject || "(no subject)"}</span>
+                        <span className="c">{m.sender} · {new Date(m.created_at).toLocaleDateString("en-ZA")}</span>
+                      </span>
+                      <span className={`tag ${repeat ? "new" : "open"}`}
+                        style={{ fontFamily: "var(--mono)", fontSize: 9, border: "1px solid currentColor",
+                                 padding: "2px 6px", color: repeat ? "var(--accent)" : "var(--warn)" }}>
+                        {repeat ? "ARRIVED TWICE" : "COULD NOT READ"}
+                      </span>
+                    </div>
+                    {m.parse_error && (
+                      <p className="wk-note" style={{ marginTop: 6 }}>{withoutTag(m.parse_error)}</p>
+                    )}
+                    {repeat && refsIn(m.parse_error).length > 0 && (
+                      <p className="wk-note" style={{ marginTop: 4 }}>
+                        Already became {refsIn(m.parse_error).join(", ")} — making it again would
+                        double the job.
+                      </p>
+                    )}
+                    <div className="wk-act" style={{ marginTop: 8 }}>
+                      {!repeat && (
+                        <button className="go" onClick={() => nav("/job/new")}>MAKE THE JOB</button>
+                      )}
+                      <button onClick={() => {
+                        remember(repeat ? `rep-${m.id}` : `msg-${m.id}`);
+                        setBad((cur) => cur.filter((x) => x.id !== m.id));
+                      }}>DISMISS</button>
+                    </div>
+                  </div>
+                );
+              })}
+              {bad.length === 0 && <p className="wk-note">Nothing has gone wrong. Everything that
+                arrived became a job.</p>}
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {(flag === "open" || flag === "new") && (
         <aside className="wk-panel" role="dialog" aria-label={`${flag} jobs`}>
           <header>
             <h3>{flag.toUpperCase()}</h3>
@@ -651,17 +758,28 @@ export default function Week() {
             <p className="wk-note">
               {flag === "open"
                 ? "Waiting on a decision — flagged, past its date, or with no date at all."
-                : "Arrived and not confirmed yet. Confirm them or turn them into quotes."}
+                : "Arrived and not confirmed yet. Confirm them, or cancel what should not have come."}
             </p>
             <div className="wk-plist">
               {list.map((j) => (
-                <button key={j.id} className={`wk-pitem s-${stateOf(j, todayISO)}`} onClick={() => openPeek(j)}>
-                  <span className="when">{j.scheduled_date ? prettyDate(j.scheduled_date) : "no date"}</span>
-                  <span className="body">
-                    <span className="n">{titleOf(j)}</span>
-                    <span className="c">{clientName(clientOf(j)) ?? j.client_ref ?? "—"} · {j.ref}</span>
-                  </span>
-                </button>
+                <div key={j.id} className={`wk-pitem s-${stateOf(j, todayISO)}`} style={{ display: "block" }}>
+                  <button onClick={() => openPeek(j)}
+                    style={{ display: "flex", gap: 10, width: "100%", textAlign: "left", padding: 0 }}>
+                    <span className="when">{j.scheduled_date ? prettyDate(j.scheduled_date) : "no date"}</span>
+                    <span className="body">
+                      <span className="n">{titleOf(j)}</span>
+                      <span className="c">{clientName(clientOf(j)) ?? j.client_ref ?? "—"} · {j.ref}</span>
+                    </span>
+                  </button>
+                  {/* Confirming is the whole reason this list exists, so it
+                      happens here rather than two pages away. */}
+                  {office && isOps && flag === "new" && (
+                    <div className="wk-act" style={{ marginTop: 8 }}>
+                      <button className="go" onClick={() => decide(j, "confirmed")}>CONFIRM</button>
+                      <button onClick={() => decide(j, "cancelled")}>CANCEL</button>
+                    </div>
+                  )}
+                </div>
               ))}
               {list.length === 0 && <p className="wk-note">Nothing here. </p>}
             </div>

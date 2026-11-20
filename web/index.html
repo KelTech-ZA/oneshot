@@ -894,6 +894,9 @@
     .wk-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .wk-dot.open { background: var(--warn); box-shadow: 0 0 0 3px rgba(194,27,27,.14); }
     .wk-dot.new { background: var(--accent); box-shadow: 0 0 0 3px rgba(240,74,0,.14); }
+    /* The third dot. Not red - red is work waiting on a decision, and an
+       email that failed to parse is a different kind of bad. */
+    .wk-dot.errors { background: #6b4fa8; box-shadow: 0 0 0 3px rgba(107,79,168,.16); }
     .wk-railtog { display: none; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); border: 1px solid var(--line); padding: 4px 8px; }
 
     .wk-body { display: grid; grid-template-columns: 232px 1fr; min-height: 0; position: relative; }
