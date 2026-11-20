@@ -9,13 +9,20 @@ const STAMP = {
   pending_confirmation: ["pending", "PENDING"], confirmed: ["pending", "CONFIRMED"],
   assigned: ["live", "ASSIGNED"], accepted: ["live", "ACCEPTED"], in_progress: ["live", "IN PROGRESS"],
   completed: ["done", "COMPLETED"], closed: ["done", "CLOSED"], cancelled: ["bad", "CANCELLED"],
+  // A job that was closed and sent back out. Live, because it is work again,
+  // and worded plainly because a board that showed it as IN PROGRESS would
+  // hide the thing somebody needs to know about it. See sql/71.
+  reopened: ["live", "RE-OPENED"],
 };
 
 // The colour comes from the lifecycle status; the WORD comes from the last
 // event logged, so a finished job reads DELIVERED or BUILT rather than the
 // uninformative COMPLETED. Statuses that describe the contract rather than
-// the work - awaiting confirmation, closed, cancelled - keep their own word.
-const CONTRACT_STATES = ["pending_confirmation", "closed", "cancelled"];
+// the work - awaiting confirmation, closed, cancelled, reopened - keep their
+// own word. Reopened is in that list because the last event on such a job is
+// usually whatever finished it the first time round, and a job that reads
+// DELIVERED while it is back out on the road is worse than no stamp at all.
+const CONTRACT_STATES = ["pending_confirmation", "closed", "cancelled", "reopened"];
 
 export function JobStamp({ status, lastEvent, alert = false }) {
   const [cls, statusLabel] = STAMP[status] ?? ["pending", status];

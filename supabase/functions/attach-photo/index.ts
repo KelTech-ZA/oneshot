@@ -47,7 +47,18 @@ Deno.serve(async (req) => {
   // - Crew can ONLY add photos if job is OPEN
   // - Ops can add photos on CLOSED jobs
   const isOps = mem.role === "ops";
-  const jobOpen = job.status === "in_progress" || job.status === "accepted" || job.status === "pending_confirmation" || job.status === "confirmed";
+  // Spelled out rather than "not closed", because the two lists are not
+  // complements: a cancelled job is neither open nor closed and nobody should
+  // be adding photos to it. "reopened" is here because a job sent back out
+  // after being closed is live work again (sql/71), and without it crew would
+  // be refused on the one job that most needs a photo.
+  // "assigned" was missing from this list. claim-job sets it the moment a
+  // driver takes the job, so it sits directly between "confirmed" and
+  // "accepted" - both of which were here. The crew member who has just been
+  // handed the work was the one person refused.
+  const jobOpen = job.status === "in_progress" || job.status === "accepted" ||
+    job.status === "assigned" || job.status === "pending_confirmation" ||
+    job.status === "confirmed" || job.status === "reopened";
   const jobClosed = job.status === "closed" || job.status === "completed";
 
   if (!isOps && !jobOpen) {

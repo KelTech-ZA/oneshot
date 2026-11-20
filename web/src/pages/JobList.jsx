@@ -57,7 +57,7 @@ function dayLabel(dateStr, outstanding = true) {
 
 const GROUPS = {
   "To do": ["pending_confirmation", "confirmed", "assigned", "accepted"],
-  "In progress": ["in_progress"],
+  "In progress": ["in_progress", "reopened"],
   "Done": ["completed", "closed", "cancelled"],
 };
 

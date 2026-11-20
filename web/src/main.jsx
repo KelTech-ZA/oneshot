@@ -27,6 +27,8 @@ import Invoices from "./pages/Invoices";
 import Quotes from "./pages/Quotes";
 import Feedback from "./pages/Feedback";
 import InstallApp from "./pages/InstallApp";
+import Week from "./pages/Week";
+import NewJob from "./pages/NewJob";
 
 export const Ctx = React.createContext(null);
 
@@ -39,8 +41,11 @@ function Welcome({ profile, onDone }) {
       <p className="muted" style={{ marginBottom: 28 }}>
         Welcome{profile.full_name ? `, ${profile.full_name.split(" ")[0]}` : ""}. Where to?
       </p>
-      <button className="btn btn-primary" onClick={() => choose("/")}>
-        📋 Jobs — Today
+      <button className="btn btn-primary" onClick={() => choose("/week")}>
+        🗓 Week — what is on, and when
+      </button>
+      <button className="btn btn-ghost" onClick={() => choose("/today")}>
+        📋 Jobs — today's list
       </button>
       <button className="btn btn-ghost" onClick={() => choose("/dashboard")}>
         👥 Office — team &amp; setup
@@ -304,6 +309,8 @@ function Shell() {
           </>)}
         </div>
         <div className="row" style={{ gap: 14 }}>
+          {profile.role === "ops" && <Link to="/week" className="topbar-link">Week</Link>}
+          <Link to="/today" className="topbar-link">Jobs</Link>
           {profile.role === "ops" && <Link to="/dashboard" className="topbar-link">Office</Link>}
           <button className="topbar-link"
             onClick={async () => {
@@ -323,7 +330,14 @@ function Shell() {
       </div>
       <Notices profile={profile} />
       <Routes>
-        <Route path="/" element={<Today />} />
+        {/* Ops land on the week, because the first question in the morning
+            is what is happening on Thursday. Crew land on the list, because
+            theirs is what is outstanding and they read it on a phone. Both
+            screens stay reachable from the ribbon either way. */}
+        <Route path="/" element={profile.role === "ops" ? <Week /> : <Today />} />
+        <Route path="/week" element={<Week />} />
+        <Route path="/today" element={<Today />} />
+        <Route path="/job/new" element={<NewJob />} />
         <Route path="/job/:id" element={<Job />} />
         <Route path="/job/:id/shoot" element={<Capture />} />
         <Route path="/dashboard" element={<Dashboard />} />

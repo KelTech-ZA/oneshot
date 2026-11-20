@@ -400,6 +400,18 @@ console.log("\nthe document that comes out of it");
   }
 }
 
+// A final pass with the same read-only query handed to the user, so what they
+// paste into Supabase is something that has been run rather than something
+// that was typed out and looked plausible.
+console.log("\nthe check query the user runs against the live database");
+{
+  const rows = (await db.query(readFileSync("sqltest/_live-check.sql", "utf8"))).rows;
+  const bad = rows.filter((r) => /NOT OK/.test(r.result));
+  for (const r of rows) console.log(`  ${r.result} ${r.step}  ${r.what}`);
+  ok(rows.length >= 18 && bad.length === 0,
+     `all ${rows.length} checks pass against a database with 66-70 applied`);
+}
+
 await db.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

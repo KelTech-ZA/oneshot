@@ -21,14 +21,26 @@ async function fetchPdf(kind, id, download) {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("You have been signed out. Sign in and try again.");
 
-  const res = await fetch(`${FUNCTIONS_URL}/document-pdf`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${session.access_token}`,
-    },
-    body: JSON.stringify({ kind, id, download: !!download }),
-  });
+  let res;
+  try {
+    res = await fetch(`${FUNCTIONS_URL}/document-pdf`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ kind, id, download: !!download }),
+    });
+  } catch {
+    // A function that is not deployed is not a 404 you can read: the browser
+    // blocks the response for want of CORS headers and fetch rejects with a
+    // bare "Failed to fetch". Saying that to somebody who just pressed a
+    // button tells them nothing, so say the two things it is actually likely
+    // to be.
+    throw new Error(
+      "Could not reach the document service. Check your connection — and if " +
+      "this is a fresh deploy, the document-pdf function may not be live yet.");
+  }
 
   if (!res.ok) {
     // The function answers with JSON on the way out; anything else means it
@@ -42,6 +54,12 @@ async function fetchPdf(kind, id, download) {
   }
   return await res.blob();
 }
+
+// Failures here are reported with window.alert by default, the way Item.jsx
+// reports a failed photo attach. The first version handed them to the page's
+// message card instead - which sits at the TOP of the page, so pressing a
+// button two thirds of the way down a list of invoices scrolled the error
+// somewhere nobody was looking and read as the button doing nothing at all.
 
 /** Open it in a new tab. */
 export async function viewDocument(kind, id, onError) {

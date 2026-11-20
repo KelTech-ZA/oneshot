@@ -162,6 +162,29 @@ export default function Job() {
 
   const startJob = () => setJobStatus("in_progress");
 
+  // Reopening is its own RPC rather than another event type, because it is a
+  // status change with a rule attached - ops only, closed jobs only - and the
+  // database is where that rule belongs. It writes the reopened event itself.
+  const reopenJob = async () => {
+    const why = window.prompt(
+      `Reopen ${job.ref}?\n\n` +
+      `The job goes back to live work and crew can log events again. The close ` +
+      `stays in the log and a reopen is recorded next to it.\n\n` +
+      `Any invoice already raised is untouched.\n\n` +
+      `Reason (optional):`, "");
+    if (why === null) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("reopen_job", {
+        p_job: id, p_reason: why.trim() || null,
+      });
+      if (error) { window.alert("Could not reopen: " + error.message); return; }
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const logJobEvent = async (type) => {
     setBusy(true);
     try {
@@ -478,10 +501,26 @@ export default function Job() {
           </button>
         </div>
       )}
-      {isOps && (
+      {/* Closing used to be one tap, sitting among the ordinary event buttons,
+          and it is the only one that cannot be taken back by logging
+          something else. It asks now. */}
+      {isOps && job.status !== "closed" && (
         <button className="btn btn-warn" style={{ marginTop: 0, marginBottom: 12 }} disabled={busy}
-          onClick={() => logJobEvent("closed")}>
+          onClick={() => {
+            if (window.confirm(
+              `Close ${job.ref}?\n\n` +
+              `Crew will not be able to log events, add photos or upload documents ` +
+              `on it any more.\n\n` +
+              `An ops manager can reopen it afterwards.`)) logJobEvent("closed");
+          }}>
           Close Job
+        </button>
+      )}
+
+      {isOps && job.status === "closed" && (
+        <button className="btn btn-accent" style={{ marginTop: 0, marginBottom: 12 }} disabled={busy}
+          onClick={reopenJob}>
+          Reopen Job
         </button>
       )}
 
@@ -676,7 +715,7 @@ export default function Job() {
         </div>
       ))}
 
-      {!["in_progress", "completed", "closed", "cancelled"].includes(job.status) && (
+      {!["in_progress", "completed", "closed", "cancelled", "reopened"].includes(job.status) && (
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button className={job.status !== "pending_confirmation" ? "btn btn-ghost" : "btn btn-primary"}
