@@ -132,6 +132,13 @@ export default function Week({ office = false }) {
   const [docs, setDocs] = useState(null);     // its documents
   const [flag, setFlag] = useState(null);     // "open" | "new" | "errors" list
   const [bad, setBad] = useState([]);         // intake that produced no job
+  // Notifications you have seen. Per browser, never a database write: these
+  // are nudges, and one person clearing their own view must not clear
+  // everybody's. The key carries the job's status and date, so a job that
+  // changes - rescheduled, reopened, left to go stale again - raises its hand
+  // a second time rather than staying quiet forever on one dismissal.
+  const [hushed, setHushed] = useState(() => new Set());
+  const keyOf = (j, kind) => `wk-${kind}-${j.id}-${j.status}-${j.scheduled_date ?? "nodate"}`;
   const [note, setNote] = useState("Drag a job onto any day or time. Filter by client on the left.");
   const [railOpen, setRailOpen] = useState(false);
 
@@ -276,13 +283,29 @@ export default function Week({ office = false }) {
     return { grid: grid.map(layColumns), band, loose };
   }, [jobs, hidden, states, anchor, clients]);
 
-  const counts = useMemo(() => {
-    const all = jobs ?? [];
-    return {
-      open: all.filter((j) => stateOf(j, todayISO) === "open").length,
-      new: all.filter((j) => stateOf(j, todayISO) === "new").length,
-    };
-  }, [jobs]);
+  // What each dot is counting: everything in that state that has not been
+  // waved off. The calendar still draws all of it - dismissing a notification
+  // silences the nudge, it does not hide the work.
+  const noticed = (kind) => keepUndismissed(
+    (jobs ?? []).filter((j) => stateOf(j, todayISO) === kind),
+    (j) => keyOf(j, kind)).filter((j) => !hushed.has(keyOf(j, kind)));
+
+  const counts = useMemo(() => ({
+    open: noticed("open").length,
+    new: noticed("new").length,
+  }), [jobs, hushed]);
+
+  const hush = (j, kind) => {
+    const k = keyOf(j, kind);
+    remember(k);
+    setHushed((cur) => new Set(cur).add(k));
+  };
+  const hushAll = (kind) => {
+    const keys = noticed(kind).map((j) => keyOf(j, kind));
+    remember(keys);
+    setHushed((cur) => { const next = new Set(cur); keys.forEach((k) => next.add(k)); return next; });
+    setNote(`${keys.length} ${kind} ${keys.length === 1 ? "notice" : "notices"} dismissed. The work is still on the calendar.`);
+  };
 
   /* ── rescheduling by dragging ──────────────────────────────────────────
      Pointer events, not HTML5 drag-and-drop, which does not exist on a
@@ -442,9 +465,7 @@ export default function Week({ office = false }) {
     </button>
   );
 
-  const list = flag
-    ? jobs.filter((j) => stateOf(j, todayISO) === flag)
-    : [];
+  const list = (flag === "open" || flag === "new") ? noticed(flag) : [];
 
   return (
     <div className="wk">
@@ -698,11 +719,20 @@ export default function Week({ office = false }) {
             <button className="x" onClick={() => setFlag(null)}>ESC ✕</button>
           </header>
           <div className="inner">
-            <p className="wk-note">
-              Mail that reached intake in the last two weeks and produced no job —
-              unreadable, or the same request arriving twice. An intake pipeline
-              that loses work quietly is worse than none, because you stop checking.
-            </p>
+            <div className="wk-panelhead">
+              <p className="wk-note">
+                Mail that reached intake in the last two weeks and produced no job —
+                unreadable, or the same request arriving twice. An intake pipeline
+                that loses work quietly is worse than none, because you stop checking.
+              </p>
+              {bad.length > 0 && (
+                <button className="wk-dismissall" onClick={() => {
+                  remember(bad.map((m) => (isRepeat(m) ? `rep-${m.id}` : `msg-${m.id}`)));
+                  setNote(`${bad.length} intake notices dismissed. The messages are still on record.`);
+                  setBad([]);
+                }}>DISMISS ALL</button>
+              )}
+            </div>
             <div className="wk-plist">
               {bad.map((m) => {
                 const repeat = isRepeat(m);
@@ -755,11 +785,16 @@ export default function Week({ office = false }) {
             <button className="x" onClick={() => setFlag(null)}>ESC ✕</button>
           </header>
           <div className="inner">
-            <p className="wk-note">
-              {flag === "open"
-                ? "Waiting on a decision — flagged, past its date, or with no date at all."
-                : "Arrived and not confirmed yet. Confirm them, or cancel what should not have come."}
-            </p>
+            <div className="wk-panelhead">
+              <p className="wk-note">
+                {flag === "open"
+                  ? "Waiting on a decision — flagged, past its date, or with no date at all."
+                  : "Arrived and not confirmed yet. Confirm them, or cancel what should not have come."}
+              </p>
+              {list.length > 0 && (
+                <button className="wk-dismissall" onClick={() => hushAll(flag)}>DISMISS ALL</button>
+              )}
+            </div>
             <div className="wk-plist">
               {list.map((j) => (
                 <div key={j.id} className={`wk-pitem s-${stateOf(j, todayISO)}`} style={{ display: "block" }}>
@@ -773,15 +808,21 @@ export default function Week({ office = false }) {
                   </button>
                   {/* Confirming is the whole reason this list exists, so it
                       happens here rather than two pages away. */}
-                  {office && isOps && flag === "new" && (
-                    <div className="wk-act" style={{ marginTop: 8 }}>
+                  <div className="wk-act" style={{ marginTop: 8 }}>
+                    {office && isOps && flag === "new" && (<>
                       <button className="go" onClick={() => decide(j, "confirmed")}>CONFIRM</button>
                       <button onClick={() => decide(j, "cancelled")}>CANCEL</button>
-                    </div>
-                  )}
+                    </>)}
+                    <button onClick={() => hush(j, flag)}>DISMISS</button>
+                  </div>
                 </div>
               ))}
-              {list.length === 0 && <p className="wk-note">Nothing here. </p>}
+              {list.length === 0 && (
+                <p className="wk-note">
+                  {flag === "open" ? "Nothing waiting on a decision." : "Nothing new to confirm."}
+                  {" "}Anything dismissed comes back if the job changes.
+                </p>
+              )}
             </div>
           </div>
         </aside>

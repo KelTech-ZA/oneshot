@@ -1075,6 +1075,13 @@
     .wk-doc .ops button { font-family: var(--mono); font-size: 9px; padding: 3px 6px; border: 1px solid var(--line); color: var(--ink-soft); }
     .wk-doc .ops button:hover { color: var(--accent); border-color: var(--accent); }
 
+    .wk-panelhead { display: flex; align-items: flex-start; gap: 10px; }
+    .wk-dismissall {
+      flex: none; font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
+      color: var(--ink-soft); border: 1px solid var(--line); background: var(--card);
+      padding: 5px 8px; white-space: nowrap;
+    }
+    .wk-dismissall:hover { color: var(--accent); border-color: var(--accent); }
     .wk-plist { display: flex; flex-direction: column; gap: 1px; }
     .wk-pitem { display: flex; gap: 10px; align-items: flex-start; padding: 9px 8px; text-align: left; width: 100%; border-left: 3px solid var(--line); background: var(--card); }
     .wk-pitem:hover { background: var(--wk-sink); }

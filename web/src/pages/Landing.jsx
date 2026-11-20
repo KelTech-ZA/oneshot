@@ -281,10 +281,11 @@ export default function Landing({ onSignIn }) {
 
         <figure className="lp-shot">
         <img src="/shots/board.jpg" width="1536" height="700" loading="eager"
-             alt="The OneShot job board: a month calendar beside the week's jobs, each with its reference, status, crew and items." />
+             alt="The OneShot week: every job in its time slot from Monday to Sunday, work with a date but no time pinned above the grid, anything unscheduled waiting in the left rail to be dragged onto a day, client filters down the side, and counts of what needs a decision top right." />
         <figcaption className="muted">
-          A real week in Section 9's workspace. Client names, contacts and addresses
-          have been changed — everything else is the app as it runs.
+          The week as the app draws it. The clients and jobs here are invented —
+          a real week would publish somebody's artists and addresses. Everything
+          else is the app as it runs.
         </figcaption>
       </figure>
 
