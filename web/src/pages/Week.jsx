@@ -71,9 +71,15 @@ export function stateOf(j, todayISO) {
   return "scheduled";
 }
 
-// Overlapping jobs share the width of the day rather than covering each
-// other. Two crews out on a Thursday is a normal day, and a job hidden
-// underneath another one cannot be seen or clicked.
+// Overlapping jobs are laid in layers, not columns.
+//
+// Splitting the day into equal columns is tidy and useless: three jobs at the
+// same hour each get a third of a column, which is not enough width to read
+// the client off, so a glance at the week tells you there is work on Thursday
+// and nothing about what it is. A calendar instead lets each job keep most of
+// the width and lays the next one over it, shifted right - every job stays
+// readable, the one underneath keeps a visible edge to click, and the overlap
+// itself is the signal that two things run at once.
 export function layColumns(list) {
   const sorted = [...list].sort((a, b) => a.win.start - b.win.start || a.win.end - b.win.end);
   const out = [];
@@ -592,19 +598,25 @@ export default function Week() {
                     {day.map(({ j, win, col, of }) => {
                       const top = (win.start / 60 - DAY_START) * HOUR;
                       const h = Math.max((win.end - win.start) / 60 * HOUR - 2, 22);
+                      // How far each layer is shifted right. Wide enough that
+                      // the job underneath shows its colour, its time and the
+                      // first word or two; never so wide that the top one is
+                      // a sliver.
+                      const step = of > 1 ? Math.min(24, 60 / (of - 1)) : 0;
+                      const indent = col * step;
                       return (
                         <button key={j.id}
-                          className={`wk-job s-${stateOf(j, todayISO)}${peek?.id === j.id ? " sel" : ""}`}
+                          className={`wk-job s-${stateOf(j, todayISO)}${peek?.id === j.id ? " sel" : ""}${col > 0 ? " layered" : ""}`}
                           style={{
-                            top, height: h,
-                            left: `calc(${(col * 100 / of).toFixed(3)}% + 2px)`,
-                            width: `calc(${(100 / of).toFixed(3)}% - 4px)`,
+                            top, height: h, zIndex: 2 + col,
+                            left: `calc(${indent.toFixed(2)}% + 2px)`,
+                            width: `calc(${(100 - indent).toFixed(2)}% - 4px)`,
                           }}
                           onPointerDown={(e) => startLift(e, j)}
                           onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
                           <div className="t">{win.exact ? fmt(win.start) : `${fmt(win.start)}?`}</div>
                           <div className="n">{titleOf(j)}</div>
-                          {h > 44 && of === 1 &&
+                          {h > 44 &&
                             <div className="c">{clientName(clientOf(j)) ?? j.client_ref ?? j.ref}</div>}
                         </button>
                       );

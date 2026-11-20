@@ -777,6 +777,29 @@
       border: 1px solid var(--line); padding: 4px 9px; font-size: 10.5px;
       letter-spacing: .12em; text-transform: uppercase;
     }
+    .topbar { gap: 10px; }
+    .topbar .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+
+    /* The ribbon of places. The tab you are on is inverted rather than
+       underlined: at 11px in mono, a 1px underline is not a signal anybody
+       notices at a glance across a room. */
+    .appnav { display: flex; gap: 2px; margin-right: auto; overflow-x: auto; scrollbar-width: none; }
+    .appnav::-webkit-scrollbar { display: none; }
+    .appnav-tab {
+      font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--ink-soft);
+      padding: 6px 10px; border: 1px solid transparent; white-space: nowrap; text-decoration: none;
+    }
+    .appnav-tab::before { content: "▪ "; color: var(--line); }
+    .appnav-tab:hover { color: var(--ink); background: var(--card); }
+    .appnav-tab[aria-current="page"] { color: var(--card); background: var(--ink); border-color: var(--ink); }
+    .appnav-tab[aria-current="page"]::before { color: var(--card); }
+    .appacct { flex: none; }
+    .topbar-link.out:hover { color: var(--warn); }
+    @media (max-width: 700px) {
+      /* On a phone the ribbon is the tabs; the account lives at the end of
+         the scroll rather than squeezing them. */
+      .appacct { display: none; }
+    }
 
     h1 {
       font-size: 19px; font-weight: 700; letter-spacing: .14em;
@@ -945,6 +968,15 @@
     .wk-railbtn:hover { color: var(--accent); }
 
     .wk-week { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--card); }
+    /* A page that lives in the same shell as the week but scrolls its own
+       content: Office, and anything else that gets the rail later. */
+    .wk-main { overflow-y: auto; min-height: 0; min-width: 0; background: var(--bg); }
+    .wk-main > .page { padding-top: 14px; }
+    .wk-main h2:first-of-type { margin-top: 6px; }
+    /* In the rail these are links, not filter toggles - no swatch, and the
+       cursor shows on hover rather than meaning "switched on". */
+    .wk-rail a.wk-frow, a.wk-new { text-decoration: none; }
+    .wk-rail a.wk-frow:hover .cursor { opacity: 1; }
     .wk-cols, .wk-band, .wk-grid { display: grid; grid-template-columns: 52px repeat(7, minmax(0, 1fr)); }
     .wk-cols { border-bottom: 1px solid var(--line); }
     .wk-dayhead { padding: 7px 8px; border-left: 1px solid var(--line); text-align: center; }
@@ -986,6 +1018,9 @@
     .wk-job.s-new { border-left-color: var(--accent); background: var(--wk-new); }
     .wk-job.s-done { border-left-color: var(--ok); background: var(--wk-done); color: var(--ink-soft); }
     .wk-job.sel { outline: 1.5px solid var(--ink); outline-offset: -1px; }
+    /* A job laid over another one needs an edge, or the two tints run
+       together and read as one long job. */
+    .wk-job.layered { box-shadow: -1px 0 0 var(--line), 0 2px 8px rgba(16,19,20,.10); }
 
     .wk-chip {
       font-family: var(--mono); font-size: 9px; letter-spacing: .06em; padding: 4px 5px;

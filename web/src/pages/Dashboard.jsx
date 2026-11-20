@@ -6,7 +6,6 @@ import { JobStamp } from "./Today";
 import JobList from "./JobList";
 import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
 import { useRefreshOnReturn } from "../lib/refresh";
-import ClashWarning from "./ClashWarning";
 import JobSearch from "./JobSearch";
 import JobFlags from "./JobFlags";
 
@@ -33,8 +32,6 @@ export default function Dashboard() {
   const [jobTypes, setJobTypes] = useState([]);
   const [unread, setUnread] = useState([]);
   const [repeats, setRepeats] = useState([]);
-  const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({ type: "move", client_ref: "", origin: "", destination: "", date: "", time: "", items: "" });
 
   const load = () =>
     supabase.from("jobs").select("*, line_items(count), messages!jobs_source_message_id_fkey(sender, channel)")
@@ -116,25 +113,9 @@ export default function Dashboard() {
     load();
   };
 
-  const createJob = async () => {
-    const { data: job, error } = await supabase.from("jobs").insert({
-      tenant_id: profile.tenant_id, type: form.type,
-      origin: form.origin ? { address: form.origin } : null,
-      destination: form.destination ? { address: form.destination } : null,
-      client_ref: form.client_ref || null,
-      scheduled_date: form.date || null, time_window: form.time || null,
-      status: "confirmed", created_by: profile.id,
-    }).select().single();
-    if (error || !job) {
-      window.alert("Could not create job: " + (error?.message ?? "unknown error"));
-      return;
-    }
-    const items = form.items.split("\n").map((s) => s.trim()).filter(Boolean)
-      .map((description) => ({ tenant_id: profile.tenant_id, job_id: job.id, description }));
-    if (items.length) await supabase.from("line_items").insert(items);
-    setShowNew(false); setForm({ type: "move", origin: "", destination: "", date: "", items: "" });
-    load();
-  };
+  // Creating a job lives on its own page now - see pages/NewJob.jsx. The
+  // version that used to live here asked for four fields and never asked who
+  // the customer was, which is how invoices ended up with no client on them.
 
   const [team, setTeam] = useState([]);
   const [showTeam, setShowTeam] = useState(false);
@@ -178,78 +159,75 @@ export default function Dashboard() {
     setLog(data ?? []); setShowLog(true);
   };
 
+  // The sections of this page, for the rail. Office is long - pending work,
+  // the team, intake setup and every job in the workspace - and before this
+  // the only way between them was the scrollbar.
+  const sections = [
+    ["office-pending", "Pending confirmation", pending.length],
+    ["office-team", "Team & access", null],
+    ["office-intake", "Intake & setup", null],
+    ["office-jobs", "All jobs", rest.length],
+  ];
+  const jump = (id) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+
   return (
-    <div className="page">
-      <h1>Office</h1>
-      <Link to="/settings/types" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Edit job types &amp; events
-      </Link>
-      <Link to="/settings/clients" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Clients
-      </Link>
-      <Link to="/settings/billing" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Billing details
-      </Link>
-      <Link to="/statements" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Client statements
-      </Link>
-      {/* Billing that did not start from a job: a deposit, a storage month,
-          anything invoiced before the work is booked — and the place to put a
-          job onto one of those once the job exists. */}
-      <Link to="/quotes" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Quotes
-      </Link>
-      <Link to="/invoices" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
-        Invoices
-      </Link>
-      {/* Everyone needs this and nobody goes looking for it under Settings.
-          It sits with the other setup links because that is where somebody
-          onboarding a new crew member will be. */}
+    <div className="wk">
+      <div className="wk-bar">
+        <h1 className="wk-h1">OFFICE</h1>
+        <span className="wk-range">{profile.workspace ?? "Workspace"} · team, setup and every job</span>
+        <div className="wk-flags">
+          {pending.length > 0 && (
+            <button className="wk-flag on" onClick={() => jump("office-pending")}>
+              <span className="wk-dot new" />{pending.length} TO CONFIRM
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="wk-body">
+        <aside className="wk-rail">
+          <Link className="wk-new" to="/job/new"><b>+</b> NEW JOB</Link>
+          <h2>On this page</h2>
+          <div className="wk-filters">
+            {sections.map(([id, label, n]) => (
+              <button key={id} className="wk-frow" aria-pressed="true" onClick={() => jump(id)}>
+                <span className="cursor">▸</span>
+                <span className="name">{label}</span>
+                {n != null && <span className="count">{n}</span>}
+              </button>
+            ))}
+          </div>
+          <h2>Settings</h2>
+          <div className="wk-filters">
+            <Link className="wk-frow" to="/settings/clients"><span className="cursor">▸</span><span className="name">Clients</span></Link>
+            <Link className="wk-frow" to="/settings/types"><span className="cursor">▸</span><span className="name">Job types & rates</span></Link>
+            <Link className="wk-frow" to="/settings/billing"><span className="cursor">▸</span><span className="name">Billing & letterhead</span></Link>
+            <Link className="wk-frow" to="/statements"><span className="cursor">▸</span><span className="name">Statements</span></Link>
+          </div>
+        </aside>
+
+        <main className="wk-main">
+          <div className="page">
+      {/* The settings these used to link to are in the rail now, and quotes
+          and invoices are tabs in the ribbon - seven buttons repeating the
+          chrome around them is just a second menu to keep in step.
+
+          Creating a job moved to its own page, which asks for the customer,
+          the items and the paperwork rather than four fields; the rail's
+          NEW JOB goes there. The form that used to sit here is gone with it. */}
       <Link to="/setup/app" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
         Put OneShot on your phone
       </Link>
-      {/* Only for the site owner, and only once the database has said so. The
-          link would be harmless either way - the page and every function behind
-          it check again - but a customer seeing "Landing page feedback" in their
-          own office would reasonably wonder whose app this is. */}
+      {/* Only for the site owner, and only once the database has said so. */}
       {siteAdmin && (
         <Link to="/feedback" className="btn btn-ghost" style={{ textDecoration: "none", marginTop: 0, marginBottom: 12 }}>
           Landing page feedback{waitingCount > 0 ? ` · ${waitingCount} waiting` : ""}
         </Link>
       )}
 
-      <button className="btn btn-primary" onClick={() => setShowNew(!showNew)}>
-        {showNew ? "Cancel" : "+ New job"}
-      </button>
-      {showNew && (
-        <div className="card" style={{ marginTop: 10 }}>
-          <label>Type</label>
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {jobTypes.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-          </select>
-          <label>Client reference</label>
-          <input value={form.client_ref} placeholder="Stevenson Gallery / Wendy, PO-4471"
-            onChange={(e) => setForm({ ...form, client_ref: e.target.value })} />
-          <label>Origin address</label>
-          <input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} />
-          <label>Destination address</label>
-          <input value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
-          <label>Date</label>
-          <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
-          <label>Time window</label>
-          <input value={form.time} placeholder="09:00-12:00"
-            onChange={(e) => setForm({ ...form, time: e.target.value })} />
-          <ClashWarning date={form.date} timeWindow={form.time} />
-          <label>Items — one per line</label>
-          <textarea rows={3} value={form.items} onChange={(e) => setForm({ ...form, items: e.target.value })}
-            placeholder={"Kentridge charcoal drawing 80×60\nCrated bronze, 40kg"} />
-          <button className="btn btn-accent" onClick={createJob}>Create job</button>
-        </div>
-      )}
-
       <JobSearch />
 
-      <h2>Pending confirmation ({pending.length})</h2>
+      <h2 id="office-pending">Pending confirmation ({pending.length})</h2>
       {pending.length === 0 && <div className="muted">Nothing waiting. Inbound requests land here.</div>}
       {pending.map((j) => (
         <div className="card" key={j.id}>
@@ -278,7 +256,7 @@ export default function Dashboard() {
         </div>
       ))}
 
-      <h2>Team</h2>
+      <h2 id="office-team">Team</h2>
       <button className="card" onClick={showTeam ? () => setShowTeam(false) : loadTeam} style={{ fontWeight: 600 }}>
         {showTeam ? "Hide team" : "Manage team — add crew and office accounts"}
       </button>
@@ -435,7 +413,7 @@ export default function Dashboard() {
         </>
       )}
 
-      <h2>Intake</h2>
+      <h2 id="office-intake">Intake</h2>
       <Link className="card" to="/setup/email" style={{ fontWeight: 600 }}>
         ✉ Email intake setup — Outlook, Gmail, Yahoo, iCloud &amp; more
       </Link>
@@ -463,8 +441,11 @@ export default function Dashboard() {
       ))}
       {showLog && log.length === 0 && <div className="muted">No inbound messages yet.</div>}
 
-      <h2>All jobs</h2>
+      <h2 id="office-jobs">All jobs</h2>
       <JobList jobs={rest} canDelete />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

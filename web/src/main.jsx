@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "./lib/supabase";
 import { pendingCount, syncNow, getLastSyncError, clearLastSyncError } from "./lib/queue";
 import Login from "./pages/Login";
@@ -54,6 +54,29 @@ function Welcome({ profile, onDone }) {
         You can switch anytime from the top bar.
       </p>
     </div>
+  );
+}
+
+const TABS = [
+  ["/week", "WEEK", true], ["/today", "JOBS", false], ["/quotes", "QUOTES", true],
+  ["/invoices", "INVOICES", true], ["/settings/clients", "CLIENTS", true],
+  ["/dashboard", "OFFICE", true],
+];
+
+function AppNav({ role }) {
+  const { pathname } = useLocation();
+  const here = (to) => pathname === to || pathname.startsWith(to + "/") ||
+    // The week is what "/" shows ops, so the tab has to light up there too.
+    (to === "/week" && pathname === "/" && role === "ops") ||
+    (to === "/today" && pathname === "/" && role !== "ops");
+  return (
+    <nav className="appnav">
+      {TABS.filter(([, , opsOnly]) => !opsOnly || role === "ops").map(([to, label]) => (
+        <Link key={to} to={to} className="appnav-tab" aria-current={here(to) ? "page" : undefined}>
+          {label}
+        </Link>
+      ))}
+    </nav>
   );
 }
 
@@ -308,10 +331,15 @@ function Shell() {
             )}
           </>)}
         </div>
-        <div className="row" style={{ gap: 14 }}>
-          {profile.role === "ops" && <Link to="/week" className="topbar-link">Week</Link>}
-          <Link to="/today" className="topbar-link">Jobs</Link>
-          {profile.role === "ops" && <Link to="/dashboard" className="topbar-link">Office</Link>}
+
+        {/* Where everything is. One ribbon across every screen, with the one
+            you are on inverted - so Office is the same product as the week
+            rather than a different place you fell into. Crew get the list and
+            nothing else: the rest is ops work and the database refuses them
+            anyway, so offering it would only be a row of dead ends. */}
+        <AppNav role={profile.role} />
+
+        <div className="row appacct" style={{ gap: 14 }}>
           <button className="topbar-link"
             onClick={async () => {
               const p = window.prompt("New password (min 8 characters):");
@@ -322,7 +350,7 @@ function Shell() {
             }}>
             Password
           </button>
-          <button className="topbar-link"
+          <button className="topbar-link out"
             onClick={async () => { await supabase.auth.signOut(); nav("/"); }}>
             Sign out
           </button>
