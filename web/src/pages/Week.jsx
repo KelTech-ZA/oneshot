@@ -25,7 +25,7 @@ import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
 
 const DONE = ["completed", "closed", "cancelled"];
 const DAY_START = 7, DAY_END = 21;          // 07:00 to 21:00
-const HOUR = 56;                            // px per hour, matches --wk-hour
+const HOUR = 75;                            // px per hour, matches --wk-hour
 const SNAP = 15;                            // minutes
 const DEFAULT_MINUTES = 120;                // what lib/schedule assumes too
 
@@ -114,7 +114,34 @@ export function layColumns(list) {
 // and nothing else; ops get the three dots and the rail of office work. It is
 // deliberately one component - the moment Office is "the calendar, but
 // rebuilt", the two drift and only one of them gets fixed.
+// The week fills whatever is left below whatever happens to be above it -
+// the ribbon, and the notices strip when there is one. Measuring beats
+// guessing: a hard-coded 56px for the top bar is right until somebody adds a
+// line to it, and then the grid hangs off the bottom of the screen and the
+// page scrolls the header away.
+export function useFitViewport() {
+  const el = useRef(null);
+  useEffect(() => {
+    const fit = () => {
+      if (!el.current) return;
+      const top = el.current.getBoundingClientRect().top + window.scrollY;
+      // flex-grow beats height on a flex item, so the shell has to stop
+      // growing before a height means anything to it. Without this line the
+      // box reports the height you asked for and lays out at the height of
+      // its contents, which is a confusing half-hour to debug.
+      el.current.style.flex = "0 0 auto";
+      el.current.style.height = `${Math.max(320, window.innerHeight - top)}px`;
+    };
+    fit();
+    addEventListener("resize", fit);
+    const t = setTimeout(fit, 150);        // after fonts settle
+    return () => { removeEventListener("resize", fit); clearTimeout(t); };
+  });
+  return el;
+}
+
 export default function Week({ office = false }) {
+  const shell = useFitViewport();
   const { profile, session } = useContext(Ctx);
   const nav = useNavigate();
   const isOps = profile.role === "ops";
@@ -468,7 +495,7 @@ export default function Week({ office = false }) {
   const list = (flag === "open" || flag === "new") ? noticed(flag) : [];
 
   return (
-    <div className="wk">
+    <div className="wk" ref={shell}>
       <div className="wk-bar">
         <button className="wk-railtog" onClick={() => setRailOpen(!railOpen)}>▪ FILTERS</button>
         <h1 className="wk-h1">WEEK {weekNo}</h1>
@@ -530,7 +557,8 @@ export default function Week({ office = false }) {
                   <button key={j.id} className={`wk-chip s-${stateOf(j, todayISO)}`}
                     onPointerDown={(e) => startLift(e, j)}
                     onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
-                    <span className="u">NO DATE</span> · {j.ref} {titleOf(j)}
+                    <span className="u">NO DATE</span> · {j.ref}
+                    <span className="what">{titleOf(j)}</span>
                   </button>
                 ))}
               </div>
@@ -538,7 +566,12 @@ export default function Week({ office = false }) {
             </>
           )}
 
-          <h2>Clients</h2>
+          <h2 className="wk-h2big">Filters</h2>
+          <p className="wk-hint" style={{ margin: "-4px 0 10px" }}>
+            Click one to show or hide its jobs on the calendar.
+          </p>
+
+          <h3 className="wk-h3">Clients</h3>
           <div className="wk-filters scrolls">
             {railClients.map((c) => (
               <div key={c.id} className="wk-frowwrap">
@@ -585,18 +618,7 @@ export default function Week({ office = false }) {
             ▪ ALL / NONE
           </button>
 
-          {office && isOps && (<>
-            <h2>Office</h2>
-            <div className="wk-filters">
-              <Link className="wk-frow" to="/office/setup"><span className="cursor">▸</span><span className="name">Team &amp; setup</span></Link>
-              <Link className="wk-frow" to="/settings/clients"><span className="cursor">▸</span><span className="name">Clients</span></Link>
-              <Link className="wk-frow" to="/settings/types"><span className="cursor">▸</span><span className="name">Job types &amp; rates</span></Link>
-              <Link className="wk-frow" to="/settings/billing"><span className="cursor">▸</span><span className="name">Billing &amp; letterhead</span></Link>
-              <Link className="wk-frow" to="/statements"><span className="cursor">▸</span><span className="name">Statements</span></Link>
-            </div>
-          </>)}
-
-          <h2>Job types</h2>
+          <h3 className="wk-h3">Job types</h3>
           <div className="wk-filters">
             {[["scheduled", "Scheduled"], ["open", "Open — needs a decision"],
               ["new", "New — not confirmed"], ["done", "Finished"]].map(([k, label]) => (
@@ -608,6 +630,20 @@ export default function Week({ office = false }) {
               </button>
             ))}
           </div>
+
+          {/* Not a filter, so it does not sit among them. */}
+          {office && isOps && (
+            <div className="wk-officeblock">
+              <h2 className="wk-h2big">Office</h2>
+              <div className="wk-filters">
+                <Link className="wk-frow" to="/office/setup"><span className="cursor">▸</span><span className="name">Team &amp; setup</span></Link>
+                <Link className="wk-frow" to="/settings/clients"><span className="cursor">▸</span><span className="name">Clients</span></Link>
+                <Link className="wk-frow" to="/settings/types"><span className="cursor">▸</span><span className="name">Job types &amp; rates</span></Link>
+                <Link className="wk-frow" to="/settings/billing"><span className="cursor">▸</span><span className="name">Billing &amp; letterhead</span></Link>
+                <Link className="wk-frow" to="/statements"><span className="cursor">▸</span><span className="name">Statements</span></Link>
+              </div>
+            </div>
+          )}
         </aside>
 
         <main className="wk-week">
@@ -634,7 +670,8 @@ export default function Week({ office = false }) {
                   <button key={j.id} className={`wk-chip s-${stateOf(j, todayISO)}`}
                     onPointerDown={(e) => startLift(e, j)}
                     onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
-                    <span className="u">UNASSIGNED</span> · {titleOf(j)}
+                    <span className="u">UNASSIGNED</span> · {j.ref}
+                    <span className="what">{titleOf(j)}</span>
                   </button>
                 ))}
               </div>
@@ -685,7 +722,9 @@ export default function Week({ office = false }) {
                           }}
                           onPointerDown={(e) => startLift(e, j)}
                           onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
-                          <div className="t">{win.exact ? fmt(win.start) : `${fmt(win.start)}?`}</div>
+                          <div className="t">
+                            {win.exact ? fmt(win.start) : `${fmt(win.start)}?`} · {j.ref}
+                          </div>
                           <div className="n">{titleOf(j)}</div>
                           {h > 44 &&
                             <div className="c">{clientName(clientOf(j)) ?? j.client_ref ?? j.ref}</div>}

@@ -848,7 +848,7 @@
        Only the tints below are new, and each is a wash of a colour the app
        already uses. */
     :root {
-      --wk-hour: 56px;              /* must match HOUR in Week.jsx */
+      --wk-hour: 75px;              /* must match HOUR in Week.jsx */
       --wk-soft: #F6F5F2;           /* chrome: rails and bars */
       --wk-sink: #ECEAE4;           /* recessed strips inside the chrome */
       --wk-hair: #F1EFEA;           /* hour lines inside the grid */
@@ -905,6 +905,18 @@
       font-family: var(--mono); font-size: 10px; letter-spacing: .2em; color: var(--ink-soft);
       font-weight: 500; margin: 20px 0 8px; text-transform: uppercase;
     }
+    /* A group heading, so "Filters" reads as a label over the two lists under
+       it rather than as a third list of its own. Nobody knows a column of
+       client names is a filter unless something says so. */
+    .wk-rail .wk-h2big {
+      font-size: 11px; color: var(--ink); letter-spacing: .22em; font-weight: 600;
+      border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 8px;
+    }
+    .wk-rail .wk-h3 {
+      font-family: var(--mono); font-size: 9.5px; letter-spacing: .16em; color: var(--ink-soft);
+      text-transform: uppercase; font-weight: 500; margin: 14px 0 6px;
+    }
+    .wk-officeblock { margin-top: 26px; }
     .wk-hint { font-size: 11.5px; color: var(--ink-soft); margin: 6px 0 0; }
 
     /* the only filled button on the screen */
@@ -1014,7 +1026,7 @@
       font-size: 11.5px; line-height: 1.3; cursor: grab; touch-action: none;
     }
     .wk-job:hover { filter: brightness(.97); }
-    .wk-job .t { font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); }
+    .wk-job .t { font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wk-job .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wk-job .c { color: var(--ink-soft); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wk-job.s-open { border-left-color: var(--warn); background: var(--wk-open); }
@@ -1026,10 +1038,15 @@
     .wk-job.layered { box-shadow: -1px 0 0 var(--line), 0 2px 8px rgba(16,19,20,.10); }
 
     .wk-chip {
-      font-family: var(--mono); font-size: 9px; letter-spacing: .06em; padding: 4px 5px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: .06em; padding: 4px 6px;
       border-left: 3px solid var(--ink-soft); background: var(--wk-sched); text-align: left;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; width: 100%;
-      cursor: grab; touch-action: none;
+      display: block; width: 100%; cursor: grab; touch-action: none; line-height: 1.35;
+    }
+    /* The job's own words, under its reference. Clipped at one line, because
+       a band of three-line chips pushes the calendar off the screen. */
+    .wk-chip .what {
+      display: block; font-family: var(--sans); font-size: 11px; letter-spacing: 0;
+      color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .wk-chip.s-open { border-left-color: var(--warn); background: var(--wk-open); }
     .wk-chip.s-new { border-left-color: var(--accent); background: var(--wk-new); }

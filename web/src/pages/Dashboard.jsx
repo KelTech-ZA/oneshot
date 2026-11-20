@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { Ctx } from "../main";
+import { useFitViewport } from "./Week";
 import { JobStamp } from "./Today";
 import JobList from "./JobList";
 import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
@@ -26,6 +27,7 @@ export const refsIn = (t) => [...String(t ?? "").matchAll(/JOB-\d{4}-\d+/g)].map
 
 export default function Dashboard() {
   const { profile } = useContext(Ctx);
+  const shell = useFitViewport();
   const [siteAdmin, setSiteAdmin] = useState(false);
   const [waitingCount, setWaitingCount] = useState(0);
   const [jobs, setJobs] = useState([]);
@@ -171,7 +173,7 @@ export default function Dashboard() {
   const jump = (id) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   return (
-    <div className="wk">
+    <div className="wk" ref={shell}>
       <div className="wk-bar">
         <h1 className="wk-h1">TEAM &amp; SETUP</h1>
         <span className="wk-range">{profile.workspace ?? "Workspace"} · people, intake and every job</span>
