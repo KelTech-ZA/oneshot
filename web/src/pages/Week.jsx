@@ -122,6 +122,21 @@ export default function Week() {
   const [note, setNote] = useState("Drag a job onto any day or time. Filter by client on the left.");
   const [railOpen, setRailOpen] = useState(false);
 
+  // Customers pinned to the filter list by hand. The list offers whoever has
+  // work this week, which is the useful default and no help at all when the
+  // client you want to watch has nothing on yet - so these are added on top
+  // and kept. Per workspace, because Section 9's customers are not the
+  // gallery's and the two share this browser.
+  const PINS = `oneshot_week_clients_${profile.tenant_id}`;
+  const [pinned, setPinned] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(PINS) ?? "[]")); }
+    catch { return new Set(); }
+  });
+  const savePins = (next) => {
+    setPinned(next);
+    try { localStorage.setItem(PINS, JSON.stringify([...next])); } catch { /* private mode */ }
+  };
+
   const todayISO = localISO(new Date());
   const from = localISO(anchor), to = localISO(addDays(anchor, 6));
 
@@ -189,11 +204,22 @@ export default function Week() {
       const id = clientOf(j) ?? "none";
       tally.set(id, (tally.get(id) ?? 0) + 1);
     }
-    const out = [...tally.entries()]
-      .map(([id, n]) => ({ id, name: id === "none" ? "No client set" : (clientName(id) ?? "Unknown client"), n }))
+    // A pinned customer stays on the list through a quiet week, reading 0,
+    // which is itself worth seeing.
+    for (const id of pinned) if (!tally.has(id)) tally.set(id, 0);
+
+    return [...tally.entries()]
+      .map(([id, n]) => ({
+        id, n, pinned: pinned.has(id),
+        name: id === "none" ? "No client set" : (clientName(id) ?? "Unknown client"),
+      }))
       .sort((a, b) => (a.id === "none" ? 1 : b.id === "none" ? -1 : a.name.localeCompare(b.name)));
-    return out;
-  }, [jobs, clients, hidden]);
+  }, [jobs, clients, hidden, pinned]);
+
+  // Everyone not already on the list, for the picker.
+  const addable = useMemo(
+    () => clients.filter((c) => !railClients.some((r) => r.id === c.id)),
+    [clients, railClients]);
 
   // Both sides at local noon, then floor: a difference of 23 or 25 hours is
   // still one day, and rounding a half-day lands a Monday job on Tuesday.
@@ -447,22 +473,47 @@ export default function Week() {
           )}
 
           <h2>Clients</h2>
-          <div className="wk-filters">
+          <div className="wk-filters scrolls">
             {railClients.map((c) => (
-              <button key={c.id} className="wk-frow" aria-pressed={!hidden.has(c.id)}
-                onClick={() => {
-                  const next = new Set(hidden);
-                  next.has(c.id) ? next.delete(c.id) : next.add(c.id);
-                  setHidden(next);
-                }}>
-                <span className="cursor">▸</span>
-                <span className="swatch" />
-                <span className="name">{c.name}</span>
-                <span className="count">{c.n}</span>
-              </button>
+              <div key={c.id} className="wk-frowwrap">
+                <button className="wk-frow" aria-pressed={!hidden.has(c.id)}
+                  onClick={() => {
+                    const next = new Set(hidden);
+                    next.has(c.id) ? next.delete(c.id) : next.add(c.id);
+                    setHidden(next);
+                  }}>
+                  <span className="cursor">▸</span>
+                  <span className="swatch" />
+                  <span className="name">{c.name}</span>
+                  <span className="count">{c.n}</span>
+                </button>
+                {/* Only a pinned customer can be taken off: the ones with work
+                    this week are here because the week put them here, and
+                    removing one would just hide jobs with no way back. */}
+                {c.pinned && (
+                  <button className="wk-unpin" title={`Take ${c.name} off the list`}
+                    onClick={() => {
+                      const next = new Set(pinned); next.delete(c.id); savePins(next);
+                      const show = new Set(hidden); show.delete(c.id); setHidden(show);
+                    }}>✕</button>
+                )}
+              </div>
             ))}
             {railClients.length === 0 && <p className="wk-hint">No jobs this week.</p>}
           </div>
+
+          {addable.length > 0 && (
+            <select className="wk-add" value=""
+              onChange={(e) => {
+                if (!e.target.value) return;
+                const next = new Set(pinned); next.add(e.target.value); savePins(next);
+                setNote(`${clientName(e.target.value)} added to the filters.`);
+              }}>
+              <option value="">＋ ADD A CLIENT…</option>
+              {addable.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+
           <button className="wk-railbtn"
             onClick={() => setHidden(hidden.size ? new Set() : new Set(railClients.map((c) => c.id)))}>
             ▪ ALL / NONE

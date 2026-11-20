@@ -842,6 +842,25 @@
 
     .wk-loose { display: flex; flex-direction: column; gap: 3px; }
     .wk-filters { display: flex; flex-direction: column; gap: 1px; }
+    /* Six rows, then it scrolls. A workspace with thirty customers would
+       otherwise push the job-type filters off the bottom of the rail. */
+    .wk-filters.scrolls { max-height: 222px; overflow-y: auto; overscroll-behavior: contain; }
+    .wk-filters.scrolls::-webkit-scrollbar { width: 6px; }
+    .wk-filters.scrolls::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+    .wk-frowwrap { display: flex; align-items: center; }
+    .wk-frowwrap .wk-frow { min-width: 0; flex: 1; }
+    .wk-unpin {
+      flex: none; font-family: var(--mono); font-size: 10px; color: var(--ink-soft);
+      padding: 4px 6px; opacity: 0;
+    }
+    .wk-frowwrap:hover .wk-unpin { opacity: 1; }
+    .wk-unpin:hover { color: var(--warn); }
+    .wk-add {
+      width: 100%; margin-top: 6px; font-family: var(--mono); font-size: 10px;
+      letter-spacing: .1em; color: var(--accent); background: var(--card);
+      border: 1px dashed var(--line); padding: 7px 8px; cursor: pointer;
+    }
+    .wk-add:hover { border-color: var(--accent); }
     .wk-frow {
       display: flex; align-items: center; gap: 9px; padding: 6px 8px 6px 4px;
       text-align: left; width: 100%; font-size: 13px; color: var(--ink-soft);
