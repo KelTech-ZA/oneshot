@@ -7,6 +7,7 @@ import { parseWindow, fmt } from "../lib/schedule";
 import { localISO } from "./JobCalendar";
 import { isRepeat, withoutTag, refsIn } from "./Dashboard";
 import { dismiss as remember, keepUndismissed } from "../lib/dismissed";
+import { subscribeNotices } from "./Notices";
 
 // The week, as a calendar.
 //
@@ -28,6 +29,23 @@ const DAY_START = 7, DAY_END = 21;          // 07:00 to 21:00
 const HOUR = 75;                            // px per hour, matches --wk-hour
 const SNAP = 15;                            // minutes
 const DEFAULT_MINUTES = 120;                // what lib/schedule assumes too
+
+// A workspace's own work - the jobs with no customer on them - carries the
+// workspace's own colour, so you can tell at a glance which of these are
+// yours and which belong to somebody who is paying for them. Derived from
+// the workspace id, so every workspace has a stable colour of its own
+// without anyone having to choose one, and Section 9's is not Southern
+// Guild's. Subtle on purpose: the loud colours belong to the states that
+// need a decision.
+const WS_COLOURS = [
+  ["#3d6b8f", "#edf2f6"], ["#6b4fa8", "#f1eef7"], ["#2f7d62", "#ebf4f0"],
+  ["#8f6a2a", "#f7f1e7"], ["#8f3d5c", "#f8edf1"], ["#4a6b2f", "#eff4e9"],
+];
+export function wsColour(id) {
+  let h = 0;
+  for (const ch of String(id ?? "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return WS_COLOURS[h % WS_COLOURS.length];
+}
 
 const DOW = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 const MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY",
@@ -168,6 +186,9 @@ export default function Week({ office = false }) {
   const keyOf = (j, kind) => `wk-${kind}-${j.id}-${j.status}-${j.scheduled_date ?? "nodate"}`;
   const [note, setNote] = useState("Drag a job onto any day or time. Filter by client on the left.");
   const [railOpen, setRailOpen] = useState(false);
+  const [notices, setNotices] = useState({ list: [], dismiss: () => {}, dismissAll: () => {} });
+  const [busyDays, setBusyDays] = useState(new Set());   // days with work, for the month
+  const [ink, tint] = wsColour(profile.tenant_id);
 
   // Customers pinned to the filter list by hand. The list offers whoever has
   // work this week, which is the useful default and no help at all when the
@@ -233,6 +254,19 @@ export default function Week({ office = false }) {
     setBad(keepUndismissed(noted, (m) => (isRepeat(m) ? `rep-${m.id}` : `msg-${m.id}`)));
   };
   useEffect(() => { loadBad(); }, [office]);
+
+  // The notice stack lives in the shell; this is where it gets shown.
+  useEffect(() => subscribeNotices(setNotices), []);
+
+  // Which days in the month on the left have work on them. The dots are how
+  // you find the week you are looking for without opening four of them.
+  useEffect(() => {
+    const first = mondayOf(new Date(miniMonth.getFullYear(), miniMonth.getMonth(), 1));
+    const last = addDays(first, 41);
+    supabase.from("jobs").select("scheduled_date")
+      .gte("scheduled_date", localISO(first)).lte("scheduled_date", localISO(last))
+      .then(({ data }) => setBusyDays(new Set((data ?? []).map((r) => r.scheduled_date))));
+  }, [miniMonth]);
 
   useEffect(() => {
     supabase.from("clients").select("id,name").order("name")
@@ -318,9 +352,11 @@ export default function Week({ office = false }) {
     (j) => keyOf(j, kind)).filter((j) => !hushed.has(keyOf(j, kind)));
 
   const counts = useMemo(() => ({
-    open: noticed("open").length,
+    // Reminders are things waiting on a decision too, so they are counted
+    // where a person would look for them rather than in a fourth dot.
+    open: noticed("open").length + notices.list.length,
     new: noticed("new").length,
-  }), [jobs, hushed]);
+  }), [jobs, hushed, notices]);
 
   const hush = (j, kind) => {
     const k = keyOf(j, kind);
@@ -544,6 +580,7 @@ export default function Week({ office = false }) {
               return (
                 <button key={iso} className={cls} onClick={() => setAnchor(mondayOf(d))}>
                   {d.getDate()}
+                  {busyDays.has(iso) && <i className="wk-busy" aria-label="has work" />}
                 </button>
               );
             })}
@@ -582,8 +619,9 @@ export default function Week({ office = false }) {
                     setHidden(next);
                   }}>
                   <span className="cursor">▸</span>
-                  <span className="swatch" />
-                  <span className="name">{c.name}</span>
+                  <span className="swatch"
+                    style={c.id === "none" ? { borderColor: ink, background: hidden.has(c.id) ? "transparent" : ink } : undefined} />
+                  <span className="name">{c.id === "none" ? `${profile.workspace ?? "Our"} own work` : c.name}</span>
                   <span className="count">{c.n}</span>
                 </button>
                 {/* Only a pinned customer can be taken off: the ones with work
@@ -647,6 +685,13 @@ export default function Week({ office = false }) {
         </aside>
 
         <main className="wk-week">
+          {/* One horizontal scroller around the day headings, the band and
+              the grid, so all three slide together. Below about 1040px the
+              days would otherwise squeeze until a job is a stripe with no
+              words on it; now the week keeps readable columns and you pan
+              across it. */}
+          <div className="wk-hscroll">
+            <div className="wk-inner">
           <div className="wk-cols">
             <div />
             {DOW.map((d, i) => {
@@ -668,6 +713,8 @@ export default function Week({ office = false }) {
                 data-wkday={i} data-wkband="1">
                 {day.map((j) => (
                   <button key={j.id} className={`wk-chip s-${stateOf(j, todayISO)}`}
+                    style={clientOf(j) == null && stateOf(j, todayISO) === "scheduled"
+                      ? { borderLeftColor: ink, background: tint } : undefined}
                     onPointerDown={(e) => startLift(e, j)}
                     onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
                     <span className="u">UNASSIGNED</span> · {j.ref}
@@ -719,6 +766,11 @@ export default function Week({ office = false }) {
                             top, height: h, zIndex: 2 + col,
                             left: `calc(${indent.toFixed(2)}% + 2px)`,
                             width: `calc(${(100 - indent).toFixed(2)}% - 4px)`,
+                            // Ours, not a customer's: the workspace's colour.
+                            // The states that need a decision keep their own
+                            // tint - those matter more than whose job it is.
+                            ...(clientOf(j) == null && stateOf(j, todayISO) === "scheduled"
+                              ? { borderLeftColor: ink, background: tint } : {}),
                           }}
                           onPointerDown={(e) => startLift(e, j)}
                           onPointerUp={() => { if (lift.current && !lift.current.moved) openPeek(j); }}>
@@ -736,14 +788,24 @@ export default function Week({ office = false }) {
               })}
             </div>
           </div>
+            </div>
+          </div>
         </main>
       </div>
 
       <div className="wk-foot">
         <div className="say">{note}</div>
         <div className="keys">
-          <span><kbd>← →</kbd>Week</span>
-          <span><kbd>Esc</kbd>Close</span>
+          {/* These looked like hints and read as controls, so they are
+              controls. */}
+          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, -7))}
+            title="Previous week">←</button>
+          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, 7))}
+            title="Next week">→</button>
+          <span style={{ marginRight: 6 }}>Week</span>
+          <button className="wk-key" onClick={() => { setPeek(null); setFlag(null); }}
+            title="Close the panel">Esc</button>
+          <span>Close</span>
         </div>
       </div>
 
@@ -830,10 +892,35 @@ export default function Week({ office = false }) {
                   ? "Waiting on a decision — flagged, past its date, or with no date at all."
                   : "Arrived and not confirmed yet. Confirm them, or cancel what should not have come."}
               </p>
-              {list.length > 0 && (
-                <button className="wk-dismissall" onClick={() => hushAll(flag)}>DISMISS ALL</button>
+              {(list.length > 0 || (flag === "open" && notices.list.length > 0)) && (
+                <button className="wk-dismissall" onClick={() => {
+                  if (flag === "open") notices.dismissAll();
+                  hushAll(flag);
+                }}>DISMISS ALL</button>
               )}
             </div>
+
+            {/* Reminders and alerts, in the dot rather than in a stack over
+                the calendar. */}
+            {flag === "open" && notices.list.length > 0 && (
+              <div className="wk-plist">
+                {notices.list.map((n) => (
+                  <div className="wk-pitem s-open" key={n.key} style={{ display: "block" }}>
+                    <span className="body">
+                      <span className="n">{n.title}</span>
+                      <span className="c">{n.body}</span>
+                    </span>
+                    <div className="wk-act" style={{ marginTop: 8 }}>
+                      {n.action && (
+                        <button className="go" onClick={n.action.run}>{n.action.label}</button>
+                      )}
+                      {n.href && <button onClick={() => nav(n.href)}>OPEN</button>}
+                      <button onClick={() => notices.dismiss(n.key)}>DISMISS</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="wk-plist">
               {list.map((j) => (
                 <div key={j.id} className={`wk-pitem s-${stateOf(j, todayISO)}`} style={{ display: "block" }}>

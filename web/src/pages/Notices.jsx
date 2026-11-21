@@ -32,6 +32,26 @@ async function browserNotify(title, body) {
 //    pops a persistent "Job still open" notice on app open.
 const VAPID_PUBLIC = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 
+// Where the notice stack is published.
+//
+// This component owns the realtime subscriptions, the push registration and
+// the open-job reminder, and none of that can run twice - two instances mean
+// two subscriptions and a double push registration. So it stays mounted once
+// in the shell, and any screen that wants to SHOW the notices subscribes to
+// them here instead of mounting its own copy. The calendar shows them inside
+// the OPEN dot, where the rest of the things wanting attention live.
+let noticeState = { list: [], dismiss: () => {}, dismissAll: () => {} };
+const noticeSubs = new Set();
+export function subscribeNotices(fn) {
+  noticeSubs.add(fn);
+  fn(noticeState);
+  return () => noticeSubs.delete(fn);
+}
+function publishNotices(next) {
+  noticeState = next;
+  for (const fn of noticeSubs) fn(next);
+}
+
 const urlBase64ToUint8Array = (b64) => {
   const padded = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
   const raw = atob(padded);
@@ -66,7 +86,7 @@ async function registerPush(profile) {
   }
 }
 
-export default function Notices({ profile }) {
+export default function Notices({ profile, headless = false }) {
   const [notices, setNotices] = useState([]);
   const labels = useRef({});   // event_types key -> label
   const people = useRef({});   // user id -> name
@@ -266,6 +286,34 @@ export default function Notices({ profile }) {
   const askToEnable = ["default", "denied"].includes(perm)
     && !askDismissed && typeof Notification !== "undefined";
 
+  // The ask travels with the stack as one more notice, so a screen showing
+  // notices elsewhere does not have to know about permission prompts.
+  useEffect(() => {
+    const list = [...notices];
+    if (askToEnable) list.unshift({
+      key: "enable-alerts",
+      title: "Turn on job alerts",
+      body: askNote ?? "Get told when crew log an event or a new request arrives — even with OneShot closed.",
+      action: { label: askBusy ? "ASKING…" : "TURN ON", run: enableNotifications },
+      onDismiss: () => { sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); },
+    });
+    publishNotices({
+      list,
+      dismiss: (key) => {
+        if (key === "enable-alerts") {
+          sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); return;
+        }
+        dismiss(key);
+      },
+      dismissAll: () => {
+        if (askToEnable) { sessionStorage.setItem("oneshot_notify_ask", "0"); setAskDismissed(true); }
+        dismissAll();
+      },
+    });
+  }, [notices, askToEnable, askNote, askBusy]);
+
+  // Mounted in the shell to do its work, drawn somewhere else.
+  if (headless) return null;
   if (!notices.length && !askToEnable) return null;
 
   return (

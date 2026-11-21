@@ -356,7 +356,12 @@ function Shell() {
           </button>
         </div>
       </div>
-      <Notices profile={profile} />
+      {/* Mounted for its realtime subscriptions, its push registration and
+          the open-job reminder - but it draws nothing here any more. The
+          notices it collects are published and shown inside the OPEN dot on
+          the calendar, with everything else that wants attention. A stack of
+          banners above the week is the noise the dots exist to replace. */}
+      <Notices profile={profile} headless />
       <Routes>
         {/* Ops land on the week, because the first question in the morning
             is what is happening on Thursday. Crew land on the list, because
