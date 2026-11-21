@@ -2,11 +2,15 @@
 title: "OneShot — Product Manual & Setup Guide"
 ---
 
-*Living document. Updated as the product is built.* **Last revised: 4 November 2026** *— reminders, quotes, invoice automation and the browser extension.*
+*Living document. Updated as the product is built.* **Last revised: 21 November 2026** *— the week view, per-line VAT, quote and invoice pages, and Part 5: running OneShot without a person.*
 
 *One shot. Tracked everywhere.*
 
-This revision covers everything shipped since 25 September 2026. The largest changes are a browser extension that reads a mail or a WhatsApp conversation on screen and turns it into a job, a quote or an invoice; reminders that chase jobs and unpaid invoices; and a monthly billing run. Part 3 has grown — several of the new entries are mistakes that were made in the last six weeks, written down so they are not made again.
+This revision covers everything shipped since 4 November 2026. The largest changes are the **week view** — a calendar you land on, with notifications as dots rather than a wall of banners — **VAT charged per line** rather than per invoice, **pages for quotes and invoices** that can be opened and downloaded on their own, and a **new-job page** that asks for the customer.
+
+**Part 5 is new.** It is written for an agent operating OneShot with nobody watching: exact routes, exact control labels, preconditions, what to check after each write, and the short list of actions that stop and wait for a person. A human reading Part 5 will find it pedantic. That is the point of it.
+
+Part 3 has grown again — several entries are mistakes made in the last fortnight, written down so they are not made twice.
 
 Where something is half-built it says so. A manual that describes intentions as though they were features is worse than no manual.
 
@@ -99,11 +103,54 @@ A brand-new workspace is seeded with the full standard set automatically.
 
 **A type nobody uses is usually a prompt problem, not a vocabulary problem.** Both workspaces had a "meeting" job type for months and never once produced a meeting job, because two lines in the parser's instructions told it to ignore anything that was not a physical movement. Adding more types would have changed nothing. If a type you have set up never appears, say so rather than adding another.
 
-## The board — calendar beside the jobs
+## The week — the screen you land on
 
-On a computer the board is a true split screen: a two-month planner fixed on the left, the job list scrolling on its own beside it. The calendar stays put however far down the list you are. Picking a day scrolls the list to it; it never filters, so you can keep reading up into last week or down into next.
+Ops land on the week. Crew land on the job list, because theirs is a phone in a van and the question is what is outstanding, not what is on Thursday. Both screens are in the ribbon either way.
 
-The calendar is a way of getting somewhere, not a view of its own — the job actions all live on the list rows underneath it.
+**The grid.** Monday to Sunday across, 07:00 to 21:00 down, each job in its slot. A job shows its time, its reference, what it is, and the client. The red line is now.
+
+**Work with a date but no time** sits in the **NO TIME SET** band above the grid rather than being drawn at midnight. An unslotted job is the one most likely to be forgotten, so it sits where it is read first.
+
+**Work with no date at all** waits in the left rail under *Unscheduled*. Drag one onto any day and time to schedule it. Dragging snaps to fifteen minutes and shows the time it will take as you go; dragging a scheduled job back onto the band strips its time and leaves the date. Every drag writes an amendment to the job's history, because a reschedule is the easiest change in the app to make by accident.
+
+**Overlapping jobs lie over each other**, each shifted right, rather than splitting the day into equal columns. Three jobs at the same hour in three narrow columns are three stripes you cannot read; layered, every one keeps its words and the one underneath keeps an edge to click.
+
+**Filters** are down the left under a heading that says so: clients first, then job types. Clicking one shows or hides its jobs on the calendar. The client list offers whoever has work that week; **＋ ADD A CLIENT** pins anyone else, who then stays on the list through a quiet week reading 0. Pins are per workspace and per browser.
+
+**Your own work has its own colour.** Every workspace gets a stable colour of its own, and jobs with no customer on them carry it — so Section 9's own work does not look like a job somebody is paying for. States still win: a job needing a decision stays red whoever it belongs to.
+
+**The month on the left** marks every day with work on it. Click a day to go to its week.
+
+**On a phone** the same screen shows **three days** from the day you are on, because seven columns on a 390px screen is two and a half screens of panning to answer "what is on today".
+
+## Notifications are dots, not banners
+
+Top right, three of them. Click one to see what is behind it; nothing is shown before the calendar.
+
+- **OPEN —** work waiting on a decision: flagged with a problem, past its date without having started, or with no date at all. Reminders and alerts land here too.
+- **NEW —** arrived and not confirmed. In Office each row carries **CONFIRM** and **CANCEL**, so confirming happens where you see it.
+- **ERRORS —** ops only. Mail that reached intake in the last fortnight and produced no job: *COULD NOT READ*, which offers to make the job, and *ARRIVED TWICE*, which does not, and tells you which job the first copy already became.
+
+Every list has **DISMISS** on each row and **DISMISS ALL** at the top. Dismissing silences the notice, not the work: the job stays on the calendar. A dismissal is keyed to the job's status and date, so a job that changes — rescheduled, reopened, left to go stale again — raises its hand a second time. Dismissals are per browser and never written to the database: the message is evidence, and you clearing your own view must not clear it for whoever is on tomorrow.
+
+## Office is the same calendar
+
+Office is the week with the ops controls on it — the three dots, and a rail that ends in Team & setup, Clients, Job types & rates, Billing & letterhead and Statements. It is deliberately the same component as the crew's week: the moment Office is "the calendar, but rebuilt", the two drift and only one of them gets fixed.
+
+The long page of team, intake and setup now lives one click away at **Office → Team & setup**.
+
+## Making a job by hand
+
+**＋ NEW JOB** in the rail. One page, and it asks for everything a job carries:
+
+- **The job —** type, **client**, client reference, who to notify, collect-from and deliver-to addresses (up to three of each), booked date, time window, crew.
+- **Items —** description, dimensions, special handling, which stop each comes from and goes to, and up to three reference photographs each.
+- **Documents —** quote, packing list, insurance, the client's PO. They attach to the job, so crew can see them.
+- **Photos —** site, access or parking shots for the job as a whole. They attach as documents; photographs of the work itself are custody evidence and the crew shoot those on the job.
+
+Only the type is required. A request taken over the phone with half the detail missing should still become a job rather than a note on a hand.
+
+**Picking the customer is the point of this page.** The form it replaced never asked, and a job with no client reaches no statement — which is where invoices with no customer on them come from.
 
 ## Reminders
 
@@ -131,7 +178,8 @@ Ops only. The database enforces that, so this is not merely a hidden panel.
 - **Bill to —** the client's name, address and VAT or EORI number. Clients are saved as you go and can be searched and edited under Office → Clients.
 - **Your billing details —** Office → Billing details holds your company details and bank account. These print on your invoices only, and each workspace keeps its own.
 - **Currency —** each invoice is billed in ZAR, USD, EUR or GBP, with a workspace default. Nothing is ever converted.
-- **VAT —** charged at your rate by default. A foreign currency, or a client marked as outside South Africa, offers to zero-rate it. Offered, never applied behind your back.
+- **VAT — per line, not per document.** Each charge carries its own rate: standard, zero-rated, or exempt. One job can hold a crate build at 15% and the airfreight leg at 0% on the same sheet, which is what a mixed export job actually is. A foreign currency, or a client outside South Africa, offers to zero-rate a line. Offered, never applied behind your back.
+- **Mixed rates print as the law requires —** the net and the tax shown per rate, then the total. Where every line is on one rate the subtotal is rounded first and taxed once, which is what this database did before per-line VAT and what every invoice already issued was built with, so old and new invoices agree to the cent.
 
 ## What to charge, when nobody has said
 
@@ -149,7 +197,22 @@ A quote has **no job**. Most quotes are for work that never happens, and a job l
 
 Accepting writes the quote's lines onto a job as charges, after anything already there rather than over it. From that point **Issue invoice** produces an invoice that matches the quote by construction rather than by anybody checking.
 
-> **Half-built.** Quotes can be created from the extension and accepted in the database. There is no page in the app yet for looking at one, sending it, or pressing accept. Until that is built a quote is a record, not a document you can send.
+**Quotes and invoices now have pages of their own**, in the ribbon. Each lists what exists, with **VIEW** and **↓ PDF** on every row — view opens it in a tab, download saves it. Both work for documents raised against a job and for standalone ones raised against nothing.
+
+A quote's lines carry per-line VAT exactly as an invoice's do, through the same code, because two copies of one arithmetic rule drift within a month.
+
+> **Half-built.** Accepting a quote still happens in the database. The page shows, prints and downloads; it does not yet have an Accept button.
+
+## Changing a document after it is made
+
+An invoice is not frozen the moment it exists, but what can change is deliberately narrow.
+
+- **The due date** can be set by hand, from the invoice itself.
+- **Payment terms** can be shown or hidden on the printed document. The sentence is only built when the terms are a number of days — a workspace whose terms read "COD" prints nothing rather than *"payment due within COD days"*.
+- **Notes** can be edited, and shown or hidden per document. Existing invoices and quotes keep notes hidden, because they were written when nobody expected them to print.
+- **Lines and totals** can be changed while the invoice is unpaid and not void. The moment a payment is receipted against it, the sheet is closed. Every change is logged with who made it.
+
+A finished job can be **reopened** if the work turns out not to be finished. It returns as RE-OPENED rather than pretending it was never closed.
 
 ## Getting paid
 
@@ -172,7 +235,7 @@ Set it under Office → Clients, on the client. Three things to choose:
 
 The run is recorded — one row per client per month — so a retry cannot send the same period twice, and a send that failed is tried again rather than quietly skipping the month.
 
-> **Half-built.** The schedule, the settings and the PDF exist. The piece that actually gathers the invoices and sends the email is not written yet. Setting a billing day today stores the intention and does nothing else.
+The sender is now built: on the day, the run gathers the period's invoices, draws the pack and emails it through Resend, writing the result to the ledger either way. A client with no billing email and a workspace with none either is recorded as a failure with that reason, rather than being skipped quietly.
 
 ## The extension
 
@@ -291,6 +354,22 @@ Give each workspace its own intake address as soon as there is a second one taki
 
 A figure drawn from your own history is a quotation of what you charged before, not a price for this job. The job is flagged for a look. Do not let a suggested price reach an invoice unread.
 
+## Dismissing a notice does not hide the job
+
+The dot stops counting it; the calendar still draws it. If a job has genuinely gone away, cancel it — do not dismiss it and hope.
+
+## Dismissals live in the browser, not the database
+
+They follow the browser, not the login. Clearing a list on the office machine leaves it full on your phone, and that is on purpose: one person clearing their own view must not clear everybody's.
+
+## A drag is an amendment
+
+Moving a job on the calendar writes to its history like any other edit. It is also the easiest change in the app to make by accident — a long press that slides a few pixels is a drag. Check the history if a date looks wrong rather than assuming the parser did it.
+
+## The phone shows three days, not seven
+
+Not a different screen — the same one, counting differently. If a job seems to have vanished on a phone, it is probably on day four.
+
 ## Limits worth knowing
 
 - Up to 40 jobs from one message.
@@ -334,8 +413,9 @@ The extension reads what is loaded in the WhatsApp Web pane. If the conversation
 - Email intake fully deployed, including photographs, PDF and Word attachments, multi-leg jobs, multi-job schedules, duplicate suppression and charge extraction.
 - The browser extension is deployed and in use on Gmail and WhatsApp Web.
 - Reminders, invoice due dates and invoice reminders are live.
-- Quotes exist in the database and can be created from the extension; there is no page for them yet.
-- The billing run's schedule, settings and PDF are built; the sender is not.
+- Quotes and invoices have pages, with view and download; accepting a quote is still a database step.
+- The billing run is complete, sender included.
+- The week view is live and is where ops land. Office is the same screen with ops controls.
 - WhatsApp Cloud API deployed and dormant.
 - Teams intake evaluated and deliberately not built: a Teams channel's email address receives email only, so it adds nothing over email intake without a full Teams app.
 
@@ -356,6 +436,21 @@ Applied in order in the Supabase SQL editor. Each is re-runnable unless noted.
 - **55 —** quotes, and pricing a line from the workspace's own history.
 - **56 —** cancelling and reinstating a job.
 - **57 —** billing days and the run ledger.
+- **58 —** the billing cron.
+- **59 —** public statistics for the landing page.
+- **60 —** the demo workspace. *Run once; not a migration.*
+- **61 —** invoices that belong to no job.
+- **62 —** invoice due dates and the terms that decide them.
+- **63 —** copy vocabulary.
+- **64 —** quote conversions.
+- **65 —** site feedback.
+- **66 —** **VAT per line.** One normaliser for a line and one for the tax on it, used by every caller, so a quote and its invoice cannot disagree.
+- **67 —** a single allocator for invoice numbers, and a unique index behind it. Two callers had their own copy of the numbering rule and both had drifted.
+- **68 —** the VAT breakdown a mixed-rate document prints from.
+- **69–70 —** the same arithmetic for quotes, and parity between the two.
+- **71 —** reopening a finished job.
+- **72 —** editing a document after it is made: due dates, and whether payment terms print.
+- **73 —** notes on documents, and whether they print. Existing rows are back-filled to hidden, once, through a migration ledger so a re-run cannot hide notes somebody has since turned on.
 
 ## Testing
 
@@ -363,8 +458,7 @@ SQL is tested against a real Postgres with PGlite before it reaches production, 
 
 ## Known gaps
 
-- The billing run has no sender.
-- Quotes have no page in the app.
+- A quote cannot be accepted from the app.
 - `extension/reader.js` is not committed; a fresh clone produces an extension Chrome refuses to load.
 - The Outlook reader does not send images, although the parser accepts them.
 - The monthly pack's layout duplicates the printed letterhead. Change one and the other must follow.
@@ -375,7 +469,99 @@ SQL is tested against a real Postgres with PGlite before it reaches production, 
 
 ***
 
-# Part 5 — Commercial Model
+# Part 5 — Operating OneShot Without a Person
+
+This part is written for an agent working the app with nobody watching: a browser automation, a scheduled script, or a model driving the interface. It is deliberately literal. Labels are given exactly as they appear, because an agent matching on "Create" when the button says **CREATE JOB** fails silently at three in the morning.
+
+Two assumptions run through it. The first is that **the database is the boundary, not the interface.** Row-level security decides what a login may read and write; hiding a button changes nothing. An agent that cannot do something in the app cannot do it by calling the API either, and should not try. The second is that **an agent that cannot verify what it did has not done it.** Every write below ends in a read-back.
+
+## Before anything else
+
+1. **Sign in** with a login that belongs to the workspace you intend to change. Nothing else establishes scope.
+2. **Read the workspace name** in the top bar, beside the wordmark. Section 9 and Southern Guild run on the same app with the same login and the screens are identical apart from the data. If it names the wrong workspace, stop: there is no undo for work done in the wrong one.
+3. **Read the role.** Ops land on `/` showing the week; crew land on `/` showing the job list. If you land on the list, you are crew, and everything below marked *ops* will be refused by the database whatever the screen offers.
+4. **Note the date the app thinks it is.** Every rule about what is open, late or due is relative to it.
+
+## Route map
+
+| Route | What it is | Who |
+|---|---|---|
+| `/` | The week (ops) or today's jobs (crew) | both |
+| `/week` | The week, explicitly | both |
+| `/today` | The job list | both |
+| `/dashboard` | Office: the week with the ops dots and the ops rail | ops |
+| `/office/setup` | Team, intake, setup and every job | ops |
+| `/job/new` | Make a job | ops |
+| `/job/:id` | The job card in full | both |
+| `/job/:id/edit` | Edit a job | ops |
+| `/quotes`, `/invoices` | The document lists, with view and download | ops |
+| `/settings/clients`, `/settings/types`, `/settings/billing` | Clients; job types and rates; billing details | ops |
+| `/statements` | Statements of account | ops |
+
+## The controls, by name
+
+**Week and Office.** `‹` `TODAY` `›` step by what is shown — seven days, or three on a screen under 700px. The dots top right read **n OPEN**, **n NEW**, **n ERRORS**. The rail holds **＋ NEW JOB**, the month, *Unscheduled*, **Filters** (Clients, then Job types), **＋ ADD A CLIENT…**, **▪ ALL / NONE**, and in Office the links ending in Team & setup. The bottom bar carries `←` `→` and `Esc` as buttons.
+
+**A job on the grid** opens a panel headed by its reference, with **OPEN JOB**, **EDIT**, and its documents listed with **VIEW** and **↓**.
+
+**A dot's list** carries **DISMISS ALL** at the top and **DISMISS** on each row; the NEW list in Office also carries **CONFIRM** and **CANCEL**.
+
+**New job** is one page ending in **✓ Create job**, with **＋ Add item**, **＋ Attach documents** and **+ PHOTO**.
+
+## Procedures
+
+Each begins with what must already be true. If a precondition is not met, stop and report it rather than working around it.
+
+**P1 — Confirm what has arrived.** *Ops.* Open `/dashboard`, click the **NEW** dot. For each row, read the job, then press **CONFIRM** or **CANCEL**. Verify: the row leaves the list and the dot's count drops by one. A job you confirm becomes visible to crew, so confirm nothing you have not read.
+
+**P2 — Schedule unscheduled work.** *Ops.* In the rail under *Unscheduled*, press and drag a chip onto a day and time. Release. Verify: the bottom bar names the job and the new time; the chip has left the rail; the job's history carries an amendment reading *Rescheduled from the week view*. To give a date without a time, drop it on the **NO TIME SET** band.
+
+**P3 — Move a job.** *Ops.* Same drag, starting from the job in the grid. A press that does not move is a tap and opens the job instead — if the panel opens, nothing was moved.
+
+**P4 — Make a job.** *Ops.* `/job/new`. Set the type, then **the client** — a job with no client reaches no statement. Add items, documents and photos. Press **✓ Create job**. Verify: the app lands on `/job/:id` and the reference exists. If items or files were refused the page says which; the job still exists, so do not create it again.
+
+**P5 — Read a document.** Open the job's panel from the calendar, or `/quotes` / `/invoices`. **VIEW** opens it, **↓ PDF** downloads it. Both are generated against your own login, so a document you cannot see is one you are not entitled to.
+
+**P6 — Price a job.** *Ops.* Charges live on the job card. A line the message did not price is left **blank**, never zero. Where the app suggests a figure it says where it came from; that is a quotation of history, not a price for this job, and it flags the job for a look.
+
+**P7 — Deal with the ERRORS dot.** *Ops.* *COULD NOT READ* offers **MAKE THE JOB**: read the message, then create it. *ARRIVED TWICE* offers no such thing, and the row names the job the first copy already became. **Never create a job from a repeat.** One email arriving eight times once produced eleven jobs for one crate, and that is the control that prevents it.
+
+**P8 — Reopen finished work.** *Ops.* From the job card. It returns as RE-OPENED. Use it when work turns out not to be finished; do not use it to edit a settled invoice, which has its own, narrower route.
+
+## Invariants
+
+Preserve these. They are enforced in the database, and an agent that works around one has broken the record rather than the rule.
+
+- **Invoice numbers are permanent and sequential**, allocated by one function. A mis-issued invoice is voided, and the void stays on the record.
+- **VAT is computed per line.** Do not re-derive a total from a percentage of a subtotal; a mixed-rate document will not match.
+- **A due date is stamped onto the invoice**, so the printed terms line can never disagree with it.
+- **Every edit is attributed.** Nothing in this app is changed anonymously, and that is the product.
+- **Workspaces never see each other.** If a query returns nothing, check the workspace before concluding the data is gone.
+
+## What an agent does not do alone
+
+Stop and leave these to a person. Each is irreversible, reaches someone outside the business, or destroys evidence.
+
+- **Issuing an invoice.** The number is permanent; a mis-parse that takes one has to be voided, and that stays on the record for good.
+- **Deleting a job.** Cancel is almost always what was meant. Deleting destroys the custody record, which is the thing the business is selling.
+- **Sending anything to a client** — statements, invoice packs, confirmations — or switching a client's billing run from *us, to check and forward* to *the client, directly*. An invoice pack cannot be unsent.
+- **Voiding, refunding or recording a payment.**
+- **Changing who has access**, or anything under Billing details.
+
+An agent may prepare all of these and leave them for approval. Preparing is the useful half.
+
+## When something fails
+
+- **"Could not load the week: …"** — a query was refused. Check the login's workspace first.
+- **"Loaded, but customers could not be read"** — the calendar is live and the client filter is thin. Not fatal; do not retry in a loop.
+- **"Could not move it: …"** — the reschedule was refused and the job has been put back. Crew cannot reschedule.
+- **"The end time has to come after the start."** — a time window was entered backwards.
+- **A function reported as ambiguous** — two versions of one database function exist, which happens when a migration adds a parameter without dropping the old signature. A person must drop the stale one; do not retry.
+- **A button that does nothing** — check the workspace in the top bar before anything else. It is the single most common cause of "it is broken", and it is usually the app working correctly.
+
+***
+
+# Part 6 — Commercial Model
 
 ## Free in the core product
 
@@ -400,6 +586,7 @@ Approach outward from where trust already exists — galleries and auction house
 
 # Change log
 
+- **21 November 2026 —** the week view, landed on by ops and reachable by everyone; notifications as three dots with dismiss and dismiss-all; filters by client and job type, with a colour per workspace for its own work; drag to schedule, logged as an amendment; a new-job page that asks for the customer, the items and the paperwork; quote and invoice pages with view and download; per-line VAT, including mixed-rate documents; editable due dates, payment-terms visibility and document notes; reopening a finished job; three days on a phone; Part 5 of this manual.
 - **4 November 2026 —** billing days, the run ledger and the monthly pack PDF; cancel and reinstate a job; duplicate emails no longer shown as failures.
 - **2 November 2026 —** the extension's taskbar: create job, amend, quote, invoice, show jobs, with editable charges on the card and the drop of parsed prices fixed.
 - **26 October 2026 —** invoice due dates and automatic payment reminders; quotes; pricing a line from the workspace's own charge history.
