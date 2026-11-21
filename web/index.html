@@ -837,6 +837,35 @@
     .syncbadge { border-radius: 0; letter-spacing: .12em; }
     .empty { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; }
 
+    /* ── the phone mockups on the landing page ───────────────────────────
+       The frame is drawn here rather than baked into the screenshots: the
+       shots stay plain app pixels, so they can be retaken without anybody
+       having to match a bezel, and the frame stays crisp at any zoom. */
+    .phones {
+      display: flex; gap: 22px; margin: 26px 0 8px; padding-bottom: 6px;
+      overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: thin;
+    }
+    .phone { margin: 0; flex: none; scroll-snap-align: center; }
+    .phone-screen {
+      width: 232px; aspect-ratio: 232 / 528; position: relative; background: #101314;
+      border: 7px solid #101314; border-radius: 34px; overflow: hidden;
+      /* room for the status bar, so the island sits in black space instead
+         of on top of the app's own ribbon */
+      padding-top: 24px;
+      box-shadow: 0 10px 28px rgba(16,19,20,.18), 0 0 0 1px rgba(16,19,20,.35) inset;
+    }
+    .phone-screen img {
+      display: block; width: 100%; height: calc(100% - 24px); object-fit: cover;
+      object-position: top; border-radius: 0 0 27px 27px;
+    }
+    /* the island, which is what makes it read as a phone and not a tile */
+    .phone-screen::after {
+      content: ""; position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+      width: 66px; height: 16px; border-radius: 9px; background: #000;
+    }
+    .phone figcaption { margin-top: 9px; font-size: 12px; text-align: center; }
+    @media (max-width: 700px) { .phone-screen { width: 196px; } }
+
     /* ── The week view ────────────────────────────────────────────────────
        Everything here is prefixed wk- on purpose. The app already owns
        .card, .job, .row, .panel and a dozen other short names, and a
@@ -866,7 +895,7 @@
        pushing the grid off the bottom of the screen. */
     .wk {
       flex: 1; min-height: 0;
-      display: grid; grid-template-rows: auto 1fr auto;
+      display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr);
       background: var(--card); color: var(--ink);
     }
     /* :where() so this reset carries no specificity at all. As `.wk button`
@@ -877,7 +906,7 @@
     :where(.wk) button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 
     .wk-bar {
-      display: flex; align-items: baseline; gap: 12px; padding: 10px 14px;
+      display: flex; align-items: baseline; gap: 12px; padding: 10px 14px; min-width: 0;
       border-bottom: 1px solid var(--line); background: var(--wk-soft);
       overflow-x: auto; scrollbar-width: none;
     }
@@ -906,7 +935,7 @@
     .wk-dot.errors { background: #6b4fa8; box-shadow: 0 0 0 3px rgba(107,79,168,.16); }
     .wk-railtog { display: none; font-family: var(--mono); font-size: 11px; color: var(--ink-soft); border: 1px solid var(--line); padding: 4px 8px; }
 
-    .wk-body { display: grid; grid-template-columns: 232px 1fr; min-height: 0; position: relative; }
+    .wk-body { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 0; min-width: 0; position: relative; }
     .wk-rail { border-right: 1px solid var(--line); background: var(--wk-soft); overflow-y: auto; padding: 14px 12px 24px; }
     .wk-rail h2 {
       font-family: var(--mono); font-size: 10px; letter-spacing: .2em; color: var(--ink-soft);
@@ -1012,6 +1041,7 @@
     .wk-rail a.wk-frow, a.wk-new { text-decoration: none; }
     .wk-rail a.wk-frow:hover .cursor { opacity: 1; }
     .wk-cols, .wk-band, .wk-grid { display: grid; grid-template-columns: 52px repeat(7, minmax(0, 1fr)); }
+    .wk-cols, .wk-band, .wk-scroll, .wk-grid { min-width: 0; }
     .wk-cols { border-bottom: 1px solid var(--line); }
     .wk-dayhead { padding: 7px 8px; border-left: 1px solid var(--line); text-align: center; }
     .wk-dayhead .dow { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--ink-soft); }
@@ -1076,7 +1106,7 @@
       text-overflow: ellipsis; white-space: nowrap;
     }
 
-    .wk-foot { display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 36px; border-top: 1px solid var(--line); background: var(--wk-soft); }
+    .wk-foot { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 14px; height: 36px; border-top: 1px solid var(--line); background: var(--wk-soft); }
     .wk-foot .say { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .wk-foot .say::before { content: "▸ "; color: var(--accent); }
     .wk-foot .keys { margin-left: auto; display: flex; gap: 10px; flex: none; }
@@ -1158,6 +1188,29 @@
     .wk-drop-file:hover { border-color: var(--accent); }
     .wk-drop-file strong { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
     .wk-drop-file span { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+
+    @media (max-width: 700px) {
+      /* Three days, so they fit without panning. Everything gets a little
+         tighter to pay for the narrower columns. */
+      .wk-bar { gap: 8px; padding: 8px 10px; flex-wrap: nowrap; align-items: center; }
+      .wk-h1 { font-size: 14px; letter-spacing: .1em; }
+      /* The dates are in the column headings two inches below; a phone bar
+         cannot afford to say them twice. */
+      .wk-range { display: none; }
+      .wk-step { margin-left: 0; }
+      .wk-step button { padding: 3px 7px; }
+      .wk-flags { margin-left: auto; gap: 5px; }
+      .wk-flag { padding: 4px 7px 4px 6px; font-size: 10px; gap: 5px; }
+      .wk-cols, .wk-band, .wk-grid { grid-template-columns: 40px repeat(3, minmax(0, 1fr)); }
+      .wk-gutter .hr { font-size: 9px; padding-right: 4px; }
+      .wk-dayhead { padding: 6px 4px; }
+      .wk-dayhead .num { font-size: 15px; }
+      .wk-job { font-size: 11px; padding: 3px 5px; }
+      .wk-job .t { font-size: 9px; }
+      .wk-panel { width: 100%; }
+      .wk-foot .keys span { display: none; }
+      .wk-foot .keys .wk-key { display: inline-block; }
+    }
 
     @media (max-width: 860px) {
       .wk-body { grid-template-columns: 1fr; }

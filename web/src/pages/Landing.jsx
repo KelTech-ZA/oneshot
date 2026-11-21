@@ -287,6 +287,33 @@ export default function Landing({ onSignIn }) {
           a real week would publish somebody's artists and addresses. Everything
           else is the app as it runs.
         </figcaption>
+
+        {/* The same app on the phone the crew actually carry. Three days
+            instead of seven, because seven columns on a 390px screen is two
+            and a half screens of panning to answer "what is on today". */}
+        <div className="phones">
+          <figure className="phone">
+            <div className="phone-screen">
+              <img src="/shots/phone-week.jpg" width="600" height="1298" loading="lazy"
+                   alt="OneShot on a phone: three days of jobs in their time slots, with work that has no time pinned above the grid." />
+            </div>
+            <figcaption className="muted">Three days at a glance</figcaption>
+          </figure>
+          <figure className="phone">
+            <div className="phone-screen">
+              <img src="/shots/phone-job.jpg" width="600" height="1298" loading="lazy"
+                   alt="A job on a phone: client, times, addresses, crew, items and its attached documents." />
+            </div>
+            <figcaption className="muted">A job, without leaving the day</figcaption>
+          </figure>
+          <figure className="phone">
+            <div className="phone-screen">
+              <img src="/shots/phone-filters.jpg" width="600" height="1298" loading="lazy"
+                   alt="The filter rail on a phone: a month to jump by, unscheduled work waiting, and filters by client and job type." />
+            </div>
+            <figcaption className="muted">Filter by client or state</figcaption>
+          </figure>
+        </div>
       </figure>
 
       <div className="lp-demo">

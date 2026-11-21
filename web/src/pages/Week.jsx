@@ -57,6 +57,7 @@ const mondayOf = (d) => {
   out.setHours(0, 0, 0, 0);
   return out;
 };
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const short = (d) => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -164,7 +165,29 @@ export default function Week({ office = false }) {
   const nav = useNavigate();
   const isOps = profile.role === "ops";
 
-  const [anchor, setAnchor] = useState(() => mondayOf(new Date()));
+  // Seven days on a screen with room for them; three on a phone, starting
+  // from the day you are on. Seven columns on a 390px screen is two and a
+  // half screens of panning to answer "what is on today", which is the only
+  // question anybody asks the calendar from a van.
+  const [span, setSpan] = useState(() => (typeof window !== "undefined" && window.innerWidth <= 700 ? 3 : 7));
+  const [anchor, setAnchor] = useState(() =>
+    (typeof window !== "undefined" && window.innerWidth <= 700)
+      ? startOfDay(new Date()) : mondayOf(new Date()));
+
+  useEffect(() => {
+    const onResize = () => {
+      const next = window.innerWidth <= 700 ? 3 : 7;
+      setSpan((cur) => {
+        if (cur === next) return cur;
+        // Keep the day you were looking at in view when the window changes
+        // shape, rather than jumping to a different week.
+        setAnchor((a) => (next === 7 ? mondayOf(a) : startOfDay(a)));
+        return next;
+      });
+    };
+    addEventListener("resize", onResize);
+    return () => removeEventListener("resize", onResize);
+  }, []);
   const [miniMonth, setMiniMonth] = useState(() => {
     const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1);
   });
@@ -206,7 +229,7 @@ export default function Week({ office = false }) {
   };
 
   const todayISO = localISO(new Date());
-  const from = localISO(anchor), to = localISO(addDays(anchor, 6));
+  const from = localISO(anchor), to = localISO(addDays(anchor, span - 1));
 
   const COLUMNS = "id, ref, type, status, client_id, crew, contact_name, client_ref, " +
                   "origin, destination, scheduled_date, time_window, " +
@@ -325,12 +348,12 @@ export default function Week({ office = false }) {
     if (!iso) return -1;
     const base = new Date(anchor); base.setHours(12, 0, 0, 0);
     const i = Math.floor((asDate(iso) - base) / 86400000 + 0.5);
-    return i >= 0 && i < 7 ? i : -1;
+    return i >= 0 && i < span ? i : -1;
   };
 
   const placed = useMemo(() => {
-    const grid = Array.from({ length: 7 }, () => []);
-    const band = Array.from({ length: 7 }, () => []);
+    const grid = Array.from({ length: span }, () => []);
+    const band = Array.from({ length: span }, () => []);
     const loose = [];
     for (const j of jobs ?? []) {
       if (!visible(j)) continue;
@@ -342,7 +365,7 @@ export default function Week({ office = false }) {
       else band[i].push(j);
     }
     return { grid: grid.map(layColumns), band, loose };
-  }, [jobs, hidden, states, anchor, clients]);
+  }, [jobs, hidden, states, anchor, clients, span]);
 
   // What each dot is counting: everything in that state that has not been
   // waved off. The calendar still draws all of it - dismissing a notification
@@ -443,9 +466,9 @@ export default function Week({ office = false }) {
       if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "")) return;
       if (e.key === "Escape") { setPeek(null); setFlag(null); return; }
       if (lift.current) return;
-      if (e.key === "ArrowLeft") setAnchor((a) => addDays(a, -7));
-      if (e.key === "ArrowRight") setAnchor((a) => addDays(a, 7));
-      if (e.key.toLowerCase() === "t") setAnchor(mondayOf(new Date()));
+      if (e.key === "ArrowLeft") setAnchor((a) => addDays(a, -span));
+      if (e.key === "ArrowRight") setAnchor((a) => addDays(a, span));
+      if (e.key.toLowerCase() === "t") setAnchor(span === 7 ? mondayOf(new Date()) : startOfDay(new Date()));
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
@@ -507,6 +530,10 @@ export default function Week({ office = false }) {
 
   if (!jobs) return <div className="empty">Loading the week…</div>;
 
+  // One template for the headings, the band and the grid, so a column can
+  // never be a different width in one of the three.
+  const cols = { gridTemplateColumns: `52px repeat(${span}, minmax(0, 1fr))` };
+
   const weekNo = (() => {
     const d = new Date(anchor); d.setDate(d.getDate() + 3);           // ISO: Thursday decides
     const first = new Date(d.getFullYear(), 0, 4);
@@ -534,15 +561,19 @@ export default function Week({ office = false }) {
     <div className="wk" ref={shell}>
       <div className="wk-bar">
         <button className="wk-railtog" onClick={() => setRailOpen(!railOpen)}>▪ FILTERS</button>
-        <h1 className="wk-h1">WEEK {weekNo}</h1>
+        <h1 className="wk-h1">{span === 7 ? `WEEK ${weekNo}` : `${span} DAYS`}</h1>
         <span className="wk-range">
-          {short(anchor)} — {short(addDays(anchor, 6))} {addDays(anchor, 6).getFullYear()}
+          {short(anchor)} — {short(addDays(anchor, span - 1))} {addDays(anchor, span - 1).getFullYear()}
           {office ? " · OFFICE" : ""}
         </span>
         <div className="wk-step">
-          <button onClick={() => setAnchor(addDays(anchor, -7))} aria-label="Previous week">‹</button>
-          <button onClick={() => { setAnchor(mondayOf(new Date())); const n = new Date(); setMiniMonth(new Date(n.getFullYear(), n.getMonth(), 1)); }}>TODAY</button>
-          <button onClick={() => setAnchor(addDays(anchor, 7))} aria-label="Next week">›</button>
+          <button onClick={() => setAnchor(addDays(anchor, -span))} aria-label="Back">‹</button>
+          <button onClick={() => {
+            const n = new Date();
+            setAnchor(span === 7 ? mondayOf(n) : startOfDay(n));
+            setMiniMonth(new Date(n.getFullYear(), n.getMonth(), 1));
+          }}>TODAY</button>
+          <button onClick={() => setAnchor(addDays(anchor, span))} aria-label="Forward">›</button>
         </div>
         {/* Everything that wants you is a dot up here, and nothing else.
             A screen that opens with a stack of banners is a screen you learn
@@ -578,7 +609,7 @@ export default function Week({ office = false }) {
                 iso === todayISO ? "today" : "",
               ].filter(Boolean).join(" ");
               return (
-                <button key={iso} className={cls} onClick={() => setAnchor(mondayOf(d))}>
+                <button key={iso} className={cls} onClick={() => setAnchor(span === 7 ? mondayOf(d) : startOfDay(d))}>
                   {d.getDate()}
                   {busyDays.has(iso) && <i className="wk-busy" aria-label="has work" />}
                 </button>
@@ -691,22 +722,22 @@ export default function Week({ office = false }) {
               words on it; now the week keeps readable columns and you pan
               across it. */}
           <div className="wk-hscroll">
-            <div className="wk-inner">
-          <div className="wk-cols">
+            <div className="wk-inner" style={span === 7 ? undefined : { minWidth: 0 }}>
+          <div className="wk-cols" style={cols}>
             <div />
-            {DOW.map((d, i) => {
+            {Array.from({ length: span }, (_, i) => {
               const day = addDays(anchor, i);
               const isToday = localISO(day) === todayISO;
               return (
                 <div key={i} className={`wk-dayhead${isToday ? " istoday" : ""}`}>
-                  <div className="dow">{d}</div>
+                  <div className="dow">{DOW[(day.getDay() + 6) % 7]}</div>
                   <div className="num">{day.getDate()}</div>
                 </div>
               );
             })}
           </div>
 
-          <div className="wk-band">
+          <div className="wk-band" style={cols}>
             <div className="label">NO TIME<br />SET</div>
             {placed.band.map((day, i) => (
               <div key={i} className={`cell${drop?.band && drop.day === i ? " over" : ""}`}
@@ -726,7 +757,7 @@ export default function Week({ office = false }) {
           </div>
 
           <div className="wk-scroll">
-            <div className="wk-grid">
+            <div className="wk-grid" style={cols}>
               <div className="wk-gutter">
                 {Array.from({ length: DAY_END - DAY_START }, (_, i) => (
                   <div className="hr" key={i}>{String(DAY_START + i).padStart(2, "0")}:00</div>
@@ -798,11 +829,11 @@ export default function Week({ office = false }) {
         <div className="keys">
           {/* These looked like hints and read as controls, so they are
               controls. */}
-          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, -7))}
-            title="Previous week">←</button>
-          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, 7))}
-            title="Next week">→</button>
-          <span style={{ marginRight: 6 }}>Week</span>
+          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, -span))}
+            title="Back">←</button>
+          <button className="wk-key" onClick={() => setAnchor(addDays(anchor, span))}
+            title="Forward">→</button>
+          <span style={{ marginRight: 6 }}>{span === 7 ? "Week" : "Days"}</span>
           <button className="wk-key" onClick={() => { setPeek(null); setFlag(null); }}
             title="Close the panel">Esc</button>
           <span>Close</span>
