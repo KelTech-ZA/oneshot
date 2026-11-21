@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
 import { supabase, FUNCTIONS_URL } from "./lib/supabase";
@@ -65,12 +65,22 @@ const TABS = [
 
 function AppNav({ role }) {
   const { pathname } = useLocation();
+  const nav = useRef(null);
+
+  // Scroll the tab you are on into view. On a phone the ribbon is wider than
+  // the screen, and a tab you cannot see is a tab you do not know is there -
+  // which is how OFFICE went missing on a phone while being right there in
+  // the markup.
+  useEffect(() => {
+    const on = nav.current?.querySelector('[aria-current="page"]');
+    on?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [pathname]);
   const here = (to) => pathname === to || pathname.startsWith(to + "/") ||
     // The week is what "/" shows ops, so the tab has to light up there too.
     (to === "/week" && pathname === "/" && role === "ops") ||
     (to === "/today" && pathname === "/" && role !== "ops");
   return (
-    <nav className="appnav">
+    <nav className="appnav" ref={nav}>
       {TABS.filter(([, , opsOnly]) => !opsOnly || role === "ops").map(([to, label]) => (
         <Link key={to} to={to} className="appnav-tab" aria-current={here(to) ? "page" : undefined}>
           {label}
