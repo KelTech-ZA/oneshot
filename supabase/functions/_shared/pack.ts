@@ -397,25 +397,7 @@ export class Pack {
     });
     this.y = base - 36;
 
-    // Where to pay. A statement that does not say how to settle it is a
-    // statement somebody has to reply to before they can pay.
-    const iss = this.input.issuer;
-    if (iss.bank_account_number) {
-      this.rule(this.y);
-      this.y -= 18;
-      this.put("PAYMENT", M, 7.5, { color: SOFT, bold: true });
-      this.y -= 14;
-      const bank = [
-        clean(iss.bank_account_holder),
-        [clean(iss.bank_name), clean(iss.bank_branch)].filter(Boolean).join(" · "),
-        `Account ${clean(iss.bank_account_number)}`,
-        iss.bank_branch_code ? `Branch ${clean(iss.bank_branch_code)}` : "",
-        iss.bank_swift ? `SWIFT ${clean(iss.bank_swift)}` : "",
-      ].filter(Boolean);
-      for (const l of bank) { this.put(l, M, 9); this.y -= 12; }
-      this.y -= 4;
-      this.put("Please quote the invoice number with payment.", M, 8.5, { color: SOFT });
-    }
+    this.payment();
 
     this.footer(this.input.issuer.invoice_footer ?? "");
   }
@@ -645,7 +627,48 @@ export class Pack {
       }
     }
 
+    // An invoice that leaves on its own carries its own banking. In a pack
+    // the statement cover has it, and repeating it behind every invoice is
+    // noise. A quote is not payable yet, so it never gets one.
+    if (this.single && !isQuote) {
+      this.y -= 20;
+      this.payment();
+    }
+
     this.footer(this.input.issuer.invoice_footer ?? "");
+  }
+
+  // Where to pay. A document that does not say how to settle it is one
+  // somebody has to reply to before they can pay.
+  //
+  // This was written inline on the statement cover, which was fine while the
+  // only PDF this file produced was the monthly pack. A single document skips
+  // that cover - nobody wants an ageing table on the one invoice they asked to
+  // look at - so every invoice downloaded on its own went out with no bank
+  // account on it, while the same invoice printed from the browser had one.
+  // Hence a method, called from both.
+  private payment() {
+    const iss = this.input.issuer;
+    if (!iss.bank_account_number) return;
+
+    const bank = [
+      clean(iss.bank_account_holder),
+      [clean(iss.bank_name), clean(iss.bank_branch)].filter(Boolean).join(" · "),
+      `Account ${clean(iss.bank_account_number)}`,
+      iss.bank_branch_code ? `Branch ${clean(iss.bank_branch_code)}` : "",
+      iss.bank_swift ? `SWIFT ${clean(iss.bank_swift)}` : "",
+    ].filter(Boolean);
+
+    // Keep the heading with the account number: bank details split across a
+    // page break are how money reaches the wrong account.
+    this.room(18 + 14 + bank.length * 12 + 18);
+    this.rule(this.y);
+    this.y -= 18;
+    this.put("PAYMENT", M, 7.5, { color: SOFT, bold: true });
+    this.y -= 14;
+    for (const l of bank) { this.put(l, M, 9); this.y -= 12; }
+    this.y -= 4;
+    this.put("Please quote the invoice number with payment.", M, 8.5, { color: SOFT });
   }
 
   // --- the whole thing ------------------------------------------------------
