@@ -1177,6 +1177,13 @@
     .wk-act button { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; padding: 8px 12px; border: 1px solid var(--line); background: var(--card); }
     .wk-act button:hover { border-color: var(--accent); color: var(--accent); }
     .wk-act button.go { background: var(--ink); color: #fff; border-color: var(--ink); }
+    /* The row that can cost you something, set apart from the one that
+       cannot. */
+    .wk-act-foot { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .wk-act button.danger { color: var(--warn); }
+    .wk-act button.danger:hover { color: #fff; background: var(--warn); border-color: var(--warn); }
+    .wk-act button:disabled { opacity: .45; cursor: default; }
+    .wk-act button:disabled:hover { border-color: var(--line); color: var(--ink-soft); background: var(--card); }
     .wk-act button.go:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
 
     /* shared with the new-job page */

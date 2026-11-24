@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { supabase, FUNCTIONS_URL } from "../lib/supabase";
 import { useRefreshOnReturn } from "../lib/refresh";
 import { Ctx } from "../main";
 import { parseWindow, fmt } from "../lib/schedule";
@@ -211,6 +211,7 @@ export default function Week({ office = false }) {
   const [railOpen, setRailOpen] = useState(false);
   const [notices, setNotices] = useState({ list: [], dismiss: () => {}, dismissAll: () => {} });
   const [busyDays, setBusyDays] = useState(new Set());   // days with work, for the month
+  const [busy, setBusy] = useState(false);               // a job action is in flight
   const [ink, tint] = wsColour(profile.tenant_id);
 
   // Customers pinned to the filter list by hand. The list offers whoever has
@@ -509,6 +510,81 @@ export default function Week({ office = false }) {
     if (error) { setNote("Could not change it: " + error.message); return; }
     setNote(`${j.ref} ${status === "confirmed" ? "confirmed" : "cancelled"}.`);
     load();
+  };
+
+  // Duplicating and deleting are the two things you could only do from the
+  // job page, which meant leaving the calendar, doing them, and coming back
+  // to find your place. They are the same calls the job page makes - the
+  // prompts, the typed confirmation and the reason are not re-invented here,
+  // because two copies of a destructive flow is how one of them ends up
+  // missing the part that asks.
+
+  const duplicateJob = async (j) => {
+    const when = window.prompt(
+      `Duplicate ${j.ref}?\n\nAddresses and items are copied. Photos, events and documents are not.\n\n` +
+      `Date for the copy (YYYY-MM-DD), or leave blank:`, j.scheduled_date ?? "");
+    if (when === null) return;
+    setBusy(true);
+    try {
+      const { data: { session: s } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/duplicate-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${s.access_token}` },
+        body: JSON.stringify({ job_id: j.id, scheduled_date: when.trim() || null }),
+      });
+      const outcome = await res.json();
+      if (outcome.error) { window.alert("Could not duplicate: " + outcome.error); return; }
+      // The job page navigates to the copy. Here you are looking at a week
+      // and the copy may well be in it, so stay put and redraw.
+      setPeek(null);
+      setNote(`${j.ref} copied${when.trim() ? ` to ${when.trim()}` : ""}. The copy carries no photos, events or documents.`);
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteJob = async (j) => {
+    setBusy(true);
+    try {
+      const { count } = await supabase.from("custody_events")
+        .select("id", { count: "exact", head: true }).eq("job_id", j.id);
+
+      const evidence = count ?? 0;
+      if (evidence > 0) {
+        const typed = window.prompt(
+          `${j.ref} has ${evidence} custody event(s) — photos and timestamps that may be your proof of handling.\n\n` +
+          `Deleting is permanent. The record of the deletion is kept, the evidence is not.\n\n` +
+          `Type ${j.ref} to confirm:`);
+        if (typed === null) return;
+        if (typed.trim().toUpperCase() !== j.ref.toUpperCase()) {
+          window.alert(
+            `That didn't match, so nothing was deleted.\n\n` +
+            `To delete this job, type its reference exactly: ${j.ref}`);
+          return;
+        }
+      } else if (!window.confirm(`Delete ${j.ref}? This cannot be undone.`)) {
+        return;
+      }
+
+      const reason = window.prompt("Why is it being deleted? (optional, kept on record)") ?? null;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${FUNCTIONS_URL}/delete-job`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ job_id: j.id, reason }),
+      });
+      const result = await res.json();
+      if (result.error) { window.alert("Could not delete: " + result.error); return; }
+
+      setPeek(null);
+      setNote(`${j.ref} deleted. What was removed is on record in deleted_jobs.`);
+      load();
+      window.dispatchEvent(new Event("queue-updated"));
+    } finally {
+      setBusy(false);
+    }
   };
 
   /* ── the side panel ────────────────────────────────────────────────── */
@@ -1034,10 +1110,19 @@ export default function Week({ office = false }) {
 
             <div className="wk-act">
               <button className="go" onClick={() => nav(`/job/${peek.id}`)}>OPEN JOB</button>
-              {isOps && <button onClick={() => nav(`/job/${peek.id}/edit`)}>EDIT</button>}
             </div>
             <p className="wk-note">OPEN JOB is the job card in full — items, custody,
               charges and documents.</p>
+
+            {/* The three that used to mean leaving the calendar. At the foot,
+                away from OPEN JOB, because one of them cannot be undone. */}
+            {isOps && (
+              <div className="wk-act wk-act-foot">
+                <button disabled={busy} onClick={() => nav(`/job/${peek.id}/edit`)}>EDIT</button>
+                <button disabled={busy} onClick={() => duplicateJob(peek)}>⧉ DUPLICATE</button>
+                <button className="danger" disabled={busy} onClick={() => deleteJob(peek)}>DELETE</button>
+              </div>
+            )}
           </div>
         </aside>
       )}
