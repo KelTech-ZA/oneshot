@@ -50,6 +50,39 @@ export default function NewJob() {
   });
   const set = (patch) => setF((prev) => ({ ...prev, ...patch }));
 
+  // Dropping a file did nothing, because every one of these zones is a
+  // <label> wrapped around a hidden <input type="file">. That handles a click
+  // and ignores a drag: the browser's default for a dropped file is to open
+  // it, so a miss replaced a half-filled form with a PDF and lost the lot.
+  //
+  // One piece of state rather than one hook per zone, because the item zones
+  // are inside a loop and hooks are not.
+  const [dragOver, setDragOver] = useState(null);
+  const dropZone = (key, take) => ({
+    onDragEnter: (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(key); },
+    onDragOver:  (e) => { e.preventDefault(); e.stopPropagation(); setDragOver(key); },
+    onDragLeave: (e) => {
+      e.preventDefault(); e.stopPropagation();
+      // Moving over a child fires leave on the parent; only let go when the
+      // pointer has actually left the zone.
+      if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(null);
+    },
+    onDrop: (e) => {
+      e.preventDefault(); e.stopPropagation(); setDragOver(null);
+      const files = [...(e.dataTransfer?.files ?? [])];
+      if (files.length) take(files);
+    },
+  });
+
+  // A file dropped anywhere else on the page. Without this the browser
+  // navigates away to show it and the form is gone.
+  useEffect(() => {
+    const swallow = (e) => { e.preventDefault(); };
+    addEventListener("dragover", swallow);
+    addEventListener("drop", swallow);
+    return () => { removeEventListener("dragover", swallow); removeEventListener("drop", swallow); };
+  }, []);
+
   const [items, setItems] = useState([blankItem()]);
   const [docs, setDocs] = useState([]);          // {file, name, size}
   const [sitePhotos, setSitePhotos] = useState([]);
@@ -247,7 +280,8 @@ export default function NewJob() {
               onChange={(e) => patchItem(it.key, { special_handling: e.target.value })} />
 
             <label>Reference photos ({it.photos.length}/{MAX_ITEM_PHOTOS})</label>
-            <div className="wk-shots">
+            <div className={`wk-shots wk-droppable${dragOver === it.key ? " over" : ""}`}
+              {...dropZone(it.key, (files) => addPhotos(it.key, files))}>
               {it.photos.map((p, i) => (
                 <div key={i} className="wk-shot" style={{ backgroundImage: `url(${p.url})` }}>
                   <button className="wk-x" title="Remove"
@@ -280,10 +314,11 @@ export default function NewJob() {
               onClick={() => setDocs(docs.filter((_, k) => k !== i))}>remove</button>
           </div>
         ))}
-        <label className="wk-drop-file">
+        <label className={`wk-drop-file${dragOver === "docs" ? " over" : ""}`}
+          {...dropZone("docs", (files) => setDocs((cur) => [...cur, ...files.map((file) => ({ file }))]))}>
           <strong>＋ Attach documents</strong>
-          <span>Quote, packing list, insurance, the client's PO. PDF, Word, Excel,
-            images — up to 25 MB each.</span>
+          <span>Drop them here, or click to choose. Quote, packing list, insurance,
+            the client's PO. PDF, Word, Excel, images — up to 25 MB each.</span>
           <input type="file" multiple hidden
             onChange={(e) => setDocs([...docs, ...[...e.target.files].map((file) => ({ file }))])} />
         </label>
@@ -291,7 +326,12 @@ export default function NewJob() {
 
       <h2>Photos ({sitePhotos.length})</h2>
       <div className="card">
-        <div className="wk-shots">
+        <div className={`wk-shots wk-droppable${dragOver === "site" ? " over" : ""}`}
+          {...dropZone("site", (files) => setSitePhotos((cur) => [
+            ...cur,
+            ...files.filter((x) => x.type.startsWith("image/"))
+              .map((file) => ({ file, url: URL.createObjectURL(file) })),
+          ]))}>
           {sitePhotos.map((p, i) => (
             <div key={i} className="wk-shot" style={{ backgroundImage: `url(${p.url})` }}>
               <button className="wk-x" title="Remove"
@@ -306,8 +346,8 @@ export default function NewJob() {
           </label>
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Site, access or parking photos for the job as a whole — they attach as
-          documents. Photographs of the work itself are custody evidence and the
+          Drop photos here or click a tile. Site, access or parking shots for the
+          job as a whole — they attach as documents. Photographs of the work itself are custody evidence and the
           crew shoots those on the job.
         </div>
       </div>

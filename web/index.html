@@ -1203,7 +1203,12 @@
       border: 1px dashed var(--line); background: var(--bg); text-align: center;
       text-transform: none; letter-spacing: normal; font-family: var(--sans);
     }
-    .wk-drop-file:hover { border-color: var(--accent); }
+    .wk-drop-file:hover, .wk-drop-file.over { border-color: var(--accent); }
+    /* A zone that will take what you are holding says so while you hold it.
+       Without the highlight you find out by letting go. */
+    .wk-drop-file.over { background: #FFF6F1; }
+    .wk-droppable { outline: 1px dashed transparent; outline-offset: 4px; border-radius: 1px; }
+    .wk-droppable.over { outline-color: var(--accent); background: #FFF6F1; }
     .wk-drop-file strong { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
     .wk-drop-file span { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
 
